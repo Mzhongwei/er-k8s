@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: input
+  labels:
+    app.kubernetes.io/name: input
+spec:
+  restartPolicy: Never
+  containers:
+  - name: input
+    image: python:3.12-alpine
+    command: ["python", "/app/read_file.py"]
+    volumeMounts:
+    - name: input-file
+      mountPath: /data
+      readOnly: true
+    - name: scripts
+      mountPath: /app
+      readOnly: true
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+      requests:
+        memory: "64Mi"
+        cpu: "250m"
+  volumes:
+  - name: input-file
+    configMap:
+      name: input-file
+      items:
+      - key: input.txt
+        path: input.txt
+  - name: scripts
+    configMap:
+      name: pod-scripts
+      items:
+      - key: read_file.py
+        path: read_file.py
