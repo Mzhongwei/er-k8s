@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-feature-index-construction
+spec:
+  selector:
+    app: feature-index-construction
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080

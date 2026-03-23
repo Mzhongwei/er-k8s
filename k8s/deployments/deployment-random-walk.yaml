@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: random-walk
+spec:
+  selector:
+    matchLabels:
+      app: random-walk
+  template:
+    metadata:
+      labels:
+        app: random-walk
+    spec:
+      containers:
+      - name: random-walk
+        image: python:3.12-alpine
+        command: ["python", "/app/random_walk.py"]
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 8080

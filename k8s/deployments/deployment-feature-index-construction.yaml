@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feature-index-construction
+spec:
+  selector:
+    matchLabels:
+      app: feature-index-construction
+  template:
+    metadata:
+      labels:
+        app: feature-index-construction
+    spec:
+      containers:
+      - name: feature-index-construction
+        image: python:3.12-alpine
+        command: ["python", "/app/feature_index_construction.py"]
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 8080

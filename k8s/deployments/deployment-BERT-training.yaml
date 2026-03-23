@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bert-training
+spec:
+  selector:
+    matchLabels:
+      app: bert-training
+  template:
+    metadata:
+      labels:
+        app: bert-training
+    spec:
+      containers:
+      - name: bert-training
+        image: python:3.12-alpine
+        command: ["python", "/app/BERT_training.py"]
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 8080

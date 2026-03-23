@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: candidate-enumeration
+spec:
+  selector:
+    matchLabels:
+      app: candidate-enumeration
+  template:
+    metadata:
+      labels:
+        app: candidate-enumeration
+    spec:
+      containers:
+      - name: candidate-enumeration
+        image: python:3.12-alpine
+        command: ["python", "/app/candidate_enumeration.py"]
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 8080

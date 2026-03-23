@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cg-feature-extraction
+spec:
+  selector:
+    matchLabels:
+      app: cg-feature-extraction
+  template:
+    metadata:
+      labels:
+        app: cg-feature-extraction
+    spec:
+      containers:
+      - name: cg-feature-extraction
+        image: python:3.12-alpine
+        command: ["python", "/app/cg_feature_extraction.py"]
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 8080

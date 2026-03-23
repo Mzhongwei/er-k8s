@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bert-inference
+spec:
+  selector:
+    matchLabels:
+      app: bert-inference
+  template:
+    metadata:
+      labels:
+        app: bert-inference
+    spec:
+      containers:
+      - name: bert-inference
+        image: python:3.12-alpine
+        command: ["python", "/app/BERT_inference.py"]
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 8080

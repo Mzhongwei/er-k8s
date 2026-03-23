@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: allocating-index
+spec:
+  selector:
+    matchLabels:
+      app: allocating-index
+  template:
+    metadata:
+      labels:
+        app: allocating-index
+    spec:
+      containers:
+      - name: allocating-index
+        image: python:3.12-alpine
+        command: ["python", "/app/allocating_index.py"]
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 8080

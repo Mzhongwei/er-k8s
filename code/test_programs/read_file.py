@@ -25,7 +25,7 @@ def main():
 			print("Sending content of /data/input.txt to process service...", flush=True)
 			send_once(payload)
 			print("Done.", flush=True)
-			return
+			time.sleep(10)
 		except OSError as exc:
 			print(f"Send failed ({exc}), retrying in 2s...", flush=True)
 			time.sleep(2)

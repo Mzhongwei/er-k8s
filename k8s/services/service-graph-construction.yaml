@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-graph-construction
+spec:
+  selector:
+    app: graph-construction
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080

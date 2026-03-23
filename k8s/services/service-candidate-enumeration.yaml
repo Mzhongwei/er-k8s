@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-candidate-enumeration
+spec:
+  selector:
+    app: candidate-enumeration
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080

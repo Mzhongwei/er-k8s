@@ -33,8 +33,8 @@ kubectl delete service service-process -n dm-tests --ignore-not-found
 kubectl delete service service-printer -n dm-tests --ignore-not-found
 kubectl create configmap input-file --from-file=data/input.txt -n dm-tests --dry-run=client -o yaml | kubectl apply -f -
 kubectl create configmap pod-scripts --from-file=code/test_programs/read_file.py --from-file=code/test_programs/process_content.py --from-file=code/test_programs/print.py -n dm-tests --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -f .\k8s\pod-printer.yaml -n dm-tests
-kubectl apply -f .\k8s\service-printer.yaml -n dm-tests
-kubectl apply -f .\k8s\pod-process.yaml -n dm-tests
-kubectl apply -f .\k8s\service-process.yaml -n dm-tests
-kubectl apply -f .\k8s\pod-input.yaml -n dm-tests
+kubectl apply -f .\k8s\proof-of-concept\pod-printer.yaml -n dm-tests
+kubectl apply -f .\k8s\proof-of-concept\service-printer.yaml -n dm-tests
+kubectl apply -f .\k8s\proof-of-concept\pod-process.yaml -n dm-tests
+kubectl apply -f .\k8s\proof-of-concept\service-process.yaml -n dm-tests
+kubectl apply -f .\k8s\proof-of-concept\pod-input.yaml -n dm-tests
