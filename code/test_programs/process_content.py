@@ -9,7 +9,7 @@ PRINTER_PORT = 80
 
 
 def forward_payload(payload):
-	data = (payload + " + process (python)\n").encode("utf-8")
+	data = (payload + " .............processed at " + time.strftime("%Y-%m-%d %H:%M:%S") + "\n").encode("utf-8")
 	while True:
 		try:
 			with socket.create_connection((PRINTER_HOST, PRINTER_PORT), timeout=5) as out_sock:

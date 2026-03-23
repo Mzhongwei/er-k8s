@@ -23,7 +23,7 @@ def main():
 	while True:
 		try:
 			print("Sending content of /data/input.txt to process service...", flush=True)
-			send_once(payload + " + read (python)")
+			send_once(payload)
 			print("Done.", flush=True)
 			return
 		except OSError as exc:
