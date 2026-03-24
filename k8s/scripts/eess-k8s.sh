@@ -2,9 +2,10 @@
 # Get the argument to determine if we should start or stop the cluster and change minikube status (-M)
 
 START_STOP_FLAG=""
+ACTIONS=("--start" "--stop" "--restart")
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 [--start|--stop] [options]"
+    echo "Usage: $0 [--start|--stop|--restart] [options]"
     exit 1
 fi
 
@@ -29,7 +30,16 @@ elif [ "$1" == "--stop" ]; then
         # Call the stop script
         bash "$(dirname "$0")/eess-k8s-stop.sh" "$START_STOP_FLAG"
     fi
-elif [[ "$1" != "--start" && "$1" != "--stop" ]]; then
-    echo "Invalid argument: $1. Use '--start' or '--stop'."
+elif [ "$1" == "--restart" ]; then
+    if [ -z "${BASH_VERSION:-}" ]; then
+        exec bash "$0" "--restart" "$START_STOP_FLAG"
+    else
+        # Call the stop script
+        bash "$(dirname "$0")/eess-k8s-stop.sh" "$START_STOP_FLAG"
+        # Call the start script
+        bash "$(dirname "$0")/eess-k8s-start.sh" "$START_STOP_FLAG"
+    fi
+elif [[ ! " ${ACTIONS[*]} " == *" $1 "* ]]; then
+    echo "Invalid argument: $1. Use one of the following: ${ACTIONS[*]}."
     exit 1
 fi
