@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: normalization
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: normalization
+  template:
+    metadata:
+      labels:
+        app: normalization
+    spec:
+      containers:
+      - name: normalization
+        image: python:3.12-alpine
+        imagePullPolicy: Never
+        command: ["python", "/app/normalization.py"]
+        securityContext:
+          privileged: true
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: scripts
+          mountPath: /app
+          readOnly: true
+      volumes:
+      - name: scripts
+        configMap:
+          name: normalization
+          items:
+          - key: normalization.py
+            path: normalization.py
+
+
+
