@@ -18,6 +18,11 @@ def handle_client_connection(client_socket):
                 return
             data = client_socket.recv(1024).decode("utf-8").strip()
             print(f"Received data: {data}")
+
+            embedding_model = "embedding_model_simulated"
+            send(embedding_model, CALCULATING_SIMILARITY_SERVICE)
+            print("Embedding model sent to CALCULATING_SIMILARITY_SERVICE", flush=True)
+            
     except OSError as e:
         print(f"ERROR in handle_client_connection: {e}", flush=True)
 
@@ -39,10 +44,6 @@ def main():
     client_socket, addr = server_socket.accept()
     print(f"Accepted connection from {addr}")
     handle_client_connection(client_socket)
-
-    embedding_model = "embedding_model_simulated"
-    send(embedding_model, CALCULATING_SIMILARITY_SERVICE)
-    print("Embedding model sent to CALCULATING_SIMILARITY_SERVICE", flush=True)
 
 if __name__ == "__main__":
 	main()

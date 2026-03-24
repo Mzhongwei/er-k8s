@@ -11,6 +11,8 @@ DECISION_MAKING_SERVICE = {"HOST": "service-decision-making", "PORT": 80}
 
 MODE = "INCREMENTAL"
 
+threads = []
+
 def handle_client_connection(client_socket):
     try:
         with client_socket:
@@ -30,6 +32,7 @@ def accept_connections(server_socket, port_name):
             print(f"Accepted connection on {port_name} from {addr}")
             t = threading.Thread(target=handle_client_connection, args=(client_socket,))
             t.daemon = True
+            threads.append(t)
             t.start()
     except Exception as e:
         print(f"ERROR in accept_connections ({port_name}): {e}", flush=True)
@@ -45,7 +48,6 @@ def send(payload, service):
 
 
 def main():
-    threads = []
 
     server_socket_embedding_training = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket_embedding_training.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -68,13 +70,14 @@ def main():
     for t in threads:
         t.start()
 
-    time.sleep(2)
-    similarity_data = "similarity_data_simulated"
-    send(similarity_data, DECISION_MAKING_SERVICE)
-    print("Similarity data sent to DECISION_MAKING_SERVICE", flush=True)
     
     for t in threads:
         t.join(timeout=1)
+    
+    time.sleep(1)
+    similarity_data = "similarity_data_simulated"
+    send(similarity_data, DECISION_MAKING_SERVICE)
+    print("Similarity data sent to DECISION_MAKING_SERVICE", flush=True)
 
 
 

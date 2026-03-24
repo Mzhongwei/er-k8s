@@ -16,6 +16,8 @@ def handle_client_connection(client_socket):
             return
         data = client_socket.recv(1024).decode("utf-8").strip()
         print(f"Received data: {data}")
+        
+        print("Prediction matching completed", flush=True)
 
 def main():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -26,7 +28,6 @@ def main():
         client_socket, addr = server_socket.accept()
         print(f"Accepted connection from {addr}")
         handle_client_connection(client_socket)
-        print("Prediction matching completed", flush=True)
 
 if __name__ == "__main__":
 	main()

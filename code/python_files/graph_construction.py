@@ -17,6 +17,11 @@ def handle_client_connection(client_socket):
             return
         data = client_socket.recv(1024).decode("utf-8").strip()
         print(f"Received data: {data}")
+ 
+        representation_graph = "representation_graph_simulated"
+        time.sleep(1)
+        send(representation_graph, RANDOM_WALK_SERVICE)
+        print("Representation graph sent to RANDOM_WALK_SERVICE", flush=True)
 
 def send(payload,service):
     mode_data = (MODE + "\n").encode("utf-8")
@@ -35,10 +40,6 @@ def main():
         client_socket, addr = server_socket.accept()
         print(f"Accepted connection from {addr}")
         handle_client_connection(client_socket)
-        representation_graph = "representation_graph_simulated"
-        time.sleep(1)
-        send(representation_graph, RANDOM_WALK_SERVICE)
-        print("Representation graph sent to RANDOM_WALK_SERVICE", flush=True)
 
 if __name__ == "__main__":
 	main()

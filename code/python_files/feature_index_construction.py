@@ -18,6 +18,11 @@ def handle_client_connection(client_socket):
         data = client_socket.recv(1024).decode("utf-8").strip()
         print(f"Received data: {data}")
 
+        cg_features_index = "cg_features_index_simulated"
+        time.sleep(1)
+        send(cg_features_index, CANDIDATE_ENUMERATION_SERVICE)
+        print("CG features index sent to CANDIDATE_ENUMERATION_SERVICE", flush=True)
+
 def send(payload,service):
     mode_data = (MODE + "\n").encode("utf-8")
     with socket.create_connection((service["HOST"], service["PORT"]), timeout=5) as sock:
@@ -35,10 +40,6 @@ def main():
         client_socket, addr = server_socket.accept()
         print(f"Accepted connection from {addr}")
         handle_client_connection(client_socket)
-        cg_features_index = "cg_features_index_simulated"
-        time.sleep(1)
-        send(cg_features_index, CANDIDATE_ENUMERATION_SERVICE)
-        print("CG features index sent to CANDIDATE_ENUMERATION_SERVICE", flush=True)
 
 if __name__ == "__main__":
 	main()
