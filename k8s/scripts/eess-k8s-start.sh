@@ -69,7 +69,7 @@ if [ "${EESS_PREPULL_IMAGE:-true}" = "true" ]; then
     done
 
     if [ "$pulled" = false ]; then
-        echo "Warning: unable to pre-pull $BASE_IMAGE after retries. Pods may hit ImagePullBackOff if network is unstable."
+        echo "Warning: unable to pre-pull $BASE_IMAGE after retries."
     fi
 fi
 
