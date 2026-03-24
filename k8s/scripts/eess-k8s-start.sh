@@ -19,14 +19,19 @@ PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
 NAMESPACE="eess-k8s"
     
 # Check if the -M flag is provided to determine if we should start the cluster in addition to applying resources.
-if [ "$1" == "-M" ]; then
-    # Start the cluster with minikube if it's not already running.
-    if ! minikube status --format '{{.Host}}' 2>/dev/null | grep -q "Running"; then
+# Start the cluster with minikube if it's not already running.
+if ! minikube status --format '{{.Host}}' 2>/dev/null | grep -q "Running"; then
+    if ! command -v minikube &> /dev/null; then
+        echo "Minikube is not installed. Please install Minikube to start the cluster."
+        exit 1
+    elif [ "$1" == "-M" ]; then
         minikube start
-        echo "Kubernetes cluster started successfully."
     else
-        echo "Minikube is already running."
+        echo "Minikube is not running. Please start the cluster before running this script or use the '-M' flag to start it."
+        exit 1
     fi
+else
+    echo "Minikube is already running, skipping cluster start."
 fi
 
 shopt -s nullglob
