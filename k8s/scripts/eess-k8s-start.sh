@@ -16,14 +16,17 @@ SERVICES_DIR="${ROOT_DIR}/k8s/services"
 DEPLOYMENTS_DIR="${ROOT_DIR}/k8s/deployments"
 PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
 
-NAMESPACE="domolandes"
-
-# Start the cluster with minikube if it's not already running.
-if ! minikube status --format '{{.Host}}' 2>/dev/null | grep -q "Running"; then
-    minikube start
-    echo "Kubernetes cluster started successfully."
-else
-    echo "Minikube is already running."
+NAMESPACE="eess-k8s"
+    
+# Check if the -M flag is provided to determine if we should start the cluster in addition to applying resources.
+if [ "$1" == "-M" ]; then
+    # Start the cluster with minikube if it's not already running.
+    if ! minikube status --format '{{.Host}}' 2>/dev/null | grep -q "Running"; then
+        minikube start
+        echo "Kubernetes cluster started successfully."
+    else
+        echo "Minikube is already running."
+    fi
 fi
 
 shopt -s nullglob
