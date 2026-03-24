@@ -24,3 +24,14 @@ spec:
             cpu: "250m"
         ports:
         - containerPort: 8080
+        volumeMounts:
+        - name: scripts
+          mountPath: /app
+          readOnly: true
+      volumes:
+      - name: scripts
+        configMap:
+          name: calculating-similarity
+          items:
+          - key: calculating_similarity.py
+            path: calculating_similarity.py

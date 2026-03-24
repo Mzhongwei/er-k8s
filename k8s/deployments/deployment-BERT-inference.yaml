@@ -24,3 +24,14 @@ spec:
             cpu: "250m"
         ports:
         - containerPort: 8080
+        volumeMounts:
+        - name: scripts
+          mountPath: /app
+          readOnly: true
+      volumes:
+      - name: scripts
+        configMap:
+          name: bert-inference
+          items:
+          - key: BERT_inference.py
+            path: BERT_inference.py

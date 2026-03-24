@@ -24,3 +24,14 @@ spec:
             cpu: "250m"
         ports:
         - containerPort: 8080
+        volumeMounts:
+        - name: scripts
+          mountPath: /app
+          readOnly: true
+      volumes:
+      - name: scripts
+        configMap:
+          name: decision-making
+          items:
+          - key: decision_making.py
+            path: decision_making.py

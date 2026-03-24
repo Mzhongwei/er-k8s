@@ -24,3 +24,14 @@ spec:
             cpu: "250m"
         ports:
         - containerPort: 8080
+        volumeMounts:
+        - name: scripts
+          mountPath: /app
+          readOnly: true
+      volumes:
+      - name: scripts
+        configMap:
+          name: cg-feature-extraction
+          items:
+          - key: cg_feature_extraction.py
+            path: cg_feature_extraction.py

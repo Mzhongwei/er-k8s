@@ -24,3 +24,14 @@ spec:
             cpu: "250m"
         ports:
         - containerPort: 8080
+        volumeMounts:
+        - name: scripts
+          mountPath: /app
+          readOnly: true
+      volumes:
+      - name: scripts
+        configMap:
+          name: graph-construction
+          items:
+          - key: graph_construction.py
+            path: graph_construction.py

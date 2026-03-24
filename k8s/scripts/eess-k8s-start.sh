@@ -50,7 +50,6 @@ clean_k8s_name() {
 # Create the namespace if it doesn't exist.
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     kubectl create namespace "$NAMESPACE"
-    echo "Namespace $NAMESPACE created successfully."
 else
     echo "Namespace $NAMESPACE already exists."
 fi
@@ -62,20 +61,6 @@ if [ ${#service_files[@]} -eq 0 ]; then
 else
     for file in "${service_files[@]}"; do
         kubectl apply -f "$file" --namespace="$NAMESPACE"
-        service_name="$(grep -m1 -E '^[[:space:]]*name:' "$file" | awk '{print $2}' || true)"
-        echo "Service ${service_name:-$(basename "$file")} deployed successfully."
-    done
-fi
-
-# Deploy deployments
-deployment_files=("${DEPLOYMENTS_DIR}"/*.yaml)
-if [ ${#deployment_files[@]} -eq 0 ]; then
-    echo "No deployment manifests found in ${DEPLOYMENTS_DIR}."
-else
-    for file in "${deployment_files[@]}"; do
-        kubectl apply -f "$file" --namespace="$NAMESPACE"
-        deployment_name="$(grep -m1 -E '^[[:space:]]*name:' "$file" | awk '{print $2}' || true)"
-        echo "Deployment ${deployment_name:-$(basename "$file")} deployed successfully."
     done
 fi
 
@@ -90,8 +75,18 @@ else
         configmap_name="$(clean_k8s_name "$base_name")"
 
         kubectl create configmap "$configmap_name" --from-file="$filename=$file" --dry-run=client -o yaml | kubectl apply -f - --namespace="$NAMESPACE"
-        echo "ConfigMap ${configmap_name} created/updated successfully."
     done
 fi
+
+# Deploy deployments
+deployment_files=("${DEPLOYMENTS_DIR}"/*.yaml)
+if [ ${#deployment_files[@]} -eq 0 ]; then
+    echo "No deployment manifests found in ${DEPLOYMENTS_DIR}."
+else
+    for file in "${deployment_files[@]}"; do
+        kubectl apply -f "$file" --namespace="$NAMESPACE"
+    done
+fi
+
 
 echo "Kubernetes cluster started and services, deployments, and ConfigMaps applied successfully."
