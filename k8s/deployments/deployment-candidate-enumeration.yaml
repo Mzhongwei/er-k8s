@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: candidate-enumeration
 spec:
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: candidate-enumeration
@@ -14,14 +16,15 @@ spec:
       containers:
       - name: candidate-enumeration
         image: python:3.12-alpine
+        imagePullPolicy: Never
         command: ["python", "/app/candidate_enumeration.py"]
         resources:
           limits:
             memory: "128Mi"
             cpu: "500m"
           requests:
-            memory: "64Mi"
-            cpu: "250m"
+            memory: "32Mi"
+            cpu: "50m"
         ports:
         - containerPort: 8080
         volumeMounts:
@@ -35,3 +38,6 @@ spec:
           items:
           - key: candidate_enumeration.py
             path: candidate_enumeration.py
+
+
+

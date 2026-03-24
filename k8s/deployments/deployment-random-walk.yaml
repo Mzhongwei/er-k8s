@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: random-walk
 spec:
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: random-walk
@@ -14,14 +16,15 @@ spec:
       containers:
       - name: random-walk
         image: python:3.12-alpine
+        imagePullPolicy: Never
         command: ["python", "/app/random_walk.py"]
         resources:
           limits:
             memory: "128Mi"
             cpu: "500m"
           requests:
-            memory: "64Mi"
-            cpu: "250m"
+            memory: "32Mi"
+            cpu: "50m"
         ports:
         - containerPort: 8080
         volumeMounts:
@@ -35,3 +38,6 @@ spec:
           items:
           - key: random_walk.py
             path: random_walk.py
+
+
+

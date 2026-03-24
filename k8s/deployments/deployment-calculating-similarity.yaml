@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: calculating-similarity
 spec:
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: calculating-similarity
@@ -14,14 +16,15 @@ spec:
       containers:
       - name: calculating-similarity
         image: python:3.12-alpine
+        imagePullPolicy: Never
         command: ["python", "/app/calculating_similarity.py"]
         resources:
           limits:
             memory: "128Mi"
             cpu: "500m"
           requests:
-            memory: "64Mi"
-            cpu: "250m"
+            memory: "32Mi"
+            cpu: "50m"
         ports:
         - containerPort: 8080
         volumeMounts:
@@ -35,3 +38,5 @@ spec:
           items:
           - key: calculating_similarity.py
             path: calculating_similarity.py
+
+

@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: cg-feature-extraction
 spec:
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: cg-feature-extraction
@@ -14,14 +16,15 @@ spec:
       containers:
       - name: cg-feature-extraction
         image: python:3.12-alpine
+        imagePullPolicy: Never
         command: ["python", "/app/cg_feature_extraction.py"]
         resources:
           limits:
             memory: "128Mi"
             cpu: "500m"
           requests:
-            memory: "64Mi"
-            cpu: "250m"
+            memory: "32Mi"
+            cpu: "50m"
         ports:
         - containerPort: 8080
         volumeMounts:
@@ -35,3 +38,6 @@ spec:
           items:
           - key: cg_feature_extraction.py
             path: cg_feature_extraction.py
+
+
+

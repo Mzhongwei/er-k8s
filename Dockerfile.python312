@@ -1,0 +1,6 @@
+FROM python:3.12-alpine
+
+# This is a placeholder Dockerfile that would be built locally
+# The actual build will import the base image through a cached/pre-pulled version
+
+RUN echo "Python 3.12 Alpine Docker Image"
