@@ -6,6 +6,11 @@ spec:
   selector:
     app: candidate-enumeration
   ports:
-  - protocol: TCP
+  - name: cg-feature-extraction-listener
+    protocol: TCP
     port: 80
     targetPort: 8080
+  - name: feature-index-construction-listener
+    protocol: TCP
+    port: 81
+    targetPort: 8081

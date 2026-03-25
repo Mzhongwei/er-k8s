@@ -27,6 +27,7 @@ spec:
             cpu: "50m"
         ports:
         - containerPort: 8080
+        - containerPort: 8081
         volumeMounts:
         - name: scripts
           mountPath: /app

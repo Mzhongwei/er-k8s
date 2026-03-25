@@ -6,14 +6,8 @@ CALCULATING_SIMILARITY_LISTEN_PORT = 8080
 
 # FINAL TASK OF THE PIPELINE
 
-MODE = "INCREMENTAL"
-
 def handle_client_connection(client_socket):
     with client_socket:
-        mode_data = client_socket.recv(1024).decode("utf-8").strip()
-        if mode_data != MODE:
-            print(f"Received mode {mode_data} does not match expected mode {MODE}. Ignoring.")
-            return
         data = client_socket.recv(1024).decode("utf-8").strip()
         print(f"Received data: {data}")
         

@@ -13,7 +13,7 @@ NAMESPACE="eess-k8s"
 shopt -s nullglob
 
 # Raise error if minikube is not running
-if ! (minikube status --format '{{.Host}}' 2>/dev/null | grep -q "Running"); then
+if ! (minikube status -p domolandes --format '{{.Host}}' 2>/dev/null | grep -q "Running"); then
     echo "Minikube is not running. Please start the cluster before running this script."
     exit 1
 fi
@@ -23,8 +23,8 @@ kubectl delete namespace "$NAMESPACE" --ignore-not-found
 
 if [ "$1" == "-M" ]; then
     # Stop the cluster with minikube if it's running.
-    if minikube status --format '{{.Host}}' 2>/dev/null | grep -q "Running"; then
-        minikube stop
+    if minikube status -p domolandes --format '{{.Host}}' 2>/dev/null | grep -q "Running"; then
+        minikube stop -p domolandes
         echo "Kubernetes cluster stopped successfully."
     else
         echo "Minikube is not running."

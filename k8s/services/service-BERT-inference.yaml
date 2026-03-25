@@ -6,6 +6,15 @@ spec:
   selector:
     app: bert-inference
   ports:
-  - protocol: TCP
+  - name: normalization-listener
+    protocol: TCP
     port: 80
     targetPort: 8080
+  - name: bert-training-listener
+    protocol: TCP
+    port: 81
+    targetPort: 8081
+  - name: candidate-enumeration-listener
+    protocol: TCP
+    port: 82
+    targetPort: 8082

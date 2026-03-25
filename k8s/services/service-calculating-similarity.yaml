@@ -6,6 +6,11 @@ spec:
   selector:
     app: calculating-similarity
   ports:
-  - protocol: TCP
+  - name: candidate-enumeration-listener
+    protocol: TCP
     port: 80
     targetPort: 8080
+  - name: embedding-training-listener
+    protocol: TCP
+    port: 81
+    targetPort: 8081
