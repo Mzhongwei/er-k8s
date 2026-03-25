@@ -55,7 +55,7 @@ EOF
     exit 0
 fi
 
-if [ "$2" == "-M" ] || [ "$2" == "--minikube" ] && [[ "$1" == "start" ] || [ "$1" == "stop" ] || [ "$1" == "restart" ]]; then
+if ([ "$2" == "-M" ] || [ "$2" == "--minikube" ]) && ([ "$1" == "start" ] || [ "$1" == "stop" ] || [ "$1" == "restart" ]); then
     START_STOP_FLAG="-M"
 elif [ "$2" == "-r" ] || [ "$2" == "--resources" ] && [ "$1" == "test" ]; then
     TEST_FLAG="-r"
