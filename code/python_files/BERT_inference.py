@@ -11,13 +11,12 @@ threads = []
 
 def accept_connections(server_socket, port_name):
     try:
-        while True:
-            client_socket, addr = server_socket.accept()
-            print(f"Accepted connection on {port_name} from {addr}")
-            t = threading.Thread(target=handle_client_connection, args=(client_socket,))
-            t.daemon = True
-            threads.append(t)
-            t.start()
+        client_socket, addr = server_socket.accept()
+        print(f"Accepted connection on {port_name} from {addr}")
+        t = threading.Thread(target=handle_client_connection, args=(client_socket,))
+        t.daemon = True
+        threads.append(t)
+        t.start()
     except Exception as e:
         print(f"ERROR in accept_connections ({port_name}): {e}", flush=True)
 
@@ -60,7 +59,10 @@ def main():
     
     print("Prediction matching completed", flush=True)
     
-
+def daemon():
+    while True:
+        time.sleep(1)
 
 if __name__ == "__main__":
-	main()
+    main()
+    daemon()

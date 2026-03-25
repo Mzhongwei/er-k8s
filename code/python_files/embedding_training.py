@@ -35,5 +35,10 @@ def main():
     print(f"Accepted connection from {addr}")
     handle_client_connection(client_socket)
 
+def daemon():
+    while True:
+        time.sleep(1)
+
 if __name__ == "__main__":
-	main()
+    main()
+    daemon()

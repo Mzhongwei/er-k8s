@@ -35,10 +35,14 @@ def main():
     server_socket_cg_feature_extraction.bind((LISTEN_HOST, CG_FEATURE_EXTRACTION_LISTEN_PORT))
     server_socket_cg_feature_extraction.listen()
 
+    client_socket, addr = server_socket_feature_index_construction.accept()
+    print(f"Accepted connection from {addr}")
+    handle_client_connection(client_socket)
+
+def daemon():
     while True:
-        client_socket, addr = server_socket_feature_index_construction.accept()
-        print(f"Accepted connection from {addr}")
-        handle_client_connection(client_socket)
+        time.sleep(1)
 
 if __name__ == "__main__":
-	main()
+    main()
+    daemon()

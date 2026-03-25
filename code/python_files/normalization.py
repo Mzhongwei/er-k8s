@@ -30,5 +30,10 @@ def main():
     send(process_data, BERT_TRAINING_SERVICE)
     print("Processed data sent to BERT_TRAINING_SERVICE", flush=True)
 
+def daemon():
+    while True:
+        time.sleep(1)
+
 if __name__ == "__main__":
-	main()
+    main()
+    daemon()

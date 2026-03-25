@@ -18,10 +18,14 @@ def main():
     server_socket.bind((LISTEN_HOST, CALCULATING_SIMILARITY_LISTEN_PORT))
     server_socket.listen()
 
+    client_socket, addr = server_socket.accept()
+    print(f"Accepted connection from {addr}")
+    handle_client_connection(client_socket)
+
+def daemon():
     while True:
-        client_socket, addr = server_socket.accept()
-        print(f"Accepted connection from {addr}")
-        handle_client_connection(client_socket)
+        time.sleep(1)
 
 if __name__ == "__main__":
-	main()
+    main()
+    daemon()

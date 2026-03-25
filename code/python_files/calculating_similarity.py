@@ -20,13 +20,12 @@ def handle_client_connection(client_socket):
 
 def accept_connections(server_socket, port_name):
     try:
-        while True:
-            client_socket, addr = server_socket.accept()
-            print(f"Accepted connection on {port_name} from {addr}")
-            t = threading.Thread(target=handle_client_connection, args=(client_socket,))
-            t.daemon = True
-            threads.append(t)
-            t.start()
+        client_socket, addr = server_socket.accept()
+        print(f"Accepted connection on {port_name} from {addr}")
+        t = threading.Thread(target=handle_client_connection, args=(client_socket,))
+        t.daemon = True
+        threads.append(t)
+        t.start()
     except Exception as e:
         print(f"ERROR in accept_connections ({port_name}): {e}", flush=True)
 
@@ -60,12 +59,17 @@ def main():
         t.start()
     
     for t in threads:
-        t.join(timeout=1)
+        t.join()
     
     time.sleep(1)
     similarity_data = "similarity_data_simulated"
     send(similarity_data, DECISION_MAKING_SERVICE)
     print("Similarity data sent to DECISION_MAKING_SERVICE", flush=True)
 
+def daemon():
+    while True:
+        time.sleep(1)
+
 if __name__ == "__main__":
-	main()
+    main()
+    daemon()
