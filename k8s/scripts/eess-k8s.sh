@@ -1,17 +1,14 @@
 #!/bin/bash
-# Get the argument to determine if we should start or stop the cluster and change minikube status (-M)
 
-START_STOP_FLAG=""
-TEST_FLAG="--all"
-LOGS_FLAG="--all"
-ACTIONS=("start" "stop" "restart" "test" "logs" "help")
-
-if [ -z "$1" ]; then
-    echo "Usage: $0 [start|stop|restart|test|logs|help] [options]"
-    exit 1
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
 fi
 
-if [ "$1" == "help" ]; then
+set -euo pipefail
+
+ACTIONS=("start" "stop" "restart" "test" "logs" "help")
+
+print_help() {
     cat << 'EOF'
 EESS Kubernetes Cluster Manager
 ================================
@@ -59,66 +56,131 @@ EXAMPLES:
   ./eess-k8s.sh test -r
 
 EOF
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 [start|stop|restart|test|logs|help] [options]"
+    exit 1
+fi
+
+COMMAND="$1"
+shift
+
+if [ "$COMMAND" = "help" ] || [ "$COMMAND" = "--help" ] || [ "$COMMAND" = "-h" ]; then
+    print_help
     exit 0
 fi
 
-if ([ "$2" == "-M" ] || [ "$2" == "--minikube" ]) && ([ "$1" == "start" ] || [ "$1" == "stop" ] || [ "$1" == "restart" ]); then
-    START_STOP_FLAG="-M"
-elif [ "$2" == "-r" ] || [ "$2" == "--resources" ] && [ "$1" == "test" ]; then
-    TEST_FLAG="-r"
-elif [ "$2" == "-s" ] || [ "$2" == "--scripts" ] && [ "$1" == "test" ]; then
-    TEST_FLAG="-s"
-elif [ "$2" == "-a" ] || [ "$2" == "--all" ] && [ "$1" == "test" ]; then
-    TEST_FLAG="-a"
-elif ([ "$2" == "-a" ] || [ "$2" == "--all" ] || [ "$3" == "-a" ] || [ "$3" == "--all" ]) && [ "$1" == "logs" ]; then
-    LOGS_FLAG="-a"
-elif ([[ "$2" == "--name="* ]] || [[ "$3" == "--name="* ]]) && [ "$1" == "logs" ]; then
-    LOGS_FLAG="--name=${2#*=}${3#*=}"
-elif [[ "$2" == "-f" || "$2" == "--follow" || "$3" == "-f" || "$3" == "--follow" ]] && [ "$1" == "logs" ]; then
-    LOGS_FLAG="$LOGS_FLAG -f"
-elif [ -n "$2" ]; then
-    echo "Unknown option: $2. Use help for usage information."
+if [[ ! " ${ACTIONS[*]} " == *" $COMMAND "* ]]; then
+    echo "Invalid command: $COMMAND. Use one of the following: ${ACTIONS[*]}."
     exit 1
 fi
 
-if [ "$1" == "start" ]; then
-    if [ -z "${BASH_VERSION:-}" ]; then
-        exec bash "$0" "start" "$START_STOP_FLAG"
-    else
-        # Call the start script
-        bash "$(dirname "$0")/start.sh" "$START_STOP_FLAG"
-    fi
-elif [ "$1" == "stop" ]; then
-    if [ -z "${BASH_VERSION:-}" ]; then
-        exec bash "$0" "stop" "$START_STOP_FLAG"
-    else
-        # Call the stop script
-        bash "$(dirname "$0")/stop.sh" "$START_STOP_FLAG"
-    fi
-elif [ "$1" == "restart" ]; then
-    if [ -z "${BASH_VERSION:-}" ]; then
-        exec bash "$0" "restart" "$START_STOP_FLAG"
-    else
-        # Call the stop script
-        bash "$(dirname "$0")/stop.sh" "$START_STOP_FLAG"
-        # Call the start script
-        bash "$(dirname "$0")/start.sh" "$START_STOP_FLAG"
-    fi
-elif [ "$1" == "test" ]; then
-    if [ -z "${BASH_VERSION:-}" ]; then
-        exec bash "$0" "test" "$TEST_FLAG"
-    else
-        # Call the test script
-        bash "$(dirname "$0")/test.sh" "$TEST_FLAG"
-    fi
-elif [ "$1" == "logs" ]; then
-    if [ -z "${BASH_VERSION:-}" ]; then
-        exec bash "$0" "logs" "$LOGS_FLAG"
-    else
-        # Call the logs script
-        bash "$(dirname "$0")/logs.sh" "$LOGS_FLAG"
-    fi
-elif [[ ! " ${ACTIONS[*]} " == *" $1 "* ]]; then
-    echo "Invalid argument: $1. Use one of the following: ${ACTIONS[*]}."
-    exit 1
-fi
+run_script() {
+    local script_name="$1"
+    shift
+    bash "${SCRIPT_DIR}/${script_name}" "$@"
+}
+
+case "$COMMAND" in
+    start|stop|restart)
+        manage_minikube=false
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -M|--minikube)
+                    manage_minikube=true
+                    ;;
+                *)
+                    echo "Unknown option for $COMMAND: $1"
+                    echo "Use '$0 help' for usage information."
+                    exit 1
+                    ;;
+            esac
+            shift
+        done
+
+        lifecycle_args=()
+        if [ "$manage_minikube" = true ]; then
+            lifecycle_args+=("-M")
+        fi
+
+        if [ "$COMMAND" = "start" ]; then
+            run_script "start.sh" "${lifecycle_args[@]}"
+        elif [ "$COMMAND" = "stop" ]; then
+            run_script "stop.sh" "${lifecycle_args[@]}"
+        else
+            run_script "stop.sh" "${lifecycle_args[@]}"
+            run_script "start.sh" "${lifecycle_args[@]}"
+        fi
+        ;;
+
+    test)
+        test_flag="-a"
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -r|--resources)
+                    test_flag="-r"
+                    ;;
+                -s|--scripts)
+                    test_flag="-s"
+                    ;;
+                -a|--all)
+                    test_flag="-a"
+                    ;;
+                *)
+                    echo "Unknown option for test: $1"
+                    echo "Use '$0 help' for usage information."
+                    exit 1
+                    ;;
+            esac
+            shift
+        done
+
+        run_script "test.sh" "$test_flag"
+        ;;
+
+    logs)
+        logs_args=("-a")
+        pod_name=""
+        follow=false
+
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -a|--all)
+                    logs_args=("-a")
+                    ;;
+                -f|--follow)
+                    follow=true
+                    ;;
+                --name=*)
+                    pod_name="${1#*=}"
+                    ;;
+                --name)
+                    if [ $# -lt 2 ]; then
+                        echo "Option --name requires a value."
+                        exit 1
+                    fi
+                    pod_name="$2"
+                    shift
+                    ;;
+                *)
+                    echo "Unknown option for logs: $1"
+                    echo "Use '$0 help' for usage information."
+                    exit 1
+                    ;;
+            esac
+            shift
+        done
+
+        if [ -n "$pod_name" ]; then
+            logs_args=("--name=${pod_name}")
+        fi
+        if [ "$follow" = true ]; then
+            logs_args+=("-f")
+        fi
+
+        run_script "logs.sh" "${logs_args[@]}"
+        ;;
+esac

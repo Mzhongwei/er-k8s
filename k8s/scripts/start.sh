@@ -20,24 +20,48 @@ PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims"
 
 NAMESPACE="eess-k8s"
 BASE_IMAGE="python:3.12-alpine"
-    
-# Check if the -M flag is provided to determine if we should start the cluster in addition to applying resources.
-# Start the cluster with minikube if it's not already running.
-if ! minikube status -p domolandes --format '{{.Host}}' 2>/dev/null | grep -q "Running"; then
-    if ! command -v minikube &> /dev/null; then
-        echo "Minikube is not installed. Please install Minikube to start the cluster."
-        exit 1
-    elif [ "${1:-}" == "-M" ]; then
-        minikube start -p domolandes
-    else
-        echo "Minikube is not running. Please start the cluster before running this script or use the '-M' flag to start it."
-        exit 1
-    fi
-else
-    echo "Minikube is already running, skipping cluster start."
-fi
+MINIKUBE_PROFILE="${EESS_MINIKUBE_PROFILE:-domolandes}"
+START_MINIKUBE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        "")
+            # Ignore empty args that may be forwarded by wrappers.
+            ;;
+        -M|--start-minikube)
+            START_MINIKUBE=true
+            ;;
+        *)
+            echo "Unknown option: $arg"
+            echo "Usage: $0 [-M|--start-minikube]"
+            exit 1
+            ;;
+    esac
+done
 
 shopt -s nullglob
+
+require_cmd() {
+    local cmd="$1"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "Required command not found: $cmd"
+        exit 1
+    fi
+}
+
+apply_yaml_dir() {
+    local dir="$1"
+    local description="$2"
+    shift 2
+
+    local files=("${dir}"/*.yaml)
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "No ${description} manifests found in ${dir}."
+        return
+    fi
+
+    kubectl apply -f "$dir" "$@"
+}
 
 clean_k8s_name() {
     local raw="$1"
@@ -50,6 +74,22 @@ clean_k8s_name() {
     echo "$cleaned"
 }
 
+require_cmd kubectl
+require_cmd minikube
+
+# Start the cluster with Minikube if it's not already running.
+if ! minikube status -p "$MINIKUBE_PROFILE" --format '{{.Host}}' 2>/dev/null | grep -q '^Running$'; then
+    if [ "$START_MINIKUBE" = true ]; then
+        minikube start -p "$MINIKUBE_PROFILE"
+    else
+        echo "Minikube profile '$MINIKUBE_PROFILE' is not running."
+        echo "Start it first, or run this script with '-M' to start automatically."
+        exit 1
+    fi
+else
+    echo "Minikube profile '$MINIKUBE_PROFILE' is already running, skipping cluster start."
+fi
+
 # Create the namespace if it doesn't exist.
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     kubectl create namespace "$NAMESPACE"
@@ -58,15 +98,17 @@ else
 fi
 
 # Warm image cache once to reduce parallel pull failures on constrained links.
-if minikube image ls -p domolandes | grep -q "$BASE_IMAGE"; then
+if minikube image ls -p "$MINIKUBE_PROFILE" | grep -q "$BASE_IMAGE"; then
     echo "Base image $BASE_IMAGE already present in Minikube cache."
 else
     if [ "${EESS_PREPULL_IMAGE:-true}" = "true" ]; then
         pulled=false
         for attempt in 1 2 3; do
-            if minikube image pull -p domolandes "$BASE_IMAGE"; then
+            if minikube image pull -p "$MINIKUBE_PROFILE" "$BASE_IMAGE"; then
                 pulled=true
                 echo "Base image $BASE_IMAGE pulled successfully."
+                minikube image load -p "$MINIKUBE_PROFILE" "$BASE_IMAGE" >/dev/null
+                echo "Base image $BASE_IMAGE loaded into Minikube cache."
                 break
             fi
             echo "Image pull failed (attempt ${attempt}/3), retrying..."
@@ -79,15 +121,7 @@ else
     fi
 fi
 
-# Deploy services
-service_files=("${SERVICES_DIR}"/*.yaml)
-if [ ${#service_files[@]} -eq 0 ]; then
-    echo "No service manifests found in ${SERVICES_DIR}."
-else
-    for file in "${service_files[@]}"; do
-        kubectl apply -f "$file" --namespace="$NAMESPACE"
-    done
-fi
+apply_yaml_dir "$SERVICES_DIR" "service" --namespace="$NAMESPACE"
 
 # Create or update one ConfigMap per Python script.
 python_files=("${PYTHON_SCRIPTS_DIR}"/*.py)
@@ -99,39 +133,14 @@ else
         base_name="${filename%.py}"
         configmap_name="$(clean_k8s_name "$base_name")"
 
-        kubectl create configmap "$configmap_name" --from-file="$filename=$file" --dry-run=client -o yaml | kubectl apply -f - --namespace="$NAMESPACE"
+        kubectl create configmap "$configmap_name" --from-file="$filename=$file" --dry-run=client -o yaml \
+            | kubectl apply -f - --namespace="$NAMESPACE"
     done
 fi
 
-# Deploy persistent volumes
-pv_files=("${PERSISTENT_VOLUMES_DIR}"/*.yaml)
-if [ ${#pv_files[@]} -eq 0 ]; then
-    echo "No persistent volume manifests found in ${PERSISTENT_VOLUMES_DIR}."
-else
-    for file in "${pv_files[@]}"; do
-        kubectl apply -f "$file" --namespace="$NAMESPACE"
-    done
-fi
-
-# Deploy persistent volume claims
-pvc_files=("${PERSISTENT_VOLUME_CLAIMS_DIR}"/*.yaml)
-if [ ${#pvc_files[@]} -eq 0 ]; then
-    echo "No persistent volume claim manifests found in ${PERSISTENT_VOLUME_CLAIMS_DIR}."
-else
-    for file in "${pvc_files[@]}"; do
-        kubectl apply -f "$file" --namespace="$NAMESPACE"
-    done
-fi
-
-# Deploy deployments
-deployment_files=("${DEPLOYMENTS_DIR}"/*.yaml)
-if [ ${#deployment_files[@]} -eq 0 ]; then
-    echo "No deployment manifests found in ${DEPLOYMENTS_DIR}."
-else
-    for file in "${deployment_files[@]}"; do
-        kubectl apply -f "$file" --namespace="$NAMESPACE"
-    done
-fi
+apply_yaml_dir "$PERSISTENT_VOLUMES_DIR" "persistent volume"
+apply_yaml_dir "$PERSISTENT_VOLUME_CLAIMS_DIR" "persistent volume claim" --namespace="$NAMESPACE"
+apply_yaml_dir "$DEPLOYMENTS_DIR" "deployment" --namespace="$NAMESPACE"
 
 
 echo "Kubernetes cluster started and services, deployments, and ConfigMaps applied successfully."

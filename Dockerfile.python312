@@ -1,6 +1,23 @@
-FROM python:3.12-alpine
+# USELESS IMAGE
 
-# This is a placeholder Dockerfile that would be built locally
-# The actual build will import the base image through a cached/pre-pulled version
+FROM python:3.12-slim
 
-RUN echo "Python 3.12 Alpine Docker Image"
+RUN apt-get update && apt-get install -y \
+    msr-tools \
+    libc-bin \
+    linux-perf \
+    nethogs \
+    git \
+    make \
+    build-essential \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# clone example repository
+RUN git clone https://github.com/labDomolandes/ecofloc.git \
+    && cd ecofloc \
+    && make clean \
+    && make \
+    && make install
+
+CMD ["/bin/bash"]
