@@ -14,7 +14,8 @@ EESS Kubernetes Cluster Manager
 ================================
 
 USAGE:
-  eess-k8s.sh COMMAND [OPTIONS]
+  eess-k8s COMMAND [OPTIONS]
+  eess-k8s [help|-h|--help|-help]
 
 COMMANDS:
     start       Deploy all EESS Kubernetes resources to the cluster
@@ -34,7 +35,7 @@ OPTIONS:
         -r --resources       Test the deployed Kubernetes resources (services, deployments, ConfigMaps)
         -s --scripts         Test the scripts in pods
         -a --all             Test both deployed Kubernetes resources and scripts (default)
-    
+
     For logs:
         -a --all             Stream logs from all EESS pods (default)
         -f --follow          Follow logs in real-time
@@ -47,23 +48,29 @@ OPTIONS:
 
 EXAMPLES:
   # Deploy resources only
-  ./eess-k8s.sh start
+  eess-k8s start
 
   # Deploy resources and start Minikube cluster
-  ./eess-k8s.sh start -M
+  eess-k8s start -M
 
   # Remove resources and stop Minikube
-  ./eess-k8s.sh stop -M
+  eess-k8s stop -M
 
   # Clean restart with Minikube management
-  ./eess-k8s.sh restart -M
+  eess-k8s restart -M
 
   # Run tests against deployed resources
-  ./eess-k8s.sh test -r
+  eess-k8s test -r
 
-    # Show pod consumption sorted by memory (descending) as CSV
-    ./eess-k8s.sh metrics -s memory -o desc -f csv
+  # Show pod consumption sorted by memory (descending) as CSV
+  eess-k8s metrics -s memory -o desc -f csv
 
+  # Show command-specific help
+  eess-k8s start --help
+  eess-k8s stop --help
+  eess-k8s test --help
+  eess-k8s logs --help
+  eess-k8s metrics --help
 EOF
 }
 
@@ -77,7 +84,7 @@ fi
 COMMAND="$1"
 shift
 
-if [ "$COMMAND" = "help" ] || [ "$COMMAND" = "--help" ] || [ "$COMMAND" = "-h" ]; then
+if [ "$COMMAND" = "help" ] || [ "$COMMAND" = "--help" ] || [ "$COMMAND" = "-h" ] || [ "$COMMAND" = "-help" ]; then
     print_help
     exit 0
 fi
@@ -98,6 +105,16 @@ case "$COMMAND" in
         manage_minikube=false
         while [ $# -gt 0 ]; do
             case "$1" in
+                -h|--help|-help|help)
+                    if [ "$COMMAND" = "start" ]; then
+                        run_script "start.sh" "--help"
+                    elif [ "$COMMAND" = "stop" ]; then
+                        run_script "stop.sh" "--help"
+                    else
+                        run_script "start.sh" "--help"
+                    fi
+                    exit 0
+                    ;;
                 -M|--minikube)
                     manage_minikube=true
                     ;;
@@ -129,6 +146,10 @@ case "$COMMAND" in
         test_flag="-a"
         while [ $# -gt 0 ]; do
             case "$1" in
+                -h|--help|-help|help)
+                    run_script "test.sh" "--help"
+                    exit 0
+                    ;;
                 -r|--resources)
                     test_flag="-r"
                     ;;
@@ -157,6 +178,10 @@ case "$COMMAND" in
 
         while [ $# -gt 0 ]; do
             case "$1" in
+                -h|--help|-help|help)
+                    run_script "logs.sh" "--help"
+                    exit 0
+                    ;;
                 -a|--all)
                     logs_args=("-a")
                     ;;
@@ -192,6 +217,7 @@ case "$COMMAND" in
 
         run_script "logs.sh" "${logs_args[@]}"
         ;;
+
     metrics)
         metrics_args=()
         while [ $# -gt 0 ]; do

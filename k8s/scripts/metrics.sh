@@ -13,7 +13,7 @@ FORMAT="table"
 
 usage() {
 	cat << 'EOF'
-Usage: metrics.sh [options]
+Usage: eess-k8s metrics [options]
 
 Extract pod consumption metrics from Kubernetes and sort them.
 
@@ -21,7 +21,7 @@ Options:
   -s, --sort FIELD          Sort field: pod|cpu|memory (default: pod)
   -o, --order DIR           Sort order: asc|desc (default: asc)
   -f, --format TYPE         Output format: table|csv|tsv (default: table)
-  -h, --help                Show this help
+  -h, --help, -help, help   Show this help
 
 Notes:
   - Data comes from the Metrics API (kubectl top pods).

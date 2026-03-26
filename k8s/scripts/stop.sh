@@ -9,11 +9,44 @@ set -euo pipefail
 
 # This script stops Minikube and deletes the resources
 NAMESPACE="eess-k8s"
+MINIKUBE_PROFILE="${EESS_MINIKUBE_PROFILE:-domolandes}"
+STOP_MINIKUBE=false
+
+usage() {
+    cat << 'EOF'
+Usage: eess-k8s stop [options]
+
+Delete EESS Kubernetes namespace/resources.
+
+Options:
+  -M, --minikube                Also stop Minikube profile
+  -h, --help, -help, help       Show this help
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        "")
+            ;;
+        -h|--help|-help|help)
+            usage
+            exit 0
+            ;;
+        -M|--minikube)
+            STOP_MINIKUBE=true
+            ;;
+        *)
+            echo "Unknown option: $arg"
+            usage
+            exit 1
+            ;;
+    esac
+done
 
 shopt -s nullglob
 
 # Raise error if minikube is not running
-if ! (minikube status -p domolandes --format '{{.Host}}' 2>/dev/null | grep -q "Running"); then
+if ! (minikube status -p "$MINIKUBE_PROFILE" --format '{{.Host}}' 2>/dev/null | grep -q "Running"); then
     echo "Minikube is not running. Please start the cluster before running this script."
     exit 1
 fi
@@ -21,7 +54,7 @@ fi
 # Delete the namespace and all resources within it. This will also delete services, deployments, and ConfigMaps.
 kubectl delete namespace "$NAMESPACE" --ignore-not-found
 
-if [ "$1" == "-M" ]; then
-    minikube stop -p domolandes
+if [ "$STOP_MINIKUBE" = true ]; then
+    minikube stop -p "$MINIKUBE_PROFILE"
     echo "Kubernetes cluster stopped successfully."
 fi

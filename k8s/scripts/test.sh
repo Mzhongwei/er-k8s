@@ -21,6 +21,38 @@ NAMESPACE="eess-k8s"
 BASE_IMAGE="python:3.12-alpine"
 ARG1="${1:-}"
 
+usage() {
+    cat << 'EOF'
+Usage: eess-k8s test [option]
+
+Run EESS tests.
+
+Options:
+  -r, --resources              Test Kubernetes manifests/resources
+  -s, --scripts                Test script behavior via pod logs
+  -a, --all                    Run both resource and script tests (default)
+  -h, --help, -help, help      Show this help
+EOF
+}
+
+if [ -z "$ARG1" ]; then
+    ARG1="-a"
+fi
+
+case "$ARG1" in
+    -h|--help|-help|help)
+        usage
+        exit 0
+        ;;
+    -r|--resources|-s|--scripts|-a|--all)
+        ;;
+    *)
+        echo "Unknown option: $ARG1"
+        usage
+        exit 1
+        ;;
+esac
+
 RED='\033[1;33;41m'
 BLUE='\033[1;33;44m'
 GREEN='\033[1;97;42m'

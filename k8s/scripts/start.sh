@@ -23,17 +23,33 @@ BASE_IMAGE="python:3.12-alpine"
 MINIKUBE_PROFILE="${EESS_MINIKUBE_PROFILE:-domolandes}"
 START_MINIKUBE=false
 
+usage() {
+    cat << 'EOF'
+Usage: eess-k8s start [options]
+
+Start/apply EESS Kubernetes resources.
+
+Options:
+  -M, --start-minikube, --minikube  Start Minikube if profile is not running
+  -h, --help, -help, help           Show this help
+EOF
+}
+
 for arg in "$@"; do
     case "$arg" in
         "")
             # Ignore empty args that may be forwarded by wrappers.
             ;;
-        -M|--start-minikube)
+        -h|--help|-help|help)
+            usage
+            exit 0
+            ;;
+        -M|--start-minikube|--minikube)
             START_MINIKUBE=true
             ;;
         *)
             echo "Unknown option: $arg"
-            echo "Usage: $0 [-M|--start-minikube]"
+            usage
             exit 1
             ;;
     esac
