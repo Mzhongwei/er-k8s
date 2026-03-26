@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("start" "stop" "restart" "test" "logs" "help")
+ACTIONS=("start" "stop" "restart" "metrics" "test" "logs" "help")
 
 print_help() {
     cat << 'EOF'
@@ -20,6 +20,7 @@ COMMANDS:
     start       Deploy all EESS Kubernetes resources to the cluster
     stop        Remove all EESS Kubernetes resources from the cluster
     restart     Stop and then start all resources (clean restart)
+    metrics     Display resource usage metrics for EESS pods
     test        Run tests against the deployed resources
     logs        Stream logs from EESS pods
     help        Display this help message
@@ -39,6 +40,11 @@ OPTIONS:
         -f --follow          Follow logs in real-time
         --name=POD_NAME      Stream logs from a specific pod by name of the deployment
 
+    For metrics:
+        -s --sort FIELD      Sort by pod|cpu|memory (default: pod)
+        -o --order DIR       Sort order asc|desc (default: asc)
+        -f --format TYPE     Output format table|csv|tsv (default: table)
+
 EXAMPLES:
   # Deploy resources only
   ./eess-k8s.sh start
@@ -55,13 +61,16 @@ EXAMPLES:
   # Run tests against deployed resources
   ./eess-k8s.sh test -r
 
+    # Show pod consumption sorted by memory (descending) as CSV
+    ./eess-k8s.sh metrics -s memory -o desc -f csv
+
 EOF
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [start|stop|restart|test|logs|help] [options]"
+    echo "Usage: $0 [start|stop|restart|metrics|test|logs|help] [options]"
     exit 1
 fi
 
@@ -182,5 +191,31 @@ case "$COMMAND" in
         fi
 
         run_script "logs.sh" "${logs_args[@]}"
+        ;;
+    metrics)
+        metrics_args=()
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -h|--help|-help|help)
+                    metrics_args+=("--help")
+                    ;;
+                -s|--sort|-o|--order|-f|--format)
+                    if [ $# -lt 2 ]; then
+                        echo "Option $1 requires a value."
+                        exit 1
+                    fi
+                    metrics_args+=("$1" "$2")
+                    shift
+                    ;;
+                *)
+                    echo "Unknown option for metrics: $1"
+                    echo "Use '$0 help' for usage information."
+                    exit 1
+                    ;;
+            esac
+            shift
+        done
+
+        run_script "metrics.sh" "${metrics_args[@]}"
         ;;
 esac
