@@ -3,10 +3,11 @@
 
 START_STOP_FLAG=""
 TEST_FLAG="--all"
-ACTIONS=("start" "stop" "restart" "test" "help")
+LOGS_FLAG="--all"
+ACTIONS=("start" "stop" "restart" "test" "logs" "help")
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 [start|stop|restart|test|help] [options]"
+    echo "Usage: $0 [start|stop|restart|test|logs|help] [options]"
     exit 1
 fi
 
@@ -23,6 +24,7 @@ COMMANDS:
     stop        Remove all EESS Kubernetes resources from the cluster
     restart     Stop and then start all resources (clean restart)
     test        Run tests against the deployed resources
+    logs        Stream logs from EESS pods
     help        Display this help message
 
 OPTIONS:
@@ -34,6 +36,11 @@ OPTIONS:
         -r --resources       Test the deployed Kubernetes resources (services, deployments, ConfigMaps)
         -s --scripts         Test the scripts in pods
         -a --all             Test both deployed Kubernetes resources and scripts (default)
+    
+    For logs:
+        -a --all             Stream logs from all EESS pods (default)
+        -f --follow          Follow logs in real-time
+        --name=POD_NAME      Stream logs from a specific pod by name of the deployment
 
 EXAMPLES:
   # Deploy resources only
@@ -63,6 +70,12 @@ elif [ "$2" == "-s" ] || [ "$2" == "--scripts" ] && [ "$1" == "test" ]; then
     TEST_FLAG="-s"
 elif [ "$2" == "-a" ] || [ "$2" == "--all" ] && [ "$1" == "test" ]; then
     TEST_FLAG="-a"
+elif ([ "$2" == "-a" ] || [ "$2" == "--all" ] || [ "$3" == "-a" ] || [ "$3" == "--all" ]) && [ "$1" == "logs" ]; then
+    LOGS_FLAG="-a"
+elif ([[ "$2" == "--name="* ]] || [[ "$3" == "--name="* ]]) && [ "$1" == "logs" ]; then
+    LOGS_FLAG="--name=${2#*=}${3#*=}"
+elif [[ "$2" == "-f" || "$2" == "--follow" || "$3" == "-f" || "$3" == "--follow" ]] && [ "$1" == "logs" ]; then
+    LOGS_FLAG="$LOGS_FLAG -f"
 elif [ -n "$2" ]; then
     echo "Unknown option: $2. Use help for usage information."
     exit 1
@@ -97,6 +110,13 @@ elif [ "$1" == "test" ]; then
     else
         # Call the test script
         bash "$(dirname "$0")/test.sh" "$TEST_FLAG"
+    fi
+elif [ "$1" == "logs" ]; then
+    if [ -z "${BASH_VERSION:-}" ]; then
+        exec bash "$0" "logs" "$LOGS_FLAG"
+    else
+        # Call the logs script
+        bash "$(dirname "$0")/logs.sh" "$LOGS_FLAG"
     fi
 elif [[ ! " ${ACTIONS[*]} " == *" $1 "* ]]; then
     echo "Invalid argument: $1. Use one of the following: ${ACTIONS[*]}."

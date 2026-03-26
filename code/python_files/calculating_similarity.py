@@ -15,6 +15,12 @@ def handle_client_connection(client_socket):
         with client_socket:
             data = client_socket.recv(1024).decode("utf-8").strip()
             print(f"Received data: {data}")
+    
+            # If data starts with /pipeline/embedding/ it's a path to the embedding model
+            if(data.startswith("/pipeline/embedding/")):
+                with open(data, "r") as f:
+                    content = f.read()
+                    print(f"Embedding model file content: {content}")
     except OSError as e:
         print(f"ERROR in handle_client_connection: {e}", flush=True)
 

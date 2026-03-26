@@ -1,17 +1,24 @@
 import socket
 import time
+import os
 
 LISTEN_HOST = "0.0.0.0"
 NORMALIZATION_LISTEN_PORT = 8080
 
 BERT_INFERENCE_SERVICE = {"HOST": "service-bert-inference", "PORT": 81} 
 
+bert_model_path = "/pipeline/bert/bert_model.txt"
+
 def handle_client_connection(client_socket):
     with client_socket:
         data = client_socket.recv(1024).decode("utf-8").strip()
         print(f"Received data: {data}")
-        bert_model = "BERT_model_simulated"
-        send(bert_model, BERT_INFERENCE_SERVICE)
+        bert_model = "BERT_model_content"
+
+        os.makedirs(os.path.dirname(bert_model_path), exist_ok=True)
+        with open(bert_model_path, "w", encoding="utf-8") as f:
+            f.write(bert_model)
+        send(bert_model_path, BERT_INFERENCE_SERVICE)
         print("BERT model sent to BERT_INFERENCE_SERVICE", flush=True)
 
 def send(payload,service):

@@ -1,10 +1,13 @@
 import socket
 import time
+import os
 
 LISTEN_HOST = "0.0.0.0"
 RANDOM_WALK_LISTEN_PORT = 8080
 
 CALCULATING_SIMILARITY_SERVICE = {"HOST": "service-calculating-similarity", "PORT": 81}
+
+embedding_model_path = "/pipeline/embedding/embedding_model.txt"
 
 def handle_client_connection(client_socket):
     try:
@@ -12,8 +15,11 @@ def handle_client_connection(client_socket):
             data = client_socket.recv(1024).decode("utf-8").strip()
             print(f"Received data: {data}")
 
-            embedding_model = "embedding_model_simulated"
-            send(embedding_model, CALCULATING_SIMILARITY_SERVICE)
+            os.makedirs(os.path.dirname(embedding_model_path), exist_ok=True)
+            with open(embedding_model_path, "w", encoding="utf-8") as f:
+                f.write("embedding_model_content")
+
+            send(embedding_model_path, CALCULATING_SIMILARITY_SERVICE)
             print("Embedding model sent to CALCULATING_SIMILARITY_SERVICE", flush=True)
             
     except OSError as e:

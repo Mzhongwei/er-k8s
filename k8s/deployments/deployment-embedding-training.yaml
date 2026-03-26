@@ -31,6 +31,8 @@ spec:
         - name: scripts
           mountPath: /app
           readOnly: true
+        - name: pipeline-embedding-claim
+          mountPath: /pipeline
       volumes:
       - name: scripts
         configMap:
@@ -38,6 +40,6 @@ spec:
           items:
           - key: embedding_training.py
             path: embedding_training.py
-
-
-
+      - name: pipeline-embedding-claim
+        persistentVolumeClaim:
+          claimName: pipeline-embedding-claim

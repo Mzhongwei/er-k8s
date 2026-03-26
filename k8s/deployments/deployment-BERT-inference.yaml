@@ -33,6 +33,8 @@ spec:
         - name: scripts
           mountPath: /app
           readOnly: true
+        - name: pipeline-bert-model-claim
+          mountPath: /pipeline
       volumes:
       - name: scripts
         configMap:
@@ -40,6 +42,6 @@ spec:
           items:
           - key: BERT_inference.py
             path: BERT_inference.py
-
-
-
+      - name: pipeline-bert-model-claim
+        persistentVolumeClaim:
+          claimName: pipeline-bert-model-claim

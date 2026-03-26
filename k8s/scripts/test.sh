@@ -14,6 +14,8 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SERVICES_DIR="${ROOT_DIR}/k8s/services"
 DEPLOYMENTS_DIR="${ROOT_DIR}/k8s/deployments"
 PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
+PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
+PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims"
 
 NAMESPACE="eess-k8s"
 BASE_IMAGE="python:3.12-alpine"
@@ -49,39 +51,71 @@ EOF
             ;;
         cg-feature-extraction)
             cat <<'EOF'
+Received data: processed_data_simulated
 CG feature sent to FEATURE_INDEX_CONSTRUCTION_SERVICE
 CG feature sent to CANDIDATE_ENUMERATION_SERVICE
 EOF
             ;;
         graph-construction)
-            echo "Representation graph sent to RANDOM_WALK_SERVICE"
+            cat <<'EOF'
+Received data: processed_data_simulated
+Representation graph written and path sent to RANDOM_WALK_SERVICE
+EOF
             ;;
         bert-inference)
-            echo "Prediction matching completed"
+            cat <<'EOF'
+Received data: /pipeline/bert/bert_model.txt
+BERT model file content: BERT_model_content
+Prediction matching completed
+EOF
             ;;
         bert-training)
-            echo "BERT model sent to BERT_INFERENCE_SERVICE"
+            cat <<'EOF'
+Received data: processed_data_simulated
+BERT model sent to BERT_INFERENCE_SERVICE
+EOF
             ;;
         candidate-enumeration)
             cat <<'EOF'
+Received data: /pipeline/cg_features_index/cg_features_index.txt
+CG features index file content: cg_features_index_content
+Received data: cg_feature_simulated
 Candidate pairs sent to CALCULATING_SIMILARITY_SERVICE
 Candidate pairs sent to BERT_INFERENCE_SERVICE
 EOF
             ;;
         feature-index-construction)
-            echo "CG features index sent to CANDIDATE_ENUMERATION_SERVICE"
+            cat <<'EOF'
+Received data: cg_feature_simulated
+CG features index sent to CANDIDATE_ENUMERATION_SERVICE
+EOF
             ;;
         random-walk)
-            echo "Sequences sent to EMBEDDING_TRAINING_SERVICE"
+            cat <<'EOF'
+Received data: /pipeline/graph/representation_graph.txt
+Graph file content: representation_graph_content
+Sequences sent to EMBEDDING_TRAINING_SERVICE
+EOF
             ;;
         embedding-training)
-            echo "Embedding model sent to CALCULATING_SIMILARITY_SERVICE"
+            cat <<'EOF'
+Received data: sequences_simulated
+Embedding model sent to CALCULATING_SIMILARITY_SERVICE
+EOF
             ;;
         calculating-similarity)
-            echo "Similarity data sent to DECISION_MAKING_SERVICE"
+            cat <<'EOF'
+Received data: candidate_pairs_simulated
+Received data: /pipeline/embedding/embedding_model.txt
+Embedding model file content: embedding_model_content
+Similarity data sent to DECISION_MAKING_SERVICE
+EOF
             ;;
         decision-making)
-            echo "Prediction matching completed"
+            cat <<'EOF'
+Received data: similarity_data_simulated
+Prediction matching completed
+EOF
             ;;
         *)
             ;;
@@ -97,7 +131,6 @@ run_script_log_unit_test() {
     app_name="$(clean_k8s_name "$base_name")"
 
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    echo "[UNIT] ${filename}"
 
     if ! kubectl -n "$NAMESPACE" get deployment "$app_name" >/dev/null 2>&1; then
         print_error "Then FAIL: deployment ${app_name} not found for ${filename}."
@@ -206,6 +239,30 @@ if [ "$ARG1" == "-r" ] || [ "$ARG1" == "--resources" ] || [ "$ARG1" == "-a" ] ||
         fi
     done
 
+    # Test persistent volumes
+    for pv in "$PERSISTENT_VOLUMES_DIR"/*.yaml; do
+        TOTAL_TESTS=$((TOTAL_TESTS + 1))
+        if kubectl apply --dry-run=client -f "$pv" >/dev/null 2>&1; then
+            print_success "PersistentVolume $(basename "$pv") is valid."
+            SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
+        else
+            print_error "PersistentVolume $(basename "$pv") is invalid."
+            FAILED_TESTS=$((FAILED_TESTS + 1))
+        fi
+    done
+
+    # Test persistent volume claims
+    for pvc in "$PERSISTENT_VOLUME_CLAIMS_DIR"/*.yaml; do
+        TOTAL_TESTS=$((TOTAL_TESTS + 1))
+        if kubectl -n "$NAMESPACE" apply --dry-run=client -f "$pvc" >/dev/null 2>&1; then
+            print_success "PersistentVolumeClaim $(basename "$pvc") is valid."
+            SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
+        else
+            print_error "PersistentVolumeClaim $(basename "$pvc") is invalid."
+            FAILED_TESTS=$((FAILED_TESTS + 1))
+        fi
+    done
+
     # Test deployments
     for deployment in "$DEPLOYMENTS_DIR"/*.yaml; do
         TOTAL_TESTS=$((TOTAL_TESTS + 1))
@@ -254,7 +311,7 @@ if [ "$ARG1" == "-r" ] || [ "$ARG1" == "--resources" ] || [ "$ARG1" == "-a" ] ||
     done
 fi
 if [ "$ARG1" == "-s" ] || [ "$ARG1" == "--scripts" ] || [ "$ARG1" == "-a" ] || [ "$ARG1" == "--all" ]; then
-    echo "Running script unit tests (Given/When/Then)"
+    echo "Running script unit tests"
 
     python_files=("${PYTHON_SCRIPTS_DIR}"/*.py)
     if [ ${#python_files[@]} -eq 0 ]; then

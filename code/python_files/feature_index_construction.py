@@ -1,3 +1,4 @@
+import os
 import socket
 import time
 
@@ -6,14 +7,18 @@ CG_FEATURE_EXTRACTION_LISTEN_PORT = 8080
 
 CANDIDATE_ENUMERATION_SERVICE = {"HOST": "service-candidate-enumeration", "PORT": 81}
 
+cg_features_index_path = "/pipeline/cg_features_index/cg_features_index.txt"
+
 def handle_client_connection(client_socket):
     with client_socket:
         data = client_socket.recv(1024).decode("utf-8").strip()
         print(f"Received data: {data}")
 
-        cg_features_index = "cg_features_index_simulated"
-        time.sleep(1)
-        send(cg_features_index, CANDIDATE_ENUMERATION_SERVICE)
+        os.makedirs(os.path.dirname(cg_features_index_path), exist_ok=True)
+        with open(cg_features_index_path, "w", encoding="utf-8") as f:
+            f.write("cg_features_index_content")
+
+        send(cg_features_index_path, CANDIDATE_ENUMERATION_SERVICE)
         print("CG features index sent to CANDIDATE_ENUMERATION_SERVICE", flush=True)
 
 def send(payload,service):

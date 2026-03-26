@@ -1,20 +1,24 @@
 import socket
 import time
+import os
 
 LISTEN_HOST = "0.0.0.0"
 NORMALIZATION_LISTEN_PORT = 8080
 
 RANDOM_WALK_SERVICE = {"HOST": "service-random-walk", "PORT": 80}
+graph_path = "/pipeline/graph/representation_graph.txt"
 
 def handle_client_connection(client_socket):
     with client_socket:
         data = client_socket.recv(1024).decode("utf-8").strip()
         print(f"Received data: {data}")
- 
-        representation_graph = "representation_graph_simulated"
-        time.sleep(1)
-        send(representation_graph, RANDOM_WALK_SERVICE)
-        print("Representation graph sent to RANDOM_WALK_SERVICE", flush=True)
+        
+        os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+        with open(graph_path, "w", encoding="utf-8") as f:
+            f.write("representation_graph_content")
+
+        send(graph_path, RANDOM_WALK_SERVICE)
+        print("Representation graph written and path sent to RANDOM_WALK_SERVICE", flush=True)
 
 def send(payload,service):
     with socket.create_connection((service["HOST"], service["PORT"]), timeout=5) as sock:

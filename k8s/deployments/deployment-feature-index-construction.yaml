@@ -31,6 +31,8 @@ spec:
         - name: scripts
           mountPath: /app
           readOnly: true
+        - name: pipeline-cg-features-claim
+          mountPath: /pipeline
       volumes:
       - name: scripts
         configMap:
@@ -38,6 +40,6 @@ spec:
           items:
           - key: feature_index_construction.py
             path: feature_index_construction.py
-
-
-
+      - name: pipeline-cg-features-claim
+        persistentVolumeClaim:
+          claimName: pipeline-cg-features-claim

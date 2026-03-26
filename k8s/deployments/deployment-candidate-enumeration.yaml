@@ -32,6 +32,8 @@ spec:
         - name: scripts
           mountPath: /app
           readOnly: true
+        - name: pipeline-cg-features-claim
+          mountPath: /pipeline
       volumes:
       - name: scripts
         configMap:
@@ -39,6 +41,6 @@ spec:
           items:
           - key: candidate_enumeration.py
             path: candidate_enumeration.py
-
-
-
+      - name: pipeline-cg-features-claim
+        persistentVolumeClaim:
+          claimName: pipeline-cg-features-claim

@@ -25,6 +25,14 @@ def handle_client_connection(client_socket):
         data = client_socket.recv(1024).decode("utf-8").strip()
         print(f"Received data: {data}")
 
+        if(data.startswith("/pipeline/bert/")):
+            try:
+                with open(data, "r") as f:
+                    content = f.read()
+                    print(f"BERT model file content: {content}")
+            except FileNotFoundError:
+                print(f"ERROR: BERT model file {data} not found", flush=True)
+
 
 def main():
     server_socket_normalization = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -32,6 +32,8 @@ spec:
         - name: scripts
           mountPath: /app
           readOnly: true
+        - name: pipeline-embedding-claim
+          mountPath: /pipeline
       volumes:
       - name: scripts
         configMap:
@@ -39,5 +41,6 @@ spec:
           items:
           - key: calculating_similarity.py
             path: calculating_similarity.py
-
-
+      - name: pipeline-embedding-claim
+        persistentVolumeClaim:
+          claimName: pipeline-embedding-claim

@@ -31,6 +31,8 @@ spec:
         - name: scripts
           mountPath: /app
           readOnly: true
+        - name: pipeline
+          mountPath: /pipeline
       volumes:
       - name: scripts
         configMap:
@@ -38,6 +40,6 @@ spec:
           items:
           - key: graph_construction.py
             path: graph_construction.py
-
-
-
+      - name: pipeline
+        persistentVolumeClaim:
+          claimName: pipeline-graph-claim

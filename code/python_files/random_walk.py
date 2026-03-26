@@ -8,8 +8,16 @@ EMBEDDING_TRAINING_SERVICE = {"HOST": "service-embedding-training", "PORT": 80}
 
 def handle_client_connection(client_socket):
     with client_socket:
-        data = client_socket.recv(1024).decode("utf-8").strip()
-        print(f"Received data: {data}")
+        graph_path = client_socket.recv(1024).decode("utf-8").strip()
+        print(f"Received data: {graph_path}")
+
+        try:
+            with open(graph_path, "r") as f:
+                content = f.read()
+                print(f"Graph file content: {content}")
+        except FileNotFoundError:
+            print(f"ERROR: Graph file {graph_path} not found", flush=True)
+            return
 
         sequences = "sequences_simulated"
         time.sleep(1)

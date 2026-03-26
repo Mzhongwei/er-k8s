@@ -31,6 +31,8 @@ spec:
         - name: scripts
           mountPath: /app
           readOnly: true
+        - name: pipeline
+          mountPath: /pipeline
       volumes:
       - name: scripts
         configMap:
@@ -38,6 +40,6 @@ spec:
           items:
           - key: random_walk.py
             path: random_walk.py
-
-
-
+      - name: pipeline
+        persistentVolumeClaim:
+          claimName: pipeline-graph-claim

@@ -15,6 +15,8 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SERVICES_DIR="${ROOT_DIR}/k8s/services"
 DEPLOYMENTS_DIR="${ROOT_DIR}/k8s/deployments"
 PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
+PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
+PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims" 
 
 NAMESPACE="eess-k8s"
 BASE_IMAGE="python:3.12-alpine"
@@ -56,20 +58,24 @@ else
 fi
 
 # Warm image cache once to reduce parallel pull failures on constrained links.
-if [ "${EESS_PREPULL_IMAGE:-true}" = "true" ]; then
-    pulled=false
-    for attempt in 1 2 3; do
-        if minikube image pull -p domolandes "$BASE_IMAGE"; then
-            pulled=true
-            echo "Base image $BASE_IMAGE pulled successfully."
-            break
-        fi
-        echo "Image pull failed (attempt ${attempt}/3), retrying..."
-        sleep 5
-    done
+if minikube image ls -p domolandes | grep -q "$BASE_IMAGE"; then
+    echo "Base image $BASE_IMAGE already present in Minikube cache."
+else
+    if [ "${EESS_PREPULL_IMAGE:-true}" = "true" ]; then
+        pulled=false
+        for attempt in 1 2 3; do
+            if minikube image pull -p domolandes "$BASE_IMAGE"; then
+                pulled=true
+                echo "Base image $BASE_IMAGE pulled successfully."
+                break
+            fi
+            echo "Image pull failed (attempt ${attempt}/3), retrying..."
+            sleep 5
+        done
 
-    if [ "$pulled" = false ]; then
-        echo "Warning: unable to pre-pull $BASE_IMAGE after retries."
+        if [ "$pulled" = false ]; then
+            echo "Warning: unable to pre-pull $BASE_IMAGE after retries."
+        fi
     fi
 fi
 
@@ -94,6 +100,26 @@ else
         configmap_name="$(clean_k8s_name "$base_name")"
 
         kubectl create configmap "$configmap_name" --from-file="$filename=$file" --dry-run=client -o yaml | kubectl apply -f - --namespace="$NAMESPACE"
+    done
+fi
+
+# Deploy persistent volumes
+pv_files=("${PERSISTENT_VOLUMES_DIR}"/*.yaml)
+if [ ${#pv_files[@]} -eq 0 ]; then
+    echo "No persistent volume manifests found in ${PERSISTENT_VOLUMES_DIR}."
+else
+    for file in "${pv_files[@]}"; do
+        kubectl apply -f "$file" --namespace="$NAMESPACE"
+    done
+fi
+
+# Deploy persistent volume claims
+pvc_files=("${PERSISTENT_VOLUME_CLAIMS_DIR}"/*.yaml)
+if [ ${#pvc_files[@]} -eq 0 ]; then
+    echo "No persistent volume claim manifests found in ${PERSISTENT_VOLUME_CLAIMS_DIR}."
+else
+    for file in "${pvc_files[@]}"; do
+        kubectl apply -f "$file" --namespace="$NAMESPACE"
     done
 fi
 
