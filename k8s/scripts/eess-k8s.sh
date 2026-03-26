@@ -39,7 +39,7 @@ OPTIONS:
     For logs:
         -a --all             Stream logs from all EESS pods (default)
         -f --follow          Follow logs in real-time
-        --name=POD_NAME      Stream logs from a specific pod by name of the deployment
+        -n --name POD_NAME   Stream logs from a specific pod by name of the deployment
 
     For metrics:
         -s --sort FIELD      Sort by pod|cpu|memory (default: pod)
@@ -188,8 +188,19 @@ case "$COMMAND" in
                 -f|--follow)
                     follow=true
                     ;;
+                -n=*)
+                    pod_name="${1#-n=}"
+                    ;;
                 --name=*)
                     pod_name="${1#*=}"
+                    ;;
+                -n)
+                    if [ $# -lt 2 ]; then
+                        echo "Option -n requires a value."
+                        exit 1
+                    fi
+                    pod_name="$2"
+                    shift
                     ;;
                 --name)
                     if [ $# -lt 2 ]; then

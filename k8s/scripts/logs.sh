@@ -16,11 +16,11 @@ Usage: eess-k8s logs [option]
 Stream logs from EESS pods.
 
 Options:
-  -a, --all                    Stream logs from all EESS pods (default)
-  -f, --follow                 Follow logs in real-time
-  --name=POD_NAME              Stream logs from pods matching app=POD_NAME
-  --name POD_NAME              Same as --name=POD_NAME
-  -h, --help, -help, help      Show this help
+  -a, --all                     Stream logs from all EESS pods (default)
+  -f, --follow                  Follow logs in real-time
+  -n, --name=POD_NAME           Stream logs from pods matching app=POD_NAME
+  -n POD_NAME, --name POD_NAME  Same as --name=POD_NAME
+  -h, --help, -help, help       Show this help
 EOF
 }
 
@@ -40,9 +40,22 @@ while [ $# -gt 0 ]; do
         -f|--follow)
             follow=true
             ;;
+        -n=*)
+            mode="name"
+            pod_name="${1#-n=}"
+            ;;
         --name=*)
             mode="name"
             pod_name="${1#--name=}"
+            ;;
+        -n)
+            if [ $# -lt 2 ]; then
+                echo "Option -n requires a value."
+                exit 1
+            fi
+            mode="name"
+            pod_name="$2"
+            shift
             ;;
         --name)
             if [ $# -lt 2 ]; then
