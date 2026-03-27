@@ -10,20 +10,20 @@ ACTIONS=("start" "stop" "restart" "metrics" "test" "logs" "help")
 
 print_help() {
     cat << 'EOF'
-EESS Kubernetes Cluster Manager
+EAER Kubernetes Cluster Manager
 ================================
 
 USAGE:
-  eess-k8s COMMAND [OPTIONS]
-  eess-k8s [help|-h|--help|-help]
+  eaer-k8s COMMAND [OPTIONS]
+  eaer-k8s [help|-h|--help|-help]
 
 COMMANDS:
-    start       Deploy all EESS Kubernetes resources to the cluster
-    stop        Remove all EESS Kubernetes resources from the cluster
+    start       Deploy all EAER Kubernetes resources to the cluster
+    stop        Remove all EAER Kubernetes resources from the cluster
     restart     Stop and then start all resources (clean restart)
-    metrics     Display resource usage metrics for EESS pods
+    metrics     Display resource usage metrics for EAER pods
     test        Run tests against the deployed resources
-    logs        Stream logs from EESS pods
+    logs        Stream logs from EAER pods
     help        Display this help message
 
 OPTIONS:
@@ -37,7 +37,7 @@ OPTIONS:
         -a --all             Test both deployed Kubernetes resources and scripts (default)
 
     For logs:
-        -a --all             Stream logs from all EESS pods (default)
+        -a --all             Stream logs from all EAER pods (default)
         -f --follow          Follow logs in real-time
         -n --name POD_NAME   Stream logs from a specific pod by name of the deployment
 
@@ -48,29 +48,29 @@ OPTIONS:
 
 EXAMPLES:
   # Deploy resources only
-  eess-k8s start
+  eaer-k8s start
 
   # Deploy resources and start Minikube cluster
-  eess-k8s start -M
+  eaer-k8s start -M
 
   # Remove resources and stop Minikube
-  eess-k8s stop -M
+  eaer-k8s stop -M
 
   # Clean restart with Minikube management
-  eess-k8s restart -M
+  eaer-k8s restart -M
 
   # Run tests against deployed resources
-  eess-k8s test -r
+  eaer-k8s test -r
 
   # Show pod consumption sorted by memory (descending) as CSV
-  eess-k8s metrics -s memory -o desc -f csv
+  eaer-k8s metrics -s memory -o desc -f csv
 
   # Show command-specific help
-  eess-k8s start --help
-  eess-k8s stop --help
-  eess-k8s test --help
-  eess-k8s logs --help
-  eess-k8s metrics --help
+  eaer-k8s start --help
+  eaer-k8s stop --help
+  eaer-k8s test --help
+  eaer-k8s logs --help
+  eaer-k8s metrics --help
 EOF
 }
 

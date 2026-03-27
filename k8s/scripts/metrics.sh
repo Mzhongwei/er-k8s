@@ -13,7 +13,7 @@ FORMAT="table"
 
 usage() {
 	cat << 'EOF'
-Usage: eess-k8s metrics [options]
+Usage: eaer-k8s metrics [options]
 
 Extract pod consumption metrics from Kubernetes and sort them.
 
@@ -162,7 +162,7 @@ print_metrics_diagnostics() {
 
 raw_metrics=""
 if ! raw_metrics="$(fetch_top_metrics)"; then
-	profile="${EESS_MINIKUBE_PROFILE:-domolandes}"
+	profile="${EAER_MINIKUBE_PROFILE:-domolandes}"
 
 	if command -v minikube >/dev/null 2>&1 && minikube status -p "$profile" --format '{{.Host}}' 2>/dev/null | grep -q '^Running$'; then
 		echo "Metrics API not ready. Enabling Minikube addon 'metrics-server' on profile '$profile'..."

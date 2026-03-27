@@ -18,16 +18,16 @@ PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
 PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
 PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims" 
 
-NAMESPACE="eess-k8s"
-BASE_IMAGE="python:3.12-alpine"
-MINIKUBE_PROFILE="${EESS_MINIKUBE_PROFILE:-domolandes}"
+NAMESPACE="eaer-k8s"
+BASE_IMAGE="eaer-k8s:latest"
+MINIKUBE_PROFILE="${EAER_MINIKUBE_PROFILE:-domolandes}"
 START_MINIKUBE=false
 
 usage() {
     cat << 'EOF'
-Usage: eess-k8s start [options]
+Usage: eaer-k8s start [options]
 
-Start/apply EESS Kubernetes resources.
+Start/apply EAER Kubernetes resources.
 
 Options:
   -M, --start-minikube, --minikube  Start Minikube if profile is not running
@@ -117,7 +117,7 @@ fi
 if minikube image ls -p "$MINIKUBE_PROFILE" | grep -q "$BASE_IMAGE"; then
     echo "Base image $BASE_IMAGE already present in Minikube cache."
 else
-    if [ "${EESS_PREPULL_IMAGE:-true}" = "true" ]; then
+    if [ "${EAER_PREPULL_IMAGE:-true}" = "true" ]; then
         pulled=false
         for attempt in 1 2 3; do
             if minikube image pull -p "$MINIKUBE_PROFILE" "$BASE_IMAGE"; then

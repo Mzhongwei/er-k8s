@@ -8,15 +8,15 @@ fi
 set -euo pipefail
 
 # This script stops Minikube and deletes the resources
-NAMESPACE="eess-k8s"
-MINIKUBE_PROFILE="${EESS_MINIKUBE_PROFILE:-domolandes}"
+NAMESPACE="eaer-k8s"
+MINIKUBE_PROFILE="${EAER_MINIKUBE_PROFILE:-domolandes}"
 STOP_MINIKUBE=false
 
 usage() {
     cat << 'EOF'
-Usage: eess-k8s stop [options]
+Usage: eaer-k8s stop [options]
 
-Delete EESS Kubernetes namespace/resources.
+Delete EAER Kubernetes namespace/resources.
 
 Options:
   -M, --minikube                Also stop Minikube profile

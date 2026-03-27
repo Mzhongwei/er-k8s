@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: cg-feature-extraction
-        image: python:3.12-alpine
+        image: eaer-k8s:latest
         imagePullPolicy: Never
         command: ["python", "/app/cg_feature_extraction.py"]
         resources:

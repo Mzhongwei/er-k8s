@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: bert-training
-        image: python:3.12-alpine
+        image: eaer-k8s:latest
         imagePullPolicy: Never
         command: ["python", "/app/BERT_training.py"]
         resources:

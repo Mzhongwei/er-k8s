@@ -1,5 +1,5 @@
 #!/bin/bash
-# This script streams logs from EESS pods. It can stream logs from all pods or a specific pod by name.
+# This script streams logs from EAER pods. It can stream logs from all pods or a specific pod by name.
 # re-run with bash if invoked from another shell (e.g., sh).
 if [ -z "${BASH_VERSION:-}" ]; then
     exec bash "$0" "$@"
@@ -7,16 +7,16 @@ fi
 
 set -euo pipefail
 
-NAMESPACE="eess-k8s"
+NAMESPACE="eaer-k8s"
 
 usage() {
     cat << 'EOF'
-Usage: eess-k8s logs [option]
+Usage: eaer-k8s logs [option]
 
-Stream logs from EESS pods.
+Stream logs from EAER pods.
 
 Options:
-  -a, --all                     Stream logs from all EESS pods (default)
+  -a, --all                     Stream logs from all EAER pods (default)
   -f, --follow                  Follow logs in real-time
   -n, --name=POD_NAME           Stream logs from pods matching app=POD_NAME
   -n POD_NAME, --name POD_NAME  Same as --name=POD_NAME
@@ -82,7 +82,7 @@ fi
 
 if [ "$mode" = "all" ]; then
     # Stream logs from all pods in the namespace
-    kubectl logs -n "$NAMESPACE" --selector=app=eess "${follow_arg[@]}"
+    kubectl logs -n "$NAMESPACE" --selector=app=eaer "${follow_arg[@]}"
 else
     kubectl logs -n "$NAMESPACE" --selector="app=${pod_name}" "${follow_arg[@]}"
 fi

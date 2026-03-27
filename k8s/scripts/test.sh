@@ -17,15 +17,15 @@ PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
 PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
 PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims"
 
-NAMESPACE="eess-k8s"
-BASE_IMAGE="python:3.12-alpine"
+NAMESPACE="eaer-k8s"
+BASE_IMAGE="eaer-k8s:latest"
 ARG1="${1:-}"
 
 usage() {
     cat << 'EOF'
-Usage: eess-k8s test [option]
+Usage: eaer-k8s test [option]
 
-Run EESS tests.
+Run EAER tests.
 
 Options:
   -r, --resources              Test Kubernetes manifests/resources
@@ -247,11 +247,11 @@ else
 fi
 
 TOTAL_TESTS=$((TOTAL_TESTS + 1))
-if kubectl get namespace eess-k8s >/dev/null 2>&1; then
-    print_success "Namespace eess-k8s exists."
+if kubectl get namespace eaer-k8s >/dev/null 2>&1; then
+    print_success "Namespace eaer-k8s exists."
     SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
 else
-    print_error "Namespace eess-k8s does not exist. Please start the cluster and apply resources before running tests."
+    print_error "Namespace eaer-k8s does not exist. Please start the cluster and apply resources before running tests."
     FAILED_TESTS=$((FAILED_TESTS + 1))
     print_result "Tests passed: $SUCCESS_TESTS/$TOTAL_TESTS"
     exit 1

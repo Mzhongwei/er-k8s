@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: random-walk
-        image: python:3.12-alpine
+        image: eaer-k8s:latest
         imagePullPolicy: Never
         command: ["python", "/app/random_walk.py"]
         resources:
