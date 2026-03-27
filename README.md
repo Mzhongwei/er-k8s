@@ -11,6 +11,12 @@ Main folders:
 - `k8s/`: deployments, services, storage manifests, operational scripts
 - `code/python_files/`: Python scripts mounted into pods through ConfigMaps
 
+## Architecture
+
+![EAER architecture](architecture.png)
+
+[Open architecture image](architecture.png)
+
 ## 2. Prerequisites
 
 Required tools:
