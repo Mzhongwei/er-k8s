@@ -18,7 +18,7 @@ PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
 PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims"
 
 NAMESPACE="eaer-k8s"
-BASE_IMAGE="eaer-k8s:latest"
+BASE_IMAGE="eaer-k8s:slim"
 ARG1="${1:-}"
 
 usage() {

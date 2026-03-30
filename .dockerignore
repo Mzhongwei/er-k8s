@@ -1,0 +1,22 @@
+# VCS
+.git
+.gitignore
+
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/.mypy_cache/
+
+# Local virtual environments (major size reduction)
+**/venv/
+**/.venv/
+
+# Notebook/checkpoint and editor metadata
+**/.ipynb_checkpoints/
+.vscode/
+
+# Local data and logs that should not be baked into the image by default
+**/*.log

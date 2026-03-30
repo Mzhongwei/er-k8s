@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: embedding-training
-        image: eaer-k8s:latest
+        image: eaer-k8s:slim
         imagePullPolicy: Never
-        command: ["python", "/app/embedding_training.py"]
+        command: ["python", "/scripts/embedding_training.py"]
         resources:
           limits:
             memory: "128Mi"
@@ -29,7 +29,7 @@ spec:
         - containerPort: 8080
         volumeMounts:
         - name: scripts
-          mountPath: /app
+          mountPath: /scripts
           readOnly: true
         - name: pipeline-embedding-claim
           mountPath: /pipeline

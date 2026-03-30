@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: graph-construction
-        image: eaer-k8s:latest
+        image: eaer-k8s:slim
         imagePullPolicy: Never
-        command: ["python", "/app/graph_construction.py"]
+        command: ["python", "/scripts/graph_construction.py"]
         resources:
           limits:
             memory: "128Mi"
@@ -29,7 +29,7 @@ spec:
         - containerPort: 8080
         volumeMounts:
         - name: scripts
-          mountPath: /app
+          mountPath: /scripts
           readOnly: true
         - name: pipeline
           mountPath: /pipeline

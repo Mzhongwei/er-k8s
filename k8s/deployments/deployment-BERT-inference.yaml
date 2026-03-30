@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: bert-inference
-        image: eaer-k8s:latest
+        image: eaer-k8s:slim
         imagePullPolicy: Never
-        command: ["python", "/app/BERT_inference.py"]
+        command: ["python", "/scripts/BERT_inference.py"]
         resources:
           limits:
             memory: "128Mi"
@@ -31,7 +31,7 @@ spec:
         - containerPort: 8082
         volumeMounts:
         - name: scripts
-          mountPath: /app
+          mountPath: /scripts
           readOnly: true
         - name: pipeline-bert-model-claim
           mountPath: /pipeline

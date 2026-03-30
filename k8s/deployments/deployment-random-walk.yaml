@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: random-walk
-        image: eaer-k8s:latest
+        image: eaer-k8s:slim
         imagePullPolicy: Never
-        command: ["python", "/app/random_walk.py"]
+        command: ["python", "/scripts/random_walk.py"]
         resources:
           limits:
             memory: "128Mi"
@@ -29,7 +29,7 @@ spec:
         - containerPort: 8080
         volumeMounts:
         - name: scripts
-          mountPath: /app
+          mountPath: /scripts
           readOnly: true
         - name: pipeline
           mountPath: /pipeline

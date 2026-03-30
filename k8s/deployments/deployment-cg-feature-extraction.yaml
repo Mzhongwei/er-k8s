@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: cg-feature-extraction
-        image: eaer-k8s:latest
+        image: eaer-k8s:slim
         imagePullPolicy: Never
-        command: ["python", "/app/cg_feature_extraction.py"]
+        command: ["python", "/scripts/cg_feature_extraction.py"]
         resources:
           limits:
             memory: "128Mi"
@@ -29,7 +29,7 @@ spec:
         - containerPort: 8080
         volumeMounts:
         - name: scripts
-          mountPath: /app
+          mountPath: /scripts
           readOnly: true
       volumes:
       - name: scripts

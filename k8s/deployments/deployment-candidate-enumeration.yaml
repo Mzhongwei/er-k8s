@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: candidate-enumeration
-        image: eaer-k8s:latest
+        image: eaer-k8s:slim
         imagePullPolicy: Never
-        command: ["python", "/app/candidate_enumeration.py"]
+        command: ["python", "/scripts/candidate_enumeration.py"]
         resources:
           limits:
             memory: "128Mi"
@@ -30,7 +30,7 @@ spec:
         - containerPort: 8081
         volumeMounts:
         - name: scripts
-          mountPath: /app
+          mountPath: /scripts
           readOnly: true
         - name: pipeline-cg-features-claim
           mountPath: /pipeline

@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: decision-making
-        image: eaer-k8s:latest
+        image: eaer-k8s:slim
         imagePullPolicy: Never
-        command: ["python", "/app/decision_making.py"]
+        command: ["python", "/scripts/decision_making.py"]
         resources:
           limits:
             memory: "128Mi"
@@ -29,7 +29,7 @@ spec:
         - containerPort: 8080
         volumeMounts:
         - name: scripts
-          mountPath: /app
+          mountPath: /scripts
           readOnly: true
       volumes:
       - name: scripts

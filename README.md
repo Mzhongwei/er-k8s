@@ -30,7 +30,7 @@ Default runtime values used by scripts:
 
 - namespace: `eaer-k8s`
 - minikube profile: `domolandes`
-- container image: `eaer-k8s:latest`
+- container image: `eaer-k8s:slim`
 
 ## 3. Quick Start (K8s)
 
@@ -39,7 +39,7 @@ Run commands from repository root.
 ### Step 1. Build the runtime image
 
 ```bash
-docker build -t eaer-k8s:latest .
+docker build -t eaer-k8s:slim .
 ```
 
 ### Step 2. Deploy all EAER resources
@@ -134,7 +134,7 @@ Logs:
 bash k8s/scripts/eaer-k8s.sh logs -a
 
 # one app label, example: normalization
-bash k8s/scripts/eaer-k8s.sh logs --name normalization
+bash k8s/scripts/eaer-k8s.sh logs -n normalization
 ```
 
 Metrics:
@@ -183,7 +183,7 @@ bash k8s/scripts/eaer-k8s.sh start -M
 Deployments use `imagePullPolicy: Never`, so the image must exist in Minikube:
 
 ```bash
-docker build -t eaer-k8s:latest .
+docker build -t eaer-k8s:slim .
 ```
 
 Then restart:
