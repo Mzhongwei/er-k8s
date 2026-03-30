@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("start" "stop" "restart" "metrics" "test" "logs" "help")
+ACTIONS=("start" "stop" "restart" "exec" "metrics" "test" "logs" "help")
 
 print_help() {
     cat << 'EOF'
@@ -21,6 +21,7 @@ COMMANDS:
     start       Deploy all EAER Kubernetes resources to the cluster
     stop        Remove all EAER Kubernetes resources from the cluster
     restart     Stop and then start all resources (clean restart)
+    exec        Execute a command in a running pod
     metrics     Display resource usage metrics for EAER pods
     test        Run tests against the deployed resources
     logs        Stream logs from EAER pods
@@ -45,6 +46,10 @@ OPTIONS:
         -s --sort FIELD      Sort by pod|cpu|memory (default: pod)
         -o --order DIR       Sort order asc|desc (default: asc)
         -f --format TYPE     Output format table|csv|tsv (default: table)
+
+    For exec:
+        -n --name POD_NAME   Execute command in a specific pod by name of the deployment
+        -h --help           Show help for exec command
 
 EXAMPLES:
   # Deploy resources only
@@ -71,13 +76,14 @@ EXAMPLES:
   eaer-k8s test --help
   eaer-k8s logs --help
   eaer-k8s metrics --help
+  eaer-k8s exec --help
 EOF
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [start|stop|restart|metrics|test|logs|help] [options]"
+    echo "Usage: $0 [start|stop|restart|exec|metrics|test|logs|help] [options]"
     exit 1
 fi
 
@@ -171,6 +177,58 @@ case "$COMMAND" in
         run_script "test.sh" "$test_flag"
         ;;
 
+    exec)
+        exec_args=()
+        pod_name=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -h|--help|-help|help)
+                    run_script "exec.sh" "--help"
+                    exit 0
+                    ;;
+                -n=*)
+                    pod_name="${1#-n=}"
+                    ;;
+                --name=*)
+                    pod_name="${1#*=}"
+                    ;;
+                -n)
+                    if [ $# -lt 2 ]; then
+                        echo "Option -n requires a value."
+                        exit 1
+                    fi
+                    pod_name="$2"
+                    shift
+                    ;;
+                --name)
+                    if [ $# -lt 2 ]; then
+                        echo "Option --name requires a value."
+                        exit 1
+                    fi
+                    pod_name="$2"
+                    shift
+                    ;;
+                *)
+                    # All remaining arguments are the command; add separator and break
+                    exec_args+=("--")
+                    exec_args+=("$@")
+                    break
+                    ;;
+            esac
+            shift
+        done
+
+        if [ -n "$pod_name" ]; then
+            # Insert --name before the separator if command exists
+            if [[ " ${exec_args[*]} " == *" -- "* ]]; then
+                exec_args=("--name=${pod_name}" "${exec_args[@]}")
+            else
+                exec_args+=("--name=${pod_name}")
+            fi
+        fi
+
+        run_script "exec.sh" "${exec_args[@]}"
+        ;;
     logs)
         logs_args=("-a")
         pod_name=""
