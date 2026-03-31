@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: bert-evaluation
+  name: bert
 spec:
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: bert-evaluation
+      app: bert
   template:
     metadata:
       labels:
-        app: bert-evaluation
+        app: bert
     spec:
       containers:
-      - name: bert-evaluation
+      - name: bert
         image: eaer-k8s:slim
         imagePullPolicy: Never
         command: ["python", "/scripts/BERT_evaluation.py"]
@@ -23,8 +23,8 @@ spec:
             memory: "128Mi"
             cpu: "500m"
           requests:
-            memory: "32Mi"
-            cpu: "50m"
+            memory: "128Mi"
+            cpu: "500m"
         ports:
         - containerPort: 8080
         - containerPort: 8081
@@ -32,15 +32,14 @@ spec:
         - name: scripts
           mountPath: /scripts
           readOnly: true
-        - name: pipeline-bert-model-claim
-          mountPath: /pipeline
       volumes:
       - name: scripts
         configMap:
-          name: bert-evaluation
+          name: bert
           items:
           - key: BERT_evaluation.py
             path: BERT_evaluation.py
-      - name: pipeline-bert-model-claim
-        persistentVolumeClaim:
-          claimName: pipeline-bert-model-claim
+          - key: BERT_training.py
+            path: BERT_training.py
+          - key: BERT_inference.py
+            path: BERT_inference.py

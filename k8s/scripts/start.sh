@@ -139,12 +139,30 @@ fi
 
 apply_yaml_dir "$SERVICES_DIR" "service" --namespace="$NAMESPACE"
 
+# kubectl command to create or update a ConfigMap from multiple Python files:
+# kubectl create configmap <configmap-name> --from-file=<key1>=<file1> --from-file=<key2>=<file2> --dry-run=client -o yaml \
+#     | kubectl apply -f - --namespace=<namespace>
+
 # Create or update one ConfigMap per Python script.
 python_files=("${PYTHON_SCRIPTS_DIR}"/*.py)
 if [ ${#python_files[@]} -eq 0 ]; then
     echo "No Python files found in ${PYTHON_SCRIPTS_DIR}."
 else
+    bert_files=("${PYTHON_SCRIPTS_DIR}"/*BERT*.py)
+    configmap_name="bert"
+    files_args=()
+    for file in "${bert_files[@]}"; do
+        filename="$(basename "$file")"
+        files_args+=("--from-file=$filename=$file")
+    done
+    if [ ${#files_args[@]} -gt 0 ]; then
+        kubectl create configmap "$configmap_name" "${files_args[@]}" --dry-run=client -o yaml | \
+            kubectl apply -f - --namespace="$NAMESPACE"
+    fi
     for file in "${python_files[@]}"; do
+        if [[ "$file" == *BERT* ]]; then
+            continue
+        fi
         filename="$(basename "$file")"
         base_name="${filename%.py}"
         configmap_name="$(clean_k8s_name "$base_name")"
