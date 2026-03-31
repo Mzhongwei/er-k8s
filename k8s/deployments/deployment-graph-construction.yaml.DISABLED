@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: graph-construction
-        image: eaer-k8s:slim
+        image: erctl:slim
         imagePullPolicy: Never
         command: ["python", "/scripts/graph_construction.py"]
         resources:

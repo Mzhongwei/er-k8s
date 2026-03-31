@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: random-walk
-        image: eaer-k8s:slim
+        image: erctl:slim
         imagePullPolicy: Never
         command: ["python", "/scripts/random_walk.py"]
         resources:

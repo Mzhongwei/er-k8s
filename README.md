@@ -28,9 +28,9 @@ Required tools:
 
 Default runtime values used by scripts:
 
-- namespace: `eaer-k8s`
+- namespace: `erctl`
 - minikube profile: `domolandes`
-- container image: `eaer-k8s:slim`
+- container image: `erctl:slim`
 
 ## 3. Quick Start (K8s)
 
@@ -39,13 +39,13 @@ Run commands from repository root.
 ### Step 1. Build the runtime image
 
 ```bash
-docker build -t eaer-k8s:slim .
+docker build -t erctl:slim .
 ```
 
 ### Step 2. Deploy all EAER resources
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh start -M
+bash k8s/scripts/erctl.sh start -M
 ```
 
 `-M` starts Minikube automatically if needed.
@@ -53,22 +53,22 @@ bash k8s/scripts/eaer-k8s.sh start -M
 ### Step 3. Validate deployment
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh test -r
+bash k8s/scripts/erctl.sh test -r
 ```
 
 ### Step 4. Check logs and metrics
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh logs -a -f
-bash k8s/scripts/eaer-k8s.sh metrics
+bash k8s/scripts/erctl.sh logs -a -f
+bash k8s/scripts/erctl.sh metrics
 ```
 
 ## 4. What start does
 
-`eaer-k8s start` performs:
+`erctl start` performs:
 
 1. Ensures Minikube is running (if `-M` is used).
-2. Creates namespace `eaer-k8s`.
+2. Creates namespace `erctl`.
 3. Applies all service manifests from `k8s/services/`.
 4. Creates one ConfigMap per Python file from `code/python_files/*.py`.
 5. Applies persistent volumes from `k8s/persistent-volumes/`.
@@ -82,14 +82,14 @@ Important: ConfigMaps are generated from scripts in `code/python_files/`, not fr
 Main command wrapper:
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh help
+bash k8s/scripts/erctl.sh help
 ```
 
-Tip (Bash): add this to your `~/.bashrc` to call `eaer-k8s` directly.
+Tip (Bash): add this to your `~/.bashrc` to call `erctl` directly.
 
 ```bash
 export EAER_ROOT="/path/to/k8s-python-llm"
-alias eaer-k8s='bash "$EAER_ROOT/k8s/scripts/eaer-k8s.sh"'
+alias erctl='bash "$EAER_ROOT/k8s/scripts/erctl.sh"'
 ```
 
 Then reload your shell:
@@ -101,48 +101,48 @@ source ~/.bashrc
 After that, you can run:
 
 ```bash
-eaer-k8s start -M
-eaer-k8s test -a
-eaer-k8s logs -a
+erctl start -M
+erctl test -a
+erctl logs -a
 ```
 
 Lifecycle:
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh start
-bash k8s/scripts/eaer-k8s.sh stop
-bash k8s/scripts/eaer-k8s.sh restart -M
+bash k8s/scripts/erctl.sh start
+bash k8s/scripts/erctl.sh stop
+bash k8s/scripts/erctl.sh restart -M
 ```
 
 Testing:
 
 ```bash
 # resource checks
-bash k8s/scripts/eaer-k8s.sh test -r
+bash k8s/scripts/erctl.sh test -r
 
 # script behavior checks (via logs)
-bash k8s/scripts/eaer-k8s.sh test -s
+bash k8s/scripts/erctl.sh test -s
 
 # both
-bash k8s/scripts/eaer-k8s.sh test -a
+bash k8s/scripts/erctl.sh test -a
 ```
 
 Logs:
 
 ```bash
 # all EAER pods
-bash k8s/scripts/eaer-k8s.sh logs -a
+bash k8s/scripts/erctl.sh logs -a
 
 # one app label, example: normalization
-bash k8s/scripts/eaer-k8s.sh logs -n normalization
+bash k8s/scripts/erctl.sh logs -n normalization
 ```
 
 Metrics:
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh metrics
-bash k8s/scripts/eaer-k8s.sh metrics -s memory -o desc -f table
-bash k8s/scripts/eaer-k8s.sh metrics -s cpu -o desc -f csv
+bash k8s/scripts/erctl.sh metrics
+bash k8s/scripts/erctl.sh metrics -s memory -o desc -f table
+bash k8s/scripts/erctl.sh metrics -s cpu -o desc -f csv
 ```
 
 ## 6. K8s Resource Map
@@ -175,7 +175,7 @@ Storage manifests:
 Use:
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh start -M
+bash k8s/scripts/erctl.sh start -M
 ```
 
 ### Pods stuck in ImagePullBackOff or ErrImageNeverPull
@@ -183,13 +183,13 @@ bash k8s/scripts/eaer-k8s.sh start -M
 Deployments use `imagePullPolicy: Never`, so the image must exist in Minikube:
 
 ```bash
-docker build -t eaer-k8s:slim .
+docker build -t erctl:slim .
 ```
 
 Then restart:
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh restart
+bash k8s/scripts/erctl.sh restart
 ```
 
 ### No metrics output
@@ -206,9 +206,9 @@ minikube addons enable metrics-server -p domolandes
 Run:
 
 ```bash
-bash k8s/scripts/eaer-k8s.sh test -r
-bash k8s/scripts/eaer-k8s.sh logs -a
-kubectl get pods,svc -n eaer-k8s
+bash k8s/scripts/erctl.sh test -r
+bash k8s/scripts/erctl.sh logs -a
+kubectl get pods,svc -n erctl
 ```
 
 ## 8. Proof of Concept Manifests

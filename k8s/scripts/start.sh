@@ -18,14 +18,14 @@ PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
 PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
 PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims" 
 
-NAMESPACE="eaer-k8s"
-BASE_IMAGE="eaer-k8s:slim"
+NAMESPACE="erctl"
+BASE_IMAGE="erctl:slim1.1"
 MINIKUBE_PROFILE="${EAER_MINIKUBE_PROFILE:-domolandes}"
 START_MINIKUBE=false
 
 usage() {
     cat << 'EOF'
-Usage: eaer-k8s start [options]
+Usage: erctl start [options]
 
 Start/apply EAER Kubernetes resources.
 
@@ -144,37 +144,54 @@ apply_yaml_dir "$SERVICES_DIR" "service" --namespace="$NAMESPACE"
 #     | kubectl apply -f - --namespace=<namespace>
 
 # Create or update one ConfigMap per Python script.
-python_files=("${PYTHON_SCRIPTS_DIR}"/*.py)
-if [ ${#python_files[@]} -eq 0 ]; then
-    echo "No Python files found in ${PYTHON_SCRIPTS_DIR}."
-else
-    bert_files=("${PYTHON_SCRIPTS_DIR}"/*BERT*.py)
-    configmap_name="bert"
-    files_args=()
-    for file in "${bert_files[@]}"; do
-        filename="$(basename "$file")"
-        files_args+=("--from-file=$filename=$file")
-    done
-    if [ ${#files_args[@]} -gt 0 ]; then
-        kubectl create configmap "$configmap_name" "${files_args[@]}" --dry-run=client -o yaml | \
-            kubectl apply -f - --namespace="$NAMESPACE"
-    fi
-    for file in "${python_files[@]}"; do
-        if [[ "$file" == *BERT* ]]; then
-            continue
-        fi
-        filename="$(basename "$file")"
-        base_name="${filename%.py}"
-        configmap_name="$(clean_k8s_name "$base_name")"
+# python_files=("${PYTHON_SCRIPTS_DIR}"/*.py)
+# if [ ${#python_files[@]} -eq 0 ]; then
+#     echo "No Python files found in ${PYTHON_SCRIPTS_DIR}."
+# else
+#     bert_files=("${PYTHON_SCRIPTS_DIR}"/*BERT*.py)
+#     configmap_name="bert"
+#     files_args=()
+#     for file in "${bert_files[@]}"; do
+#         filename="$(basename "$file")"
+#         files_args+=("--from-file=$filename=$file")
+#     done
+#     if [ ${#files_args[@]} -gt 0 ]; then
+#         kubectl create configmap "$configmap_name" "${files_args[@]}" --dry-run=client -o yaml | \
+#             kubectl apply -f - --namespace="$NAMESPACE"
+#     fi
+#     for file in "${python_files[@]}"; do
+#         if [[ "$file" == *BERT* ]]; then
+#             continue
+#         fi
+#         filename="$(basename "$file")"
+#         base_name="${filename%.py}"
+#         configmap_name="$(clean_k8s_name "$base_name")"
 
-        kubectl create configmap "$configmap_name" --from-file="$filename=$file" --dry-run=client -o yaml \
-            | kubectl apply -f - --namespace="$NAMESPACE"
-    done
-fi
+#         kubectl create configmap "$configmap_name" --from-file="$filename=$file" --dry-run=client -o yaml \
+#             | kubectl apply -f - --namespace="$NAMESPACE"
+#     done
+# fi
 
-apply_yaml_dir "$PERSISTENT_VOLUMES_DIR" "persistent volume"
-apply_yaml_dir "$PERSISTENT_VOLUME_CLAIMS_DIR" "persistent volume claim" --namespace="$NAMESPACE"
+# apply_yaml_dir "$PERSISTENT_VOLUMES_DIR" "persistent volume"
+# apply_yaml_dir "$PERSISTENT_VOLUME_CLAIMS_DIR" "persistent volume claim" --namespace="$NAMESPACE"
 apply_yaml_dir "$DEPLOYMENTS_DIR" "deployment" --namespace="$NAMESPACE"
+
+# Wait for pods to be ready
+wait_for_pods() {
+    local namespace="$1"
+    local timeout="${2:-300s}"
+    echo "Waiting for pods in namespace '$namespace' to be ready"
+    if ! kubectl wait --namespace="$namespace" --for=condition=Ready pods --all --timeout="$timeout"; then
+        echo "Error: Not all pods in namespace '$namespace' became ready within the timeout."
+        exit 1
+    fi
+}
+
+wait_for_pods "$NAMESPACE"
+
+for pod in normalization bert; do
+    include_dependencies "$pod"
+done
 
 
 echo "Kubernetes cluster started and services, deployments, and ConfigMaps applied successfully."

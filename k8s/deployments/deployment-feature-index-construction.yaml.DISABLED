@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: feature-index-construction
-        image: eaer-k8s:slim
+        image: erctl:slim
         imagePullPolicy: Never
         command: ["python", "/scripts/feature_index_construction.py"]
         resources:

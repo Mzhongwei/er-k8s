@@ -8,11 +8,11 @@ fi
 
 set -euo pipefail
 
-NAMESPACE="eaer-k8s"
+NAMESPACE="erctl"
 
 usage() {
     cat << 'EOF'
-Usage: eaer-k8s exec [options] -- COMMAND [args...]
+Usage: erctl exec [options] -- COMMAND [args...]
 Execute a command in a running EAER pod.
 Options:
   -n, --name POD_NAME           Execute command in a specific pod by name of the deployment

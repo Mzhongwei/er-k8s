@@ -14,8 +14,8 @@ EAER Kubernetes Cluster Manager
 ================================
 
 USAGE:
-  eaer-k8s COMMAND [OPTIONS]
-  eaer-k8s [help|-h|--help|-help]
+  erctl COMMAND [OPTIONS]
+  erctl [help|-h|--help|-help]
 
 COMMANDS:
     start       Deploy all EAER Kubernetes resources to the cluster
@@ -53,30 +53,30 @@ OPTIONS:
 
 EXAMPLES:
   # Deploy resources only
-  eaer-k8s start
+  erctl start
 
   # Deploy resources and start Minikube cluster
-  eaer-k8s start -M
+  erctl start -M
 
   # Remove resources and stop Minikube
-  eaer-k8s stop -M
+  erctl stop -M
 
   # Clean restart with Minikube management
-  eaer-k8s restart -M
+  erctl restart -M
 
   # Run tests against deployed resources
-  eaer-k8s test -r
+  erctl test -r
 
   # Show pod consumption sorted by memory (descending) as CSV
-  eaer-k8s metrics -s memory -o desc -f csv
+  erctl metrics -s memory -o desc -f csv
 
   # Show command-specific help
-  eaer-k8s start --help
-  eaer-k8s stop --help
-  eaer-k8s test --help
-  eaer-k8s logs --help
-  eaer-k8s metrics --help
-  eaer-k8s exec --help
+  erctl start --help
+  erctl stop --help
+  erctl test --help
+  erctl logs --help
+  erctl metrics --help
+  erctl exec --help
 EOF
 }
 

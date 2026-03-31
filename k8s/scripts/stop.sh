@@ -8,13 +8,13 @@ fi
 set -euo pipefail
 
 # This script stops Minikube and deletes the resources
-NAMESPACE="eaer-k8s"
+NAMESPACE="erctl"
 MINIKUBE_PROFILE="${EAER_MINIKUBE_PROFILE:-domolandes}"
 STOP_MINIKUBE=false
 
 usage() {
     cat << 'EOF'
-Usage: eaer-k8s stop [options]
+Usage: erctl stop [options]
 
 Delete EAER Kubernetes namespace/resources.
 

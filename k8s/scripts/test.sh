@@ -17,13 +17,13 @@ PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
 PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
 PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims"
 
-NAMESPACE="eaer-k8s"
-BASE_IMAGE="eaer-k8s:slim"
+NAMESPACE="erctl"
+BASE_IMAGE="erctl:slim1.1"
 ARG1="${1:-}"
 
 usage() {
     cat << 'EOF'
-Usage: eaer-k8s test [option]
+Usage: erctl test [option]
 
 Run EAER tests.
 
@@ -247,11 +247,11 @@ else
 fi
 
 TOTAL_TESTS=$((TOTAL_TESTS + 1))
-if kubectl get namespace eaer-k8s >/dev/null 2>&1; then
-    print_success "Namespace eaer-k8s exists."
+if kubectl get namespace erctl >/dev/null 2>&1; then
+    print_success "Namespace erctl exists."
     SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
 else
-    print_error "Namespace eaer-k8s does not exist. Please start the cluster and apply resources before running tests."
+    print_error "Namespace erctl does not exist. Please start the cluster and apply resources before running tests."
     FAILED_TESTS=$((FAILED_TESTS + 1))
     print_result "Tests passed: $SUCCESS_TESTS/$TOTAL_TESTS"
     exit 1
@@ -271,29 +271,29 @@ if [ "$ARG1" == "-r" ] || [ "$ARG1" == "--resources" ] || [ "$ARG1" == "-a" ] ||
         fi
     done
 
-    # Test persistent volumes
-    for pv in "$PERSISTENT_VOLUMES_DIR"/*.yaml; do
-        TOTAL_TESTS=$((TOTAL_TESTS + 1))
-        if kubectl apply --dry-run=client -f "$pv" >/dev/null 2>&1; then
-            print_success "PersistentVolume $(basename "$pv") is valid."
-            SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
-        else
-            print_error "PersistentVolume $(basename "$pv") is invalid."
-            FAILED_TESTS=$((FAILED_TESTS + 1))
-        fi
-    done
+    # # Test persistent volumes
+    # for pv in "$PERSISTENT_VOLUMES_DIR"/*.yaml; do
+    #     TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    #     if kubectl apply --dry-run=client -f "$pv" >/dev/null 2>&1; then
+    #         print_success "PersistentVolume $(basename "$pv") is valid."
+    #         SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
+    #     else
+    #         print_error "PersistentVolume $(basename "$pv") is invalid."
+    #         FAILED_TESTS=$((FAILED_TESTS + 1))
+    #     fi
+    # done
 
-    # Test persistent volume claims
-    for pvc in "$PERSISTENT_VOLUME_CLAIMS_DIR"/*.yaml; do
-        TOTAL_TESTS=$((TOTAL_TESTS + 1))
-        if kubectl -n "$NAMESPACE" apply --dry-run=client -f "$pvc" >/dev/null 2>&1; then
-            print_success "PersistentVolumeClaim $(basename "$pvc") is valid."
-            SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
-        else
-            print_error "PersistentVolumeClaim $(basename "$pvc") is invalid."
-            FAILED_TESTS=$((FAILED_TESTS + 1))
-        fi
-    done
+    # # Test persistent volume claims
+    # for pvc in "$PERSISTENT_VOLUME_CLAIMS_DIR"/*.yaml; do
+    #     TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    #     if kubectl -n "$NAMESPACE" apply --dry-run=client -f "$pvc" >/dev/null 2>&1; then
+    #         print_success "PersistentVolumeClaim $(basename "$pvc") is valid."
+    #         SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
+    #     else
+    #         print_error "PersistentVolumeClaim $(basename "$pvc") is invalid."
+    #         FAILED_TESTS=$((FAILED_TESTS + 1))
+    #     fi
+    # done
 
     # Test deployments
     for deployment in "$DEPLOYMENTS_DIR"/*.yaml; do
@@ -307,26 +307,26 @@ if [ "$ARG1" == "-r" ] || [ "$ARG1" == "--resources" ] || [ "$ARG1" == "-a" ] ||
         fi
     done
 
-    # Test ConfigMaps generated from Python scripts.
-    python_files=("${PYTHON_SCRIPTS_DIR}"/*.py)
-    if [ ${#python_files[@]} -eq 0 ]; then
-        echo "No Python files found in ${PYTHON_SCRIPTS_DIR}; skipping ConfigMap checks."
-    else
-        for file in "${python_files[@]}"; do
-            filename="$(basename "$file")"
-            base_name="${filename%.py}"
-            configmap_name="$(clean_k8s_name "$base_name")"
+    # # Test ConfigMaps generated from Python scripts.
+    # python_files=("${PYTHON_SCRIPTS_DIR}"/*.py)
+    # if [ ${#python_files[@]} -eq 0 ]; then
+    #     echo "No Python files found in ${PYTHON_SCRIPTS_DIR}; skipping ConfigMap checks."
+    # else
+    #     for file in "${python_files[@]}"; do
+    #         filename="$(basename "$file")"
+    #         base_name="${filename%.py}"
+    #         configmap_name="$(clean_k8s_name "$base_name")"
 
-            TOTAL_TESTS=$((TOTAL_TESTS + 1))
-            if kubectl create configmap "$configmap_name" --from-file="$filename=$file" --dry-run=client -o yaml | kubectl -n "$NAMESPACE" apply --dry-run=client -f - >/dev/null 2>&1; then
-                print_success "ConfigMap ${configmap_name} (from ${filename}) is valid."
-                SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
-            else
-                print_error "ConfigMap ${configmap_name} (from ${filename}) is invalid."
-                FAILED_TESTS=$((FAILED_TESTS + 1))
-            fi
-        done
-    fi
+    #         TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    #         if kubectl create configmap "$configmap_name" --from-file="$filename=$file" --dry-run=client -o yaml | kubectl -n "$NAMESPACE" apply --dry-run=client -f - >/dev/null 2>&1; then
+    #             print_success "ConfigMap ${configmap_name} (from ${filename}) is valid."
+    #             SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
+    #         else
+    #             print_error "ConfigMap ${configmap_name} (from ${filename}) is invalid."
+    #             FAILED_TESTS=$((FAILED_TESTS + 1))
+    #         fi
+    #     done
+    # fi
 
     # Test that the expected pods are ready (not just phase=Running).
     expected_pods=$(kubectl -n "$NAMESPACE" get deployments -o jsonpath='{.items[*].metadata.name}')

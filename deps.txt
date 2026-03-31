@@ -1,5 +1,0 @@
-BERT Pod
-Training data : /Energy-Aware-Entity-Resolution/Data_example/bert/
-Bert model : /Energy-Aware-Entity-Resolution/models/bert_model.py
-Pipeline : - /Energy-Aware-Entity-Resolution/pipeline/bert_evaluation.py
-           - /Energy-Aware-Entity-Resolution/pipeline/bert_inference.py

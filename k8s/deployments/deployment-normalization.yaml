@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: normalization
-        image: eaer-k8s:slim
+        image: erctl:normalization1.1
         imagePullPolicy: Never
-        command: ["python", "/scripts/normalization.py"]
+        command: ["/bin/bash", "-c", "source /opt/venv/bin/activate && tail -f /dev/null"]
         securityContext:
           privileged: true
         resources:
@@ -29,17 +29,6 @@ spec:
             cpu: "500m"
         ports:
         - containerPort: 8080
-        volumeMounts:
-        - name: scripts
-          mountPath: /scripts
-          readOnly: true
-      volumes:
-      - name: scripts
-        configMap:
-          name: normalization
-          items:
-          - key: normalization.py
-            path: normalization.py
 
 
 

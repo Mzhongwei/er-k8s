@@ -13,7 +13,7 @@ FORMAT="table"
 
 usage() {
 	cat << 'EOF'
-Usage: eaer-k8s metrics [options]
+Usage: erctl metrics [options]
 
 Extract pod consumption metrics from Kubernetes and sort them.
 

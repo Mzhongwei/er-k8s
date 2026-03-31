@@ -7,11 +7,11 @@ fi
 
 set -euo pipefail
 
-NAMESPACE="eaer-k8s"
+NAMESPACE="erctl"
 
 usage() {
     cat << 'EOF'
-Usage: eaer-k8s logs [option]
+Usage: erctl logs [option]
 
 Stream logs from EAER pods.
 

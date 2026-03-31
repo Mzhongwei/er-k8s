@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: embedding-training
-        image: eaer-k8s:slim
+        image: erctl:slim
         imagePullPolicy: Never
         command: ["python", "/scripts/embedding_training.py"]
         resources:

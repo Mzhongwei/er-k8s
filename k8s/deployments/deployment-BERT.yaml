@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: bert
-        image: eaer-k8s:slim
+        image: erctl:bert1.1
         imagePullPolicy: Never
-        command: ["python", "/scripts/BERT_evaluation.py"]
+        command: ["/bin/bash", "-c", "source /opt/venv/bin/activate && tail -f /dev/null"]
         resources:
           limits:
             memory: "128Mi"
@@ -28,18 +28,3 @@ spec:
         ports:
         - containerPort: 8080
         - containerPort: 8081
-        volumeMounts:
-        - name: scripts
-          mountPath: /scripts
-          readOnly: true
-      volumes:
-      - name: scripts
-        configMap:
-          name: bert
-          items:
-          - key: BERT_evaluation.py
-            path: BERT_evaluation.py
-          - key: BERT_training.py
-            path: BERT_training.py
-          - key: BERT_inference.py
-            path: BERT_inference.py

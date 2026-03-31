@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: manager
-        image: eaer-k8s:slim
+        image: erctl:slim
         imagePullPolicy: Never
         command: ["python", "/app/main_distribution.py"]
         resources:

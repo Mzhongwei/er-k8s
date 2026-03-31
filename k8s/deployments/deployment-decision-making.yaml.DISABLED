@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: decision-making
-        image: eaer-k8s:slim
+        image: erctl:slim
         imagePullPolicy: Never
         command: ["python", "/scripts/decision_making.py"]
         resources:
