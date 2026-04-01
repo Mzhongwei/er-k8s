@@ -114,28 +114,28 @@ else
 fi
 
 # Warm image cache once to reduce parallel pull failures on constrained links.
-if minikube image ls -p "$MINIKUBE_PROFILE" | grep -q "$BASE_IMAGE"; then
-    echo "Base image $BASE_IMAGE already present in Minikube cache."
-else
-    if [ "${EAER_PREPULL_IMAGE:-true}" = "true" ]; then
-        pulled=false
-        for attempt in 1 2 3; do
-            if minikube image pull -p "$MINIKUBE_PROFILE" "$BASE_IMAGE"; then
-                pulled=true
-                echo "Base image $BASE_IMAGE pulled successfully."
-                minikube image load -p "$MINIKUBE_PROFILE" "$BASE_IMAGE" >/dev/null
-                echo "Base image $BASE_IMAGE loaded into Minikube cache."
-                break
-            fi
-            echo "Image pull failed (attempt ${attempt}/3), retrying..."
-            sleep 5
-        done
+# if minikube image ls -p "$MINIKUBE_PROFILE" | grep -q "$BASE_IMAGE"; then
+#     echo "Base image $BASE_IMAGE already present in Minikube cache."
+# else
+#     if [ "${EAER_PREPULL_IMAGE:-true}" = "true" ]; then
+#         pulled=false
+#         for attempt in 1 2 3; do
+#             if minikube image pull -p "$MINIKUBE_PROFILE" "$BASE_IMAGE"; then
+#                 pulled=true
+#                 echo "Base image $BASE_IMAGE pulled successfully."
+#                 minikube image load -p "$MINIKUBE_PROFILE" "$BASE_IMAGE" >/dev/null
+#                 echo "Base image $BASE_IMAGE loaded into Minikube cache."
+#                 break
+#             fi
+#             echo "Image pull failed (attempt ${attempt}/3), retrying..."
+#             sleep 5
+#         done
 
-        if [ "$pulled" = false ]; then
-            echo "Warning: unable to pre-pull $BASE_IMAGE after retries."
-        fi
-    fi
-fi
+#         if [ "$pulled" = false ]; then
+#             echo "Warning: unable to pre-pull $BASE_IMAGE after retries."
+#         fi
+#     fi
+# fi
 
 apply_yaml_dir "$SERVICES_DIR" "service" --namespace="$NAMESPACE"
 
@@ -175,23 +175,5 @@ apply_yaml_dir "$SERVICES_DIR" "service" --namespace="$NAMESPACE"
 # apply_yaml_dir "$PERSISTENT_VOLUMES_DIR" "persistent volume"
 # apply_yaml_dir "$PERSISTENT_VOLUME_CLAIMS_DIR" "persistent volume claim" --namespace="$NAMESPACE"
 apply_yaml_dir "$DEPLOYMENTS_DIR" "deployment" --namespace="$NAMESPACE"
-
-# Wait for pods to be ready
-wait_for_pods() {
-    local namespace="$1"
-    local timeout="${2:-300s}"
-    echo "Waiting for pods in namespace '$namespace' to be ready"
-    if ! kubectl wait --namespace="$namespace" --for=condition=Ready pods --all --timeout="$timeout"; then
-        echo "Error: Not all pods in namespace '$namespace' became ready within the timeout."
-        exit 1
-    fi
-}
-
-wait_for_pods "$NAMESPACE"
-
-for pod in normalization bert; do
-    include_dependencies "$pod"
-done
-
 
 echo "Kubernetes cluster started and services, deployments, and ConfigMaps applied successfully."

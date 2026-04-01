@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("start" "stop" "restart" "exec" "metrics" "test" "logs" "help")
+ACTIONS=("start" "stop" "restart" "exec" "images" "metrics" "test" "logs" "help")
 
 print_help() {
     cat << 'EOF'
@@ -22,6 +22,7 @@ COMMANDS:
     stop        Remove all EAER Kubernetes resources from the cluster
     restart     Stop and then start all resources (clean restart)
     exec        Execute a command in a running pod
+    images      Manage the Docker images for EAER components
     metrics     Display resource usage metrics for EAER pods
     test        Run tests against the deployed resources
     logs        Stream logs from EAER pods
@@ -49,7 +50,12 @@ OPTIONS:
 
     For exec:
         -n --name POD_NAME   Execute command in a specific pod by name of the deployment
-        -h --help           Show help for exec command
+        -h --help            Show help for exec command
+
+    For images:
+        -b --build           Build the Docker images for EAER components
+        -l --load            Load the Docker images into Minikube (if using Minikube)
+        -h --help            Show help for images command
 
 EXAMPLES:
   # Deploy resources only
@@ -83,7 +89,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [start|stop|restart|exec|metrics|test|logs|help] [options]"
+    echo "Usage: $0 [start|stop|restart|exec|images|metrics|test|logs|help] [options]"
     exit 1
 fi
 
@@ -285,6 +291,32 @@ case "$COMMAND" in
         fi
 
         run_script "logs.sh" "${logs_args[@]}"
+        ;;
+
+    images)
+        images_args=()
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -h|--help|-help|help)
+                    run_script "images.sh" "--help"
+                    exit 0
+                    ;;
+                -b|--build)
+                    images_args=("--build")
+                    ;;
+                -l|--load)
+                    images_args=("--load")
+                    ;;
+                *)
+                    echo "Unknown option for images: $1"
+                    echo "Use '$0 help' for usage information."
+                    exit 1
+                    ;;
+            esac
+            shift
+        done
+
+        run_script "images.sh" "${images_args[@]}"
         ;;
 
     metrics)

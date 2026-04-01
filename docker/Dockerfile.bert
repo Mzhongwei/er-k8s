@@ -1,4 +1,14 @@
-FROM erctl:base1.1
+# FROM erctl:base1.2.1 AS builder
+
+# ENV PIP_NO_CACHE_DIR=1
+# ENV PYTHONDONTWRITEBYTECODE=1
+
+# WORKDIR /app
+
+# COPY code/Energy-Aware-Entity-Resolution/requirements-bert.txt /app/requirements.txt
+
+# RUN /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt
+FROM erctl:full
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -6,8 +16,9 @@ ENV PYTHONPATH=/app
 
 WORKDIR /app
 
+# COPY --from=builder /opt/venv /opt/venv
+
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline /app/pipeline
 COPY ./code/Energy-Aware-Entity-Resolution/models /app/models
 COPY ./code/Energy-Aware-Entity-Resolution/Data_example/bert /app/Data_example/bert
-
-CMD ["/bin/bash", "-c", "source /opt/venv/bin/activate && tail -f /dev/null"]
+COPY ./code/Energy-Aware-Entity-Resolution/distributions/bert_distribution.py /app/distributions/bert_distribution.py

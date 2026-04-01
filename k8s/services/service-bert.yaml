@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: service-decision-making
+  name: service-bert
 spec:
   selector:
-    app: decision-making
+    app: bert
   ports:
   - protocol: TCP
     port: 80

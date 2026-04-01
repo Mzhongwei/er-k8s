@@ -1,0 +1,23 @@
+FROM erctl:min AS builder
+
+ENV PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+COPY code/Energy-Aware-Entity-Resolution/requirements-full.txt /app/requirements.txt
+
+RUN /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt 
+
+FROM erctl:min
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY ./code/Energy-Aware-Entity-Resolution/governance /app/governance

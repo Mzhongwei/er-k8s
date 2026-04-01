@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manager
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: manager
+  template:
+    metadata:
+      labels:
+        app: manager
+    spec:
+      containers:
+      - name: manager
+        image: erctl:manager
+        imagePullPolicy: Never
+        command: ["/bin/bash", "-c", "source /opt/venv/bin/activate && python /app/main_distribution.py"]
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 5000
+        - containerPort: 5001
+        - containerPort: 5002
+        - containerPort: 5003
+        - containerPort: 5004
+        - containerPort: 5005
+        - containerPort: 5006
+        - containerPort: 5007
+        - containerPort: 5008
+        - containerPort: 5009
+        - containerPort: 5010
+        - containerPort: 5011
+        - containerPort: 5012

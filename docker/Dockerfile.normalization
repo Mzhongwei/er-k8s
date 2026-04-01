@@ -1,4 +1,4 @@
-FROM erctl:base1.1
+FROM erctl:min
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -9,5 +9,4 @@ WORKDIR /app
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline /app/pipeline
 COPY ./code/Energy-Aware-Entity-Resolution/models /app/models
 COPY ./code/Energy-Aware-Entity-Resolution/utils /app/utils
-
-CMD ["/bin/bash", "-c", "source /opt/venv/bin/activate && tail -f /dev/null"]
+COPY ./code/Energy-Aware-Entity-Resolution/distributions/normalization_distribution.py /app/distributions/normalization_distribution.py
