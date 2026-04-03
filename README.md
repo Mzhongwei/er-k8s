@@ -1,15 +1,6 @@
-# EAER Kubernetes Deployment Guide
+# Energy-Aware Entity Resolution on Kubernetes
 
-This root README is focused on Kubernetes deployment and operations.
-
-## 1. Scope
-
-This repository runs an Energy-Aware Entity Resolution workflow as multiple Kubernetes services.
-
-Main folders:
-
-- `k8s/`: deployments, services, storage manifests, operational scripts
-- `code/python_files/`: Python scripts mounted into pods through ConfigMaps
+This repository packages an Energy-Aware Entity Resolution (EAER) workflow for Kubernetes and Argo Workflows.
 
 ## Architecture
 
@@ -17,203 +8,186 @@ Main folders:
 
 [Open architecture image](architecture.png)
 
-## 2. Prerequisites
+## Repository Layout
 
-Required tools:
+- `code/Energy-Aware-Entity-Resolution/`: core EAER Python codebase (`main_distribution.py`, pipeline modules, models, configs).
+- `code/python_files/`: service-oriented Python entrypoints used by Kubernetes components.
+- `docker/`: Dockerfiles for component images (`Dockerfile.manager`, `Dockerfile.normalization`, `Dockerfile.bert`, plus base images).
+- `k8s/deployments/`: Kubernetes Deployment manifests.
+- `k8s/services/`: Kubernetes Service manifests.
+- `k8s/argo/pipeline.yaml`: Argo workflow DAG for pipeline orchestration.
+- `k8s/scripts/`: operational scripts (`erctl.sh`, `start.sh`, `stop.sh`, `test.sh`, `logs.sh`, `metrics.sh`, `images.sh`).
+
+## Prerequisites
 
 - `kubectl`
 - `minikube`
 - `docker`
-- Bash shell (Git Bash, WSL, or Linux shell)
+- Bash shell (`Git Bash`, `WSL`, or Linux shell)
 
 Default runtime values used by scripts:
 
-- namespace: `erctl`
-- minikube profile: `domolandes`
-- container image: `erctl:slim`
+- Namespace: `erctl`
+- Minikube profile: `domolandes` (or `EAER_MINIKUBE_PROFILE`)
 
-## 3. Quick Start (K8s)
+## Quick Start (Kubernetes)
 
-Run commands from repository root.
+Run from repository root.
 
-### Step 1. Build the runtime image
+1. Build images:
 
 ```bash
-docker build -t erctl:slim .
+bash k8s/scripts/erctl.sh images --build
 ```
 
-### Step 2. Deploy all EAER resources
+2. Deploy resources (`-M` starts Minikube if needed):
 
 ```bash
 bash k8s/scripts/erctl.sh start -M
 ```
 
-`-M` starts Minikube automatically if needed.
-
-### Step 3. Validate deployment
+3. Validate resources:
 
 ```bash
 bash k8s/scripts/erctl.sh test -r
 ```
 
-### Step 4. Check logs and metrics
+4. Inspect logs and metrics:
 
 ```bash
-bash k8s/scripts/erctl.sh logs -a -f
+bash k8s/scripts/erctl.sh logs -a
 bash k8s/scripts/erctl.sh metrics
 ```
 
-## 4. What start does
+## What `start` Currently Applies
 
-`erctl start` performs:
+`bash k8s/scripts/erctl.sh start` currently:
 
-1. Ensures Minikube is running (if `-M` is used).
-2. Creates namespace `erctl`.
-3. Applies all service manifests from `k8s/services/`.
-4. Creates one ConfigMap per Python file from `code/python_files/*.py`.
-5. Applies persistent volumes from `k8s/persistent-volumes/`.
-6. Applies persistent volume claims from `k8s/persistent-volume-claims/`.
-7. Applies all deployments from `k8s/deployments/`.
+1. Verifies Minikube is running (or starts it with `-M`).
+2. Creates namespace `erctl` if missing.
+3. Applies all manifests in `k8s/services/*.yaml`.
+4. Applies all manifests in `k8s/deployments/*.yaml`.
 
-Important: ConfigMaps are generated from scripts in `code/python_files/`, not from dedicated ConfigMap YAML files.
+Important current state:
 
-## 5. Operational Commands
+- ConfigMap generation from `code/python_files/*.py` is present in script comments but disabled.
+- Persistent volumes and claims application is present in script comments but disabled.
+- Only `.yaml` files in `k8s/deployments/` are applied. Files ending in `.DISABLED` are not applied.
 
-Main command wrapper:
+## Enabled vs Disabled Deployments
+
+Enabled by default (`*.yaml`):
+
+- `deployment-manager.yaml`
+- `deployment-normalization.yaml`
+- `deployment-BERT.yaml`
+
+Present but disabled (`*.DISABLED`):
+
+- `deployment-calculating-similarity.yaml.DISABLED`
+- `deployment-candidate-enumeration.yaml.DISABLED`
+- `deployment-cg-feature-extraction.yaml.DISABLED`
+- `deployment-decision-making.yaml.DISABLED`
+- `deployment-embedding-training.yaml.DISABLED`
+- `deployment-evaluation.yaml.DISABLED`
+- `deployment-feature-index-construction.yaml.DISABLED`
+- `deployment-graph-construction.yaml.DISABLED`
+- `deployment-random-walk.yaml.DISABLED`
+
+## Services
+
+The active service manifests are:
+
+- `k8s/services/service-manager.yaml`
+- `k8s/services/service-normalization.yaml`
+- `k8s/services/service-bert.yaml`
+
+`service-manager` exposes ports `5000-5012` for pipeline stage endpoints.
+
+## `erctl` Command Reference
+
+Main entrypoint:
 
 ```bash
 bash k8s/scripts/erctl.sh help
 ```
 
-Tip (Bash): add this to your `~/.bashrc` to call `erctl` directly.
+Common commands:
 
 ```bash
-export EAER_ROOT="/path/to/k8s-python-llm"
-alias erctl='bash "$EAER_ROOT/k8s/scripts/erctl.sh"'
-```
-
-Then reload your shell:
-
-```bash
-source ~/.bashrc
-```
-
-After that, you can run:
-
-```bash
-erctl start -M
-erctl test -a
-erctl logs -a
-```
-
-Lifecycle:
-
-```bash
-bash k8s/scripts/erctl.sh start
-bash k8s/scripts/erctl.sh stop
+# lifecycle
+bash k8s/scripts/erctl.sh start -M
+bash k8s/scripts/erctl.sh stop -M
 bash k8s/scripts/erctl.sh restart -M
-```
 
-Testing:
-
-```bash
-# resource checks
+# tests
 bash k8s/scripts/erctl.sh test -r
-
-# script behavior checks (via logs)
 bash k8s/scripts/erctl.sh test -s
-
-# both
 bash k8s/scripts/erctl.sh test -a
-```
 
-Logs:
-
-```bash
-# all EAER pods
+# logs
 bash k8s/scripts/erctl.sh logs -a
+bash k8s/scripts/erctl.sh logs -n normalization -f
 
-# one app label, example: normalization
-bash k8s/scripts/erctl.sh logs -n normalization
+# metrics
+bash k8s/scripts/erctl.sh metrics -s memory -o desc -f table
+
+# images
+bash k8s/scripts/erctl.sh images --build
+bash k8s/scripts/erctl.sh images --push
 ```
 
-Metrics:
+## Argo Workflow
+
+Argo workflow manifest:
+
+- `k8s/argo/pipeline.yaml`
+
+Highlights:
+
+- Uses DAG orchestration with conditional branches based on `mode`.
+- Includes `pipeline-init` step that runs `kevinoulai/erctl:config` and extracts mode via `scripts/extract-config-mode.sh`.
+- Embedding tasks and BERT tasks are conditionally executed through `when` expressions.
+- Current task containers are mostly placeholder BusyBox commands for pipeline wiring validation.
+
+Example submit command:
 
 ```bash
-bash k8s/scripts/erctl.sh metrics
-bash k8s/scripts/erctl.sh metrics -s memory -o desc -f table
-bash k8s/scripts/erctl.sh metrics -s cpu -o desc -f csv
+argo submit k8s/argo/pipeline.yaml -n argo -p mode=bert-training-b_evaluation -p raw_data=source_data --watch
 ```
 
-## 6. K8s Resource Map
+## Troubleshooting
 
-Deployments are defined in `k8s/deployments/`:
+### Minikube profile is not running
 
-- normalization
-- graph-construction
-- random-walk
-- embedding-training
-- cg-feature-extraction
-- feature-index-construction
-- candidate-enumeration
-- calculating-similarity
-- decision-making
-- BERT-training
-- BERT-inference
-
-Services are defined in `k8s/services/` for network-facing components.
-
-Storage manifests:
-
-- PVs: `k8s/persistent-volumes/`
-- PVCs: `k8s/persistent-volume-claims/`
-
-## 7. Troubleshooting
-
-### Minikube not running
-
-Use:
+Ensure the terminal is in administrator mode.
+If Minikube profile `domolandes` is not running, start it with:
 
 ```bash
 bash k8s/scripts/erctl.sh start -M
 ```
 
-### Pods stuck in ImagePullBackOff or ErrImageNeverPull
-
-Deployments use `imagePullPolicy: Never`, so the image must exist in Minikube:
+### Namespace/resources check
 
 ```bash
-docker build -t erctl:slim .
-```
-
-Then restart:
-
-```bash
-bash k8s/scripts/erctl.sh restart
-```
-
-### No metrics output
-
-`metrics.sh` tries to enable Minikube metrics-server automatically.
-If it still fails, run:
-
-```bash
-minikube addons enable metrics-server -p domolandes
-```
-
-### Service connectivity issues
-
-Run:
-
-```bash
-bash k8s/scripts/erctl.sh test -r
-bash k8s/scripts/erctl.sh logs -a
+kubectl get ns erctl
 kubectl get pods,svc -n erctl
 ```
 
-## 8. Proof of Concept Manifests
+### Metrics unavailable
 
-Manual POC files and commands are available in:
+```bash
+minikube addons enable metrics-server -p domolandes
+bash k8s/scripts/erctl.sh metrics
+```
+
+### Validate manifests quickly
+
+```bash
+bash k8s/scripts/erctl.sh test -r
+```
+
+## Proof of Concept Manifests
 
 - `k8s/proof-of-concept/`
 - `k8s/proof-of-concept/commands.txt`

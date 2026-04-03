@@ -31,6 +31,3 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY ./code/Energy-Aware-Entity-Resolution/utils /app/utils
 COPY ./code/Energy-Aware-Entity-Resolution/config /app/config
-COPY ./code/Energy-Aware-Entity-Resolution/scripts /app/scripts
-
-RUN chmod +x /app/scripts/*.sh
