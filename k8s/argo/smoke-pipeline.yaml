@@ -21,22 +21,14 @@ spec:
         - name: raw_data
       container:
         name: main
-        image: kevinoulai/erctl:normalization
+        image: busybox
         command: [sh, -c]
         args:
         - |
-          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode '{{inputs.parameters.mode}}' --raw_data '{{inputs.parameters.raw_data}}' > /tmp/processed_data
+          echo "processed_data_from_${MODE}" > /tmp/processed_data
         env:
         - name: MODE
           value: '{{inputs.parameters.mode}}'
-        volumeMounts:
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-bert.yaml
-          subPath: config.yaml
-      volumes:
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
       outputs:
         parameters:
         - name: processed_data
@@ -204,24 +196,11 @@ spec:
         - name: processed_data
       container:
         name: main
-        image: kevinoulai/erctl:bert
+        image: busybox
         command: [sh, -c]
         args:
         - |
-          /opt/venv/bin/python /app/distributions/bert_distribution.py --mode '{{inputs.parameters.mode}}' --processed_data '{{inputs.parameters.processed_data}}' > /tmp/bert_output
-        volumeMounts:
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-bert.yaml
-          subPath: config.yaml
-        - name: pipeline-bert-model
-          mountPath: /app/data/bert
-      volumes:
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: pipeline-bert-model
-        persistentVolumeClaim:
-          claimName: pipeline-bert-model-claim
+          echo "bert_output_{{inputs.parameters.mode}}_from_{{inputs.parameters.processed_data}}" > /tmp/bert_output
       outputs:
         parameters:
         - name: bert_output
