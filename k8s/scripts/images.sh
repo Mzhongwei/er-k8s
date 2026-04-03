@@ -11,6 +11,7 @@ Manage the Docker images for EAER components.
 Options:
   -b, --build               Build the Docker images for EAER components
   -l, --load                Load the Docker images into Minikube (if using Minikube)
+  -p, --push                Push the Docker images to Docker Hub
   -h, --help, -help, help   Show this help
 EOF
 }
@@ -29,7 +30,16 @@ build() {
         if [[ "$image_name" == "min" || "$image_name" == "full" ]]; then
             continue
         fi
-        docker build -t "erctl:${image_name}" -f "$dockerfile" "${IMAGES_DIR}/.."
+        docker build -t "kevinoulai/erctl:${image_name}" -f "$dockerfile" "${IMAGES_DIR}/.."
+    done
+}
+
+push() {
+    echo "Pushing Docker images to Docker Hub..."
+    images=($(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^kevinoulai/erctl:"))
+    for image in "${images[@]}"; do
+        docker push "$image"
+        echo "Pushed $image to Docker Hub"
     done
 }
 
@@ -45,11 +55,8 @@ load() {
     fi
 
     echo "Loading Docker images into Minikube..."
-    images=($(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^erctl:"))
+    images=($(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^kevinoulai/erctl:"))
     for image in "${images[@]}"; do
-        if [[ "$image" == "erctl:min" || "$image" == "erctl:full" ]]; then
-            continue
-        fi
         minikube image pull "$image" --profile="${EAER_MINIKUBE_PROFILE:-domolandes}"
         minikube image load "$image" --profile="${EAER_MINIKUBE_PROFILE:-domolandes}"
         echo "Loaded $image into Minikube"
@@ -67,6 +74,9 @@ while [ $# -gt 0 ]; do
             ;;
         -l|--load)
             load
+            ;;
+        -p|--push)
+            push
             ;;
         *)
             echo "Unknown option: $1"

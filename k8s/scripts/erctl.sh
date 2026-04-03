@@ -55,6 +55,7 @@ OPTIONS:
     For images:
         -b --build           Build the Docker images for EAER components
         -l --load            Load the Docker images into Minikube (if using Minikube)
+        -p --push            Push the Docker images to Docker Hub
         -h --help            Show help for images command
 
 EXAMPLES:
@@ -306,6 +307,9 @@ case "$COMMAND" in
                     ;;
                 -l|--load)
                     images_args=("--load")
+                    ;;
+                -p|--push)
+                    images_args=("--push")
                     ;;
                 *)
                     echo "Unknown option for images: $1"

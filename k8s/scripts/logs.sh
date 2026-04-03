@@ -84,5 +84,6 @@ if [ "$mode" = "all" ]; then
     # Stream logs from all pods in the namespace
     kubectl logs -n "$NAMESPACE" --selector=app=eaer "${follow_arg[@]}"
 else
-    kubectl logs -n "$NAMESPACE" --selector="app=${pod_name}" "${follow_arg[@]}"
+    today=$(date +"%Y-%m-%dT00:00:00Z")
+    kubectl logs -n "$NAMESPACE" --since-time="${today}" --tail=-1 --selector="app=${pod_name}" "${follow_arg[@]}"
 fi

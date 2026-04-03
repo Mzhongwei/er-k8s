@@ -7,4 +7,5 @@ ENV PYTHONPATH=/app
 WORKDIR /app
 
 COPY ./code/Energy-Aware-Entity-Resolution/models /app/models
+COPY ./code/Energy-Aware-Entity-Resolution/Data_example/bert /app/Data_example/bert
 COPY ./code/Energy-Aware-Entity-Resolution/main_distribution.py /app/main_distribution.py

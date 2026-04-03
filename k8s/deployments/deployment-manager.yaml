@@ -15,13 +15,13 @@ spec:
     spec:
       containers:
       - name: manager
-        image: erctl:manager
-        imagePullPolicy: Never
-        command: ["/bin/bash", "-c", "source /opt/venv/bin/activate && python /app/main_distribution.py"]
+        image: kevinoulai/erctl:manager
+        imagePullPolicy: Always # In dev, needed to update the code
+        command: ["/bin/bash", "-c", "source /opt/venv/bin/activate && python /app/main_distribution.py -f /app/config/examples/config-bert.yaml"]
         resources:
           limits:
             memory: "1Gi"
-            cpu: "1000m"
+            cpu: "500m"
           requests:
             memory: "512Mi"
             cpu: "250m"

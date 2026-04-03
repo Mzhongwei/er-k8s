@@ -20,5 +20,4 @@ WORKDIR /app
 
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline /app/pipeline
 COPY ./code/Energy-Aware-Entity-Resolution/models /app/models
-COPY ./code/Energy-Aware-Entity-Resolution/Data_example/bert /app/Data_example/bert
 COPY ./code/Energy-Aware-Entity-Resolution/distributions/bert_distribution.py /app/distributions/bert_distribution.py

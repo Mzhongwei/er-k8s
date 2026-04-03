@@ -1,0 +1,384 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: pipeline-
+  namespace: argo
+spec:
+  imagePullSecrets:
+  - name: regcred
+  arguments:
+    parameters:
+    - name: mode
+      value: bert-training-b_evaluation
+    - name: raw_data
+      value: source_data
+  entrypoint: main
+  templates:
+    - name: normalization
+      inputs:
+        parameters:
+        - name: mode
+        - name: raw_data
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "processed_data_from_${MODE}" > /tmp/processed_data
+        env:
+        - name: MODE
+          value: '{{inputs.parameters.mode}}'
+      outputs:
+        parameters:
+        - name: processed_data
+          valueFrom:
+            path: /tmp/processed_data
+
+    - name: graph-construction
+      inputs:
+        parameters:
+        - name: processed_data
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "graph_from_{{inputs.parameters.processed_data}}" > /tmp/graph
+      outputs:
+        parameters:
+        - name: graph
+          valueFrom:
+            path: /tmp/graph
+
+    - name: random-walk
+      inputs:
+        parameters:
+        - name: graph
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "sequences_from_{{inputs.parameters.graph}}" > /tmp/sequences
+      outputs:
+        parameters:
+        - name: sequences
+          valueFrom:
+            path: /tmp/sequences
+
+    - name: embedding-training
+      inputs:
+        parameters:
+        - name: sequences
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "embedding_model_from_{{inputs.parameters.sequences}}" > /tmp/embedding_model
+      outputs:
+        parameters:
+        - name: embedding_model
+          valueFrom:
+            path: /tmp/embedding_model
+
+    - name: cg-feature-extraction
+      inputs:
+        parameters:
+        - name: processed_data
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "cg_feature_from_{{inputs.parameters.processed_data}}" > /tmp/cg_feature
+      outputs:
+        parameters:
+        - name: cg_feature
+          valueFrom:
+            path: /tmp/cg_feature
+
+    - name: feature-index-construction
+      inputs:
+        parameters:
+        - name: cg_feature
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "feature_index_from_{{inputs.parameters.cg_feature}}" > /tmp/feature_index
+      outputs:
+        parameters:
+        - name: feature_index
+          valueFrom:
+            path: /tmp/feature_index
+
+    - name: candidate-enumeration
+      inputs:
+        parameters:
+        - name: feature_index
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "candidate_pairs_from_{{inputs.parameters.feature_index}}" > /tmp/candidate_pairs
+      outputs:
+        parameters:
+        - name: candidate_pairs
+          valueFrom:
+            path: /tmp/candidate_pairs
+
+    - name: calculate-similarity
+      inputs:
+        parameters:
+        - name: candidate_pairs
+        - name: embedding_model
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "matching_pairs_from_{{inputs.parameters.candidate_pairs}}_and_{{inputs.parameters.embedding_model}}" > /tmp/matching_pairs
+      outputs:
+        parameters:
+        - name: matching_pairs
+          valueFrom:
+            path: /tmp/matching_pairs
+
+    - name: decision-making
+      inputs:
+        parameters:
+        - name: matching_pairs
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "predicted_matching_from_{{inputs.parameters.matching_pairs}}" > /tmp/predicted_matching
+      outputs:
+        parameters:
+        - name: predicted_matching
+          valueFrom:
+            path: /tmp/predicted_matching
+
+    - name: evaluation
+      inputs:
+        parameters:
+        - name: predicted_matching
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "result_from_{{inputs.parameters.predicted_matching}}" > /tmp/result
+      outputs:
+        parameters:
+        - name: result
+          valueFrom:
+            path: /tmp/result
+
+    - name: bert
+      inputs:
+        parameters:
+        - name: mode
+        - name: processed_data
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo "bert_output_{{inputs.parameters.mode}}_from_{{inputs.parameters.processed_data}}" > /tmp/bert_output
+      outputs:
+        parameters:
+        - name: bert_output
+          valueFrom:
+            path: /tmp/bert_output
+      
+    - name: pipeline-init
+      inputs:
+        parameters:
+        - name: fallback_mode
+      container:
+        name: main
+        image: kevinoulai/erctl:min
+        imagePullPolicy: Always
+        command: [sh, -c]
+        args:
+        - |
+          set -eu
+          CONFIG_SRC=""
+          for p in /app/config/examples/config-bert.yaml /app/examples/config.yaml; do
+            if [ -f "$p" ]; then
+              CONFIG_SRC="$p"
+              break
+            fi
+          done
+
+          if [ -n "$CONFIG_SRC" ]; then
+            cp "$CONFIG_SRC" /tmp/config.yaml
+          else
+            printf 'mode: "%s"\n' '{{inputs.parameters.fallback_mode}}' > /tmp/config.yaml
+          fi
+
+          MODE_FROM_CONFIG="$(sed -n 's/^mode:[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' /tmp/config.yaml | head -n1 | tr -d '\r')"
+          if [ -z "$MODE_FROM_CONFIG" ]; then
+            MODE_FROM_CONFIG='{{inputs.parameters.fallback_mode}}'
+          fi
+          printf '%s' "$MODE_FROM_CONFIG" > /tmp/mode
+      outputs:
+        parameters:
+        - name: mode
+          valueFrom:
+            path: /tmp/mode
+        artifacts:
+        - name: config
+          path: /tmp/config.yaml
+
+    - name: main
+      dag:
+        tasks:
+        - name: pipeline-init
+          template: pipeline-init
+          arguments:
+            parameters:
+            - name: fallback_mode
+              value: '{{workflow.parameters.mode}}'
+        - name: normalization
+          dependencies: [pipeline-init]
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
+
+        - name: graph-construction
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
+          template: graph-construction
+          dependencies: [normalization]
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+
+        - name: random-walk
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
+          template: random-walk
+          dependencies: [graph-construction]
+          arguments:
+            parameters:
+            - name: graph
+              value: '{{tasks.graph-construction.outputs.parameters.graph}}'
+
+        - name: embedding-training
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
+          template: embedding-training
+          dependencies: [random-walk]
+          arguments:
+            parameters:
+            - name: sequences
+              value: '{{tasks.random-walk.outputs.parameters.sequences}}'
+
+        - name: cg-feature-extraction
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
+          template: cg-feature-extraction
+          dependencies: [normalization]
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+
+        - name: feature-index-construction
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
+          template: feature-index-construction
+          dependencies: [cg-feature-extraction]
+          arguments:
+            parameters:
+            - name: cg_feature
+              value: '{{tasks.cg-feature-extraction.outputs.parameters.cg_feature}}'
+
+        - name: candidate-enumeration
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+          template: candidate-enumeration
+          dependencies: [feature-index-construction]
+          arguments:
+            parameters:
+            - name: feature_index
+              value: '{{tasks.feature-index-construction.outputs.parameters.feature_index}}'
+
+        - name: calculate-similarity
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+          template: calculate-similarity
+          dependencies: [candidate-enumeration, embedding-training]
+          arguments:
+            parameters:
+            - name: candidate_pairs
+              value: '{{tasks.candidate-enumeration.outputs.parameters.candidate_pairs}}'
+            - name: embedding_model
+              value: '{{tasks.embedding-training.outputs.parameters.embedding_model}}'
+
+        - name: decision-making
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+          template: decision-making
+          dependencies: [calculate-similarity]
+          arguments:
+            parameters:
+            - name: matching_pairs
+              value: '{{tasks.calculate-similarity.outputs.parameters.matching_pairs}}'
+
+        - name: evaluation
+          dependencies: [decision-making]
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
+          template: evaluation
+          arguments:
+            parameters:
+            - name: predicted_matching
+              value: predicted_matching_from_store
+
+        - name: bert-training
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
+          template: bert
+          dependencies: [normalization]
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: mode
+              value: training
+
+        - name: bert-inference
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+          template: bert
+          dependencies: [normalization]
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: mode
+              value: inference
+
+        - name: bert-evaluation
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
+          template: bert
+          dependencies: [normalization]
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: mode
+              value: b_evaluation

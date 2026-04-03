@@ -1,0 +1,87 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: pipeline
+  namespace: argo
+  labels: {}
+spec:
+  arguments:
+    parameters:
+    - name: mode
+      value: bert-training-b_evaluation
+  entrypoint: main
+  templates:
+    - name: normalization
+      inputs:
+        parameters:
+        - name: mode
+        - name: raw_data
+      container:
+        name: main
+        image: busybox
+        command: [sh, -c]
+        args:
+        - |
+          echo processed_data > /tmp/processed_data
+      outputs:
+        parameters:
+        - name: processed_data
+          valueFrom:
+            path: /tmp/processed_data
+    - name: bert
+      container:
+        command:
+        - echo
+        args:
+        - 'FROM bert ({{inputs.parameters.mode}}) :'
+        - '{{inputs.parameters.processed_data}}'
+        image: busybox
+        name: main
+        resources: {}
+      inputs:
+        parameters:
+        - name: mode
+        - name: processed_data
+      metadata: {}
+      outputs: {}
+    - name: main
+      dag:
+        tasks:
+        - name: normalization
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: raw_data
+            - name: mode
+              value: '{{workflow.parameters.mode}}'
+        - name: bert-training
+          when: "'{{workflow.parameters.mode}}' =~ '.*bert.*' && '{{workflow.parameters.mode}}' =~ '.*training.*'"
+          template: bert
+          dependencies: [normalization]
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: mode
+              value: 'training'
+        - name: bert-inference
+          when: "'{{workflow.parameters.mode}}' =~ '.*bert.*' && '{{workflow.parameters.mode}}' =~ '.*inference.*'"
+          template: bert
+          dependencies: [normalization]
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: mode
+              value: 'inference'
+        - name: bert-evaluation
+          when: "'{{workflow.parameters.mode}}' =~ '.*bert.*' && '{{workflow.parameters.mode}}' =~ '.*b_evaluation.*'"
+          template: bert
+          dependencies: [normalization]
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: mode
+              value: 'b_evaluation'

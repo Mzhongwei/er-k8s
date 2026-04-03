@@ -15,18 +15,18 @@ spec:
     spec:
       containers:
       - name: normalization
-        image: erctl:normalization
-        imagePullPolicy: Never
+        image: kevinoulai/erctl:normalization
+        imagePullPolicy: Always # In dev, needed to update the code
         command: ["/bin/bash", "-c", "source /opt/venv/bin/activate && python /app/distributions/normalization_distribution.py"]
         securityContext:
           privileged: true
         resources:
           limits:
             memory: "512Mi"
-            cpu: "1000m"
+            cpu: "500m"
           requests:
             memory: "256Mi"
-            cpu: "500m"
+            cpu: "250m"
         ports:
         - containerPort: 8080
 

@@ -15,16 +15,16 @@ spec:
     spec:
       containers:
       - name: bert
-        image: erctl:bert
-        imagePullPolicy: Never
+        image: kevinoulai/erctl:bert
+        imagePullPolicy: Always # In dev, needed to update the code
         command: ["/bin/bash", "-c", "source /opt/venv/bin/activate && python ./distributions/bert_distribution.py"]
         resources:
           limits:
             memory: "4Gi"
-            cpu: "2000m"
+            cpu: "500m"
           requests:
             memory: "2Gi"
-            cpu: "1000m"
+            cpu: "250m"
         ports:
         - containerPort: 8080
         - containerPort: 8081
