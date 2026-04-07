@@ -16,11 +16,17 @@ Options:
 EOF
 }
 
+PREFIX=""
+# If on linux, sudo
+if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    PREFIX="sudo"
+fi
+
 build() {
     echo "Building Docker images for EAER components..."
     # Build the images in the required order
-    docker build -t erctl:min -f "${IMAGES_DIR}/Dockerfile.min" "${IMAGES_DIR}/.."
-    docker build -t erctl:full -f "${IMAGES_DIR}/Dockerfile.full" "${IMAGES_DIR}/.."
+    ${PREFIX} docker build -t erctl:min -f "${IMAGES_DIR}/Dockerfile.min" "${IMAGES_DIR}/.."
+    ${PREFIX} docker build -t erctl:full -f "${IMAGES_DIR}/Dockerfile.full" "${IMAGES_DIR}/.."
 
     # Build the remaining images
     shopt -s nullglob
@@ -30,7 +36,7 @@ build() {
         if [[ "$image_name" == "min" || "$image_name" == "full" ]]; then
             continue
         fi
-        docker build -t "kevinoulai/erctl:${image_name}" -f "$dockerfile" "${IMAGES_DIR}/.."
+        ${PREFIX} docker build -t "kevinoulai/erctl:${image_name}" -f "$dockerfile" "${IMAGES_DIR}/.."
     done
 }
 
@@ -38,7 +44,7 @@ push() {
     echo "Pushing Docker images to Docker Hub..."
     images=($(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^kevinoulai/erctl:"))
     for image in "${images[@]}"; do
-        docker push "$image"
+        ${PREFIX} docker push "$image"
         echo "Pushed $image to Docker Hub"
     done
 }

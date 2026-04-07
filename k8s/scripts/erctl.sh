@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("start" "stop" "restart" "exec" "images" "metrics" "test" "logs" "help")
+ACTIONS=("start" "stop" "restart" "exec" "images" "metrics" "test" "logs" "configmaps" "dataset" "help")
 
 print_help() {
     cat << 'EOF'
@@ -26,6 +26,8 @@ COMMANDS:
     metrics     Display resource usage metrics for EAER pods
     test        Run tests against the deployed resources
     logs        Stream logs from EAER pods
+    configmaps  Create or update the distribution ConfigMaps
+    dataset     Sync Data_example/bert files into the Argo PVC
     help        Display this help message
 
 OPTIONS:
@@ -77,6 +79,12 @@ EXAMPLES:
   # Show pod consumption sorted by memory (descending) as CSV
   erctl metrics -s memory -o desc -f csv
 
+    # Create or update distribution ConfigMaps without starting workloads
+    erctl configmaps
+
+    # Sync local BERT CSV fixtures to the PVC used by Argo
+    erctl dataset
+
   # Show command-specific help
   erctl start --help
   erctl stop --help
@@ -84,13 +92,15 @@ EXAMPLES:
   erctl logs --help
   erctl metrics --help
   erctl exec --help
+    erctl configmaps --help
+    erctl dataset --help
 EOF
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [start|stop|restart|exec|images|metrics|test|logs|help] [options]"
+    echo "Usage: $0 [start|stop|restart|exec|images|metrics|test|logs|configmaps|dataset|help] [options]"
     exit 1
 fi
 
@@ -321,6 +331,50 @@ case "$COMMAND" in
         done
 
         run_script "images.sh" "${images_args[@]}"
+        ;;
+
+    configmaps)
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -h|--help|-help|help)
+                    cat << 'EOF'
+Usage: erctl configmaps
+
+Create or update the ConfigMaps that provide the distribution Python scripts.
+EOF
+                    exit 0
+                    ;;
+                *)
+                    echo "Unknown option for configmaps: $1"
+                    echo "Use '$0 help' for usage information."
+                    exit 1
+                    ;;
+            esac
+        done
+
+        run_script "distribution-configmaps.sh"
+        ;;
+
+    dataset)
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -h|--help|-help|help)
+                    cat << 'EOF'
+Usage: erctl dataset
+
+Create/apply the Argo PVC and sync local Data_example/bert CSV files into it.
+EOF
+                    exit 0
+                    ;;
+                *)
+                    echo "Unknown option for dataset: $1"
+                    echo "Use '$0 help' for usage information."
+                    exit 1
+                    ;;
+            esac
+        done
+
+        run_script "sync-bert-data-pvc.sh"
         ;;
 
     metrics)

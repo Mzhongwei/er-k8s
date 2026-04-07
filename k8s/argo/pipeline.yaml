@@ -33,10 +33,21 @@ spec:
         - name: pipeline-config
           mountPath: /app/config/examples/config-bert.yaml
           subPath: config.yaml
+        - name: normalization-distribution
+          mountPath: /app/distributions/normalization_distribution.py
+          subPath: normalization_distribution.py
+        - name: pipeline-bert-data
+          mountPath: /app/Data_example/bert
       volumes:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
+      - name: normalization-distribution
+        configMap:
+          name: eaer-normalization-distribution
+      - name: pipeline-bert-data
+        persistentVolumeClaim:
+          claimName: pipeline-bert-data-claim
       outputs:
         parameters:
         - name: processed_data
@@ -205,16 +216,29 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:bert
-        command: [sh, -c]
+        imagePullPolicy: Always
+        command: [/opt/venv/bin/python, /app/distributions/bert_distribution.py]
         args:
-        - |
-          /opt/venv/bin/python /app/distributions/bert_distribution.py --mode '{{inputs.parameters.mode}}' --processed_data '{{inputs.parameters.processed_data}}' > /tmp/bert_output
+        - --mode
+        - '{{inputs.parameters.mode}}'
+        - --processed_data
+        - '{{inputs.parameters.processed_data}}'
+        - --output
+        - /tmp/bert_output
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-bert.yaml
           subPath: config.yaml
         - name: pipeline-bert-model
           mountPath: /app/data/bert
+        - name: bert-distribution
+          mountPath: /app/distributions/bert_distribution.py
+          subPath: bert_distribution.py
+        - name: bert-training
+          mountPath: /app/pipeline/bert_training.py
+          subPath: bert_training.py
+        - name: pipeline-bert-data
+          mountPath: /app/Data_example/bert
       volumes:
       - name: pipeline-config
         configMap:
@@ -222,6 +246,15 @@ spec:
       - name: pipeline-bert-model
         persistentVolumeClaim:
           claimName: pipeline-bert-model-claim
+      - name: bert-distribution
+        configMap:
+          name: eaer-bert-distribution
+      - name: bert-training
+        configMap:
+          name: eaer-bert-training
+      - name: pipeline-bert-data
+        persistentVolumeClaim:
+          claimName: pipeline-bert-data-claim
       outputs:
         parameters:
         - name: bert_output

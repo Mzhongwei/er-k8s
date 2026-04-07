@@ -17,6 +17,7 @@ DEPLOYMENTS_DIR="${ROOT_DIR}/k8s/deployments"
 PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
 PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
 PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims" 
+DISTRIBUTION_CONFIGMAPS_SCRIPT="${SCRIPT_DIR}/distribution-configmaps.sh"
 
 NAMESPACE="erctl"
 BASE_IMAGE="erctl:slim1.1"
@@ -138,6 +139,8 @@ fi
 # fi
 
 apply_yaml_dir "$SERVICES_DIR" "service" --namespace="$NAMESPACE"
+
+bash "$DISTRIBUTION_CONFIGMAPS_SCRIPT"
 
 # kubectl command to create or update a ConfigMap from multiple Python files:
 # kubectl create configmap <configmap-name> --from-file=<key1>=<file1> --from-file=<key2>=<file2> --dry-run=client -o yaml \

@@ -18,6 +18,10 @@ spec:
         image: kevinoulai/erctl:normalization
         imagePullPolicy: Always # In dev, needed to update the code
         command: ["/bin/bash", "-c", "source /opt/venv/bin/activate && python /app/distributions/normalization_distribution.py"]
+        volumeMounts:
+        - name: normalization-distribution
+          mountPath: /app/distributions/normalization_distribution.py
+          subPath: normalization_distribution.py
         securityContext:
           privileged: true
         resources:
@@ -29,6 +33,10 @@ spec:
             cpu: "250m"
         ports:
         - containerPort: 8080
+      volumes:
+      - name: normalization-distribution
+        configMap:
+          name: eaer-normalization-distribution
 
 
 

@@ -29,6 +29,14 @@ spec:
         env:
         - name: MODE
           value: '{{inputs.parameters.mode}}'
+        volumeMounts:
+        - name: normalization-distribution
+          mountPath: /app/distributions/normalization_distribution.py
+          subPath: normalization_distribution.py
+      volumes:
+      - name: normalization-distribution
+        configMap:
+          name: eaer-normalization-distribution
       outputs:
         parameters:
         - name: processed_data
@@ -201,6 +209,14 @@ spec:
         args:
         - |
           echo "bert_output_{{inputs.parameters.mode}}_from_{{inputs.parameters.processed_data}}" > /tmp/bert_output
+        volumeMounts:
+        - name: bert-distribution
+          mountPath: /app/distributions/bert_distribution.py
+          subPath: bert_distribution.py
+      volumes:
+      - name: bert-distribution
+        configMap:
+          name: eaer-bert-distribution
       outputs:
         parameters:
         - name: bert_output
