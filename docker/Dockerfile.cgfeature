@@ -1,0 +1,9 @@
+FROM erctl:min
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/cg_feature_extraction.py /app/pipeline/cg_feature_extraction.py

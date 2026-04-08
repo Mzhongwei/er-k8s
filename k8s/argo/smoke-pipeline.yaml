@@ -145,7 +145,7 @@ spec:
           valueFrom:
             path: /tmp/candidate_pairs
 
-    - name: calculate-similarity
+    - name: calculating-similarity
       inputs:
         parameters:
         - name: candidate_pairs
@@ -326,9 +326,9 @@ spec:
             - name: feature_index
               value: '{{tasks.feature-index-construction.outputs.parameters.feature_index}}'
 
-        - name: calculate-similarity
+        - name: calculating-similarity
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: calculate-similarity
+          template: calculating-similarity
           dependencies: [candidate-enumeration, embedding-training]
           arguments:
             parameters:
@@ -340,11 +340,11 @@ spec:
         - name: decision-making
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: decision-making
-          dependencies: [calculate-similarity]
+          dependencies: [calculating-similarity]
           arguments:
             parameters:
             - name: matching_pairs
-              value: '{{tasks.calculate-similarity.outputs.parameters.matching_pairs}}'
+              value: '{{tasks.calculating-similarity.outputs.parameters.matching_pairs}}'
 
         - name: evaluation
           dependencies: [pipeline-init]

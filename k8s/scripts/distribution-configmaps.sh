@@ -14,7 +14,12 @@ NAMESPACE="argo"
 NORMALIZATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/normalization_distribution.py"
 BERT_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/bert_distribution.py"
 BERT_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/pipeline/bert_training.py"
-CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-bert.yaml"
+CG_FEATURE_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/cg_feature_distribution.py"
+FEATURE_INDEX_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/featureindex_candidate.py"
+GRAPH_RANDOMWALK_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/graph_randomwalk.py"
+EMBEDDING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/embedding_calculating.py"
+
+CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml"
 
 require_cmd() {
     local cmd="$1"
@@ -45,4 +50,8 @@ require_cmd kubectl
 create_or_update_configmap "eaer-normalization-distribution" "normalization_distribution.py" "$NORMALIZATION_SCRIPT"
 create_or_update_configmap "eaer-bert-distribution" "bert_distribution.py" "$BERT_SCRIPT"
 create_or_update_configmap "eaer-bert-training" "bert_training.py" "$BERT_TRAINING_SCRIPT"
-kubectl -n argo create configmap er-pipeline-config   --from-file=config.yaml=${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-bert.yaml   --dry-run=client -o yaml | kubectl -n argo apply -f -
+create_or_update_configmap "eaer-cg-feature-distribution" "cg_feature_distribution.py" "$CG_FEATURE_SCRIPT"
+create_or_update_configmap "eaer-feature-index" "featureindex_candidate.py" "$FEATURE_INDEX_SCRIPT"
+create_or_update_configmap "eaer-graph-distribution" "graph_distribution.py" "$GRAPH_RANDOMWALK_SCRIPT"
+create_or_update_configmap "eaer-embedding-calculating" "embedding_calculating.py" "$EMBEDDING_SCRIPT"
+kubectl -n argo create configmap er-pipeline-config   --from-file=config.yaml=${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml   --dry-run=client -o yaml | kubectl -n argo apply -f -

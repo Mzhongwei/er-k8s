@@ -1,3 +1,4 @@
+# TODO: Mount volumes on data instead of cache
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
@@ -6,12 +7,14 @@ metadata:
 spec:
   imagePullSecrets:
   - name: regcred
+  artifactGC:
+    strategy: OnWorkflowCompletion
   arguments:
     parameters:
     - name: mode
-      value: bert-training-b_evaluation
+      value: embedding-evaluation
     - name: raw_data
-      value: source_data
+      value: Data_example/bert/train.csv
   entrypoint: main
   templates:
     - name: normalization
@@ -31,7 +34,7 @@ spec:
           value: '{{inputs.parameters.mode}}'
         volumeMounts:
         - name: pipeline-config
-          mountPath: /app/config/examples/config-bert.yaml
+          mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
         - name: normalization-distribution
           mountPath: /app/distributions/normalization_distribution.py
@@ -54,56 +57,95 @@ spec:
           valueFrom:
             path: /tmp/processed_data
 
-    - name: graph-construction
+    - name: graph
       inputs:
         parameters:
         - name: processed_data
+        - name: function
       container:
         name: main
-        image: busybox
-        command: [sh, -c]
+        image: kevinoulai/erctl:graph
+        imagePullPolicy: Always
+        command: [/opt/venv/bin/python, /app/distributions/graph_distribution.py]
         args:
-        - |
-          echo "graph_from_{{inputs.parameters.processed_data}}" > /tmp/graph
+        - --processed_data
+        - '{{inputs.parameters.processed_data}}'
+        - --function
+        - '{{inputs.parameters.function}}'
+        - --output
+        - /tmp/sequences.json
+        volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: graph-distribution
+          mountPath: /app/distributions/graph_distribution.py
+          subPath: graph_distribution.py
+        - name: pipeline-graph-cache
+          mountPath: /app/cache
+      volumes:
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: graph-distribution
+        configMap:
+          name: eaer-graph-distribution
+      - name: pipeline-graph-cache
+        persistentVolumeClaim:
+          claimName: pipeline-graph-cache-claim
       outputs:
-        parameters:
-        - name: graph
-          valueFrom:
-            path: /tmp/graph
-
-    - name: random-walk
-      inputs:
-        parameters:
-        - name: graph
-      container:
-        name: main
-        image: busybox
-        command: [sh, -c]
-        args:
-        - |
-          echo "sequences_from_{{inputs.parameters.graph}}" > /tmp/sequences
-      outputs:
-        parameters:
+        artifacts:
         - name: sequences
-          valueFrom:
-            path: /tmp/sequences
+          path: /tmp/sequences.json
 
-    - name: embedding-training
+    - name: embedding
       inputs:
-        parameters:
+        artifacts:
         - name: sequences
+          path: /tmp/sequences.json
+          optional: true
+        - name: candidate_pairs
+          path: /tmp/candidate_pairs.json
+          optional: true
+        parameters:
+        - name: function
       container:
         name: main
-        image: busybox
-        command: [sh, -c]
+        image: kevinoulai/erctl:embedding
+        command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
         args:
-        - |
-          echo "embedding_model_from_{{inputs.parameters.sequences}}" > /tmp/embedding_model
+        - --sequences
+        - /tmp/sequences.json
+        - --candidate_pairs
+        - /tmp/candidate_pairs.json
+        - --function
+        - '{{inputs.parameters.function}}'
+        - --output
+        - /tmp/matching_pairs
+        volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: embedding-distribution
+          mountPath: /app/distributions/embedding_calculating.py
+          subPath: embedding_calculating.py
+        - name: pipeline-embedding-model-cache
+          mountPath: /app/cache
+      volumes:
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: embedding-distribution
+        configMap:
+          name: eaer-embedding-calculating
+      - name: pipeline-embedding-model-cache
+        persistentVolumeClaim:
+          claimName: pipeline-embedding-model-cache-claim
       outputs:
         parameters:
-        - name: embedding_model
+        - name: matching_pairs
           valueFrom:
-            path: /tmp/embedding_model
+            path: /tmp/matching_pairs
 
     - name: cg-feature-extraction
       inputs:
@@ -111,73 +153,79 @@ spec:
         - name: processed_data
       container:
         name: main
-        image: busybox
-        command: [sh, -c]
+        image: kevinoulai/erctl:cgfeature
+        command: [/opt/venv/bin/python, /app/distributions/cg_feature_distribution.py]
         args:
-        - |
-          echo "cg_feature_from_{{inputs.parameters.processed_data}}" > /tmp/cg_feature
+        - --processed_data
+        - '{{inputs.parameters.processed_data}}'
+        - --output
+        - /tmp/cg_feature
+        volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: cg-feature-distribution
+          mountPath: /app/distributions/cg_feature_distribution.py
+          subPath: cg_feature_distribution.py
+      volumes:
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: cg-feature-distribution
+        configMap:
+          name: eaer-cg-feature-distribution
       outputs:
         parameters:
         - name: cg_feature
           valueFrom:
             path: /tmp/cg_feature
 
-    - name: feature-index-construction
+    - name: feature-index
       inputs:
         parameters:
         - name: cg_feature
+        - name: function
       container:
         name: main
-        image: busybox
-        command: [sh, -c]
+        image: kevinoulai/erctl:featureindex
+        imagePullPolicy: Always
+        command: [/opt/venv/bin/python, /app/distributions/featureindex_candidate.py]
         args:
-        - |
-          echo "feature_index_from_{{inputs.parameters.cg_feature}}" > /tmp/feature_index
+        - --cg_feature
+        - '{{inputs.parameters.cg_feature}}'
+        - --function
+        - '{{inputs.parameters.function}}'
+        - --output
+        - /tmp/candidate_pairs.json
+        volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: feature-index-distribution
+          mountPath: /app/distributions/featureindex_candidate.py
+          subPath: featureindex_candidate.py
+        - name: pipeline-feature-index-cache
+          mountPath: /app/cache
+      volumes:
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: feature-index-distribution
+        configMap:
+          name: eaer-feature-index
+      - name: pipeline-feature-index-cache
+        persistentVolumeClaim:
+          claimName: pipeline-feature-index-cache-claim
       outputs:
-        parameters:
-        - name: feature_index
-          valueFrom:
-            path: /tmp/feature_index
-
-    - name: candidate-enumeration
-      inputs:
-        parameters:
-        - name: feature_index
-      container:
-        name: main
-        image: busybox
-        command: [sh, -c]
-        args:
-        - |
-          echo "candidate_pairs_from_{{inputs.parameters.feature_index}}" > /tmp/candidate_pairs
-      outputs:
-        parameters:
+        artifacts:
         - name: candidate_pairs
-          valueFrom:
-            path: /tmp/candidate_pairs
+          path: /tmp/candidate_pairs.json
 
-    - name: calculate-similarity
-      inputs:
-        parameters:
-        - name: candidate_pairs
-        - name: embedding_model
-      container:
-        name: main
-        image: busybox
-        command: [sh, -c]
-        args:
-        - |
-          echo "matching_pairs_from_{{inputs.parameters.candidate_pairs}}_and_{{inputs.parameters.embedding_model}}" > /tmp/matching_pairs
-      outputs:
-        parameters:
-        - name: matching_pairs
-          valueFrom:
-            path: /tmp/matching_pairs
-
-    - name: decision-making
+    - name: prediction
       inputs:
         parameters:
         - name: matching_pairs
+          value: ""
       container:
         name: main
         image: busybox
@@ -190,23 +238,6 @@ spec:
         - name: predicted_matching
           valueFrom:
             path: /tmp/predicted_matching
-
-    - name: evaluation
-      inputs:
-        parameters:
-        - name: predicted_matching
-      container:
-        name: main
-        image: busybox
-        command: [sh, -c]
-        args:
-        - |
-          echo "result_from_{{inputs.parameters.predicted_matching}}" > /tmp/result
-      outputs:
-        parameters:
-        - name: result
-          valueFrom:
-            path: /tmp/result
 
     - name: bert
       inputs:
@@ -275,7 +306,7 @@ spec:
           /app/scripts/extract-config-mode.sh '{{inputs.parameters.fallback_mode}}' > /tmp/mode
         volumeMounts:
           - name: pipeline-config
-            mountPath: /app/config/examples/config-bert.yaml
+            mountPath: /app/config/examples/config-embedding.yaml
             subPath: config.yaml
       volumes:
       - name: pipeline-config
@@ -299,6 +330,7 @@ spec:
             parameters:
             - name: fallback_mode
               value: '{{workflow.parameters.mode}}'
+
         - name: normalization
           dependencies: [pipeline-init]
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
@@ -312,30 +344,37 @@ spec:
 
         - name: graph-construction
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: graph-construction
+          template: graph
           dependencies: [normalization]
           arguments:
             parameters:
             - name: processed_data
               value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: function
+              value: graph_construction
 
         - name: random-walk
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: random-walk
+          template: graph
           dependencies: [graph-construction]
           arguments:
             parameters:
-            - name: graph
-              value: '{{tasks.graph-construction.outputs.parameters.graph}}'
+            - name: processed_data
+              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: function
+              value: random_walk
 
         - name: embedding-training
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: embedding-training
+          template: embedding
           dependencies: [random-walk]
           arguments:
-            parameters:
+            artifacts:
             - name: sequences
-              value: '{{tasks.random-walk.outputs.parameters.sequences}}'
+              from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
+            parameters:
+            - name: function
+              value: embedding_training
 
         - name: cg-feature-extraction
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
@@ -348,50 +387,55 @@ spec:
 
         - name: feature-index-construction
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: feature-index-construction
+          template: feature-index
           dependencies: [cg-feature-extraction]
           arguments:
             parameters:
             - name: cg_feature
               value: '{{tasks.cg-feature-extraction.outputs.parameters.cg_feature}}'
+            - name: function
+              value: feature_index_construction
 
         - name: candidate-enumeration
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: candidate-enumeration
+          template: feature-index
           dependencies: [feature-index-construction]
           arguments:
             parameters:
-            - name: feature_index
-              value: '{{tasks.feature-index-construction.outputs.parameters.feature_index}}'
+            - name: cg_feature
+              value: '{{tasks.cg-feature-extraction.outputs.parameters.cg_feature}}'
+            - name: function
+              value: candidate_enumeration
 
-        - name: calculate-similarity
+        - name: calculating-similarity
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: calculate-similarity
+          template: embedding
           dependencies: [candidate-enumeration, embedding-training]
           arguments:
-            parameters:
+            artifacts:
             - name: candidate_pairs
-              value: '{{tasks.candidate-enumeration.outputs.parameters.candidate_pairs}}'
-            - name: embedding_model
-              value: '{{tasks.embedding-training.outputs.parameters.embedding_model}}'
-
-        - name: decision-making
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: decision-making
-          dependencies: [calculate-similarity]
-          arguments:
+              from: '{{tasks.candidate-enumeration.outputs.artifacts.candidate_pairs}}'
             parameters:
-            - name: matching_pairs
-              value: '{{tasks.calculate-similarity.outputs.parameters.matching_pairs}}'
+            - name: function
+              value: calculating_similarity
 
-        - name: evaluation
-          dependencies: [pipeline-init]
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
-          template: evaluation
-          arguments:
-            parameters:
-            - name: predicted_matching
-              value: predicted_matching_from_store
+        #- name: decision-making
+        #  when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+        #  template: prediction
+        #  dependencies: [calculating-similarity]
+        #  arguments:
+        #    parameters:
+        #    - name: matching_pairs
+        #      value: '{{tasks.calculating-similarity.outputs.parameters.matching_pairs}}'
+
+        #- name: evaluation
+        #  dependencies: [pipeline-init]
+        #  when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
+        #  template: prediction
+        #  arguments:
+        #    parameters:
+        #    - name: predicted_matching
+        #      value: predicted_matching_from_store
 
         - name: bert-training
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
