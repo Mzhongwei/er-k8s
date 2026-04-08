@@ -17,7 +17,7 @@ DEPLOYMENTS_DIR="${ROOT_DIR}/k8s/deployments"
 PYTHON_SCRIPTS_DIR="${ROOT_DIR}/code/python_files"
 PERSISTENT_VOLUMES_DIR="${ROOT_DIR}/k8s/persistent-volumes"
 PERSISTENT_VOLUME_CLAIMS_DIR="${ROOT_DIR}/k8s/persistent-volume-claims" 
-DISTRIBUTION_CONFIGMAPS_SCRIPT="${SCRIPT_DIR}/distribution-configmaps.sh"
+DISTRIBUTION_CONFIGMAPS_SCRIPT="${SCRIPT_DIR}/configmaps.sh"
 
 NAMESPACE="erctl"
 BASE_IMAGE="erctl:slim1.1"
