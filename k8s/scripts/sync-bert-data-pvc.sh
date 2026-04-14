@@ -12,8 +12,11 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 NAMESPACE="${EAER_DATA_NAMESPACE:-argo}"
 PVC_NAME="${EAER_BERT_DATA_PVC:-pipeline-bert-data-claim}"
-LOCAL_DATA_DIR="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/bert"
-PVC_MANIFEST="${ROOT_DIR}/k8s/argo/pvc-bert-data.yaml"
+LOCAL_BERT_DATA_DIR="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/bert"
+GROUND_TRUTH_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-matches.txt"
+FODORS_TABLE_A_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableA.csv"
+FODORS_TABLE_B_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableB.csv"
+PVC_MANIFEST="${ROOT_DIR}/k8s/argo/pvc-manifests/pvc-bert-data.yaml"
 SYNC_POD="bert-data-sync-$$"
 
 require_cmd() {
@@ -32,9 +35,24 @@ cleanup() {
 
 trap cleanup EXIT
 
-if [ ! -d "$LOCAL_DATA_DIR" ]; then
-    echo "Local data directory not found: $LOCAL_DATA_DIR"
+if [ ! -d "$LOCAL_BERT_DATA_DIR" ]; then
+  echo "Local BERT data directory not found: $LOCAL_BERT_DATA_DIR"
     exit 1
+fi
+
+if [ ! -f "$GROUND_TRUTH_FILE" ]; then
+  echo "Ground-truth file not found: $GROUND_TRUTH_FILE"
+  exit 1
+fi
+
+if [ ! -f "$FODORS_TABLE_A_FILE" ]; then
+  echo "Fodors table A file not found: $FODORS_TABLE_A_FILE"
+  exit 1
+fi
+
+if [ ! -f "$FODORS_TABLE_B_FILE" ]; then
+  echo "Fodors table B file not found: $FODORS_TABLE_B_FILE"
+  exit 1
 fi
 
 kubectl apply -f "$PVC_MANIFEST"
@@ -61,6 +79,13 @@ EOF
 
 kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${SYNC_POD}" --timeout=120s >/dev/null
 kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'rm -rf /data/*'
-kubectl cp "$LOCAL_DATA_DIR/." "$NAMESPACE/$SYNC_POD:/data"
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'mkdir -p /data/bert'
+kubectl cp "$LOCAL_BERT_DATA_DIR/." "$NAMESPACE/$SYNC_POD:/data/bert"
+kubectl cp "$GROUND_TRUTH_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-matches.txt"
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-matches.txt /data/fodors_zagat-matches.txt'
+kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-tableA.csv"
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-tableA.csv /data/fodors_zagat-tableA.csv'
+kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-tableB.csv"
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-tableB.csv /data/fodors_zagat-tableB.csv'
 
-echo "Synced CSV files from ${LOCAL_DATA_DIR} to PVC ${PVC_NAME} in namespace ${NAMESPACE}."
+echo "Synced BERT and Fodors CSV files to PVC ${PVC_NAME} in namespace ${NAMESPACE}."

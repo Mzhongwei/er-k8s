@@ -15,6 +15,10 @@ spec:
       value: embedding-evaluation
     - name: raw_data
       value: Data_example/bert/train.csv
+    - name: data_source_A
+      value: Data_example/fodors_zagats-tableA.csv
+    - name: data_source_B
+      value: Data_example/fodors_zagats-tableB.csv
   entrypoint: main
   templates:
     - name: normalization
@@ -22,13 +26,15 @@ spec:
         parameters:
         - name: mode
         - name: raw_data
+        - name: data_source_A
+        - name: data_source_B
       container:
         name: main
         image: kevinoulai/erctl:normalization
         command: [sh, -c]
         args:
         - |
-          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode '{{inputs.parameters.mode}}' --raw_data '{{inputs.parameters.raw_data}}' > /tmp/processed_data
+          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode '{{inputs.parameters.mode}}' --raw_data '{{inputs.parameters.raw_data}}' --data_source_A '{{inputs.parameters.data_source_A}}' --data_source_B '{{inputs.parameters.data_source_B}}' > /tmp/processed_data
         env:
         - name: MODE
           value: '{{inputs.parameters.mode}}'
@@ -40,7 +46,7 @@ spec:
           mountPath: /app/distributions/normalization_distribution.py
           subPath: normalization_distribution.py
         - name: pipeline-bert-data
-          mountPath: /app/Data_example/bert
+          mountPath: /app/Data_example
       volumes:
       - name: pipeline-config
         configMap:
@@ -227,6 +233,7 @@ spec:
         artifacts:
         - name: matching_pairs
           path: /tmp/matching_pairs.json
+          optional: true
       container:
         name: main
         image: kevinoulai/erctl:prediction
@@ -245,6 +252,8 @@ spec:
         - name: decision-evaluation-distribution
           mountPath: /app/distributions/decision_evaluation.py
           subPath: decision_evaluation.py
+        - name: pipeline-bert-data
+          mountPath: /app/Data_example
         #- name: pipeline-decision-evaluation-cache
         #  mountPath: /app/cache
         - name: pipeline-embedding-model-cache
@@ -256,6 +265,9 @@ spec:
       - name: decision-evaluation-distribution
         configMap:
           name: eaer-decision-evaluation
+      - name: pipeline-bert-data
+        persistentVolumeClaim:
+          claimName: pipeline-bert-data-claim
       #- name: pipeline-decision-evaluation-cache
       #  persistentVolumeClaim:
       #    claimName: pipeline-decision-evaluation-cache-claim
@@ -299,7 +311,7 @@ spec:
           mountPath: /app/pipeline/bert_training.py
           subPath: bert_training.py
         - name: pipeline-bert-data
-          mountPath: /app/Data_example/bert
+          mountPath: /app/Data_example
       volumes:
       - name: pipeline-config
         configMap:
@@ -392,6 +404,10 @@ spec:
             parameters:
             - name: raw_data
               value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
 
@@ -484,14 +500,14 @@ spec:
             - name: matching_pairs
               from: '{{tasks.calculating-similarity.outputs.artifacts.matching_pairs}}'
 
-        #- name: evaluation
-        #  dependencies: [pipeline-init]
-        #  when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
-        #  template: prediction
-        #  arguments:
-        #    parameters:
-        #    - name: predicted_matching
-        #      value: predicted_matching_from_store
+        - name: evaluation
+          dependencies: [decision-making]
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
+          template: prediction
+          arguments:
+            parameters:
+            - name: function
+              value: evaluation
 
         - name: bert-training
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
