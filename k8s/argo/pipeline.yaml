@@ -9,6 +9,7 @@ spec:
   - name: regcred
   podGC:
     strategy: OnWorkflowCompletion
+    deleteDelayDuration: 30m
   ttlStrategy:
     secondsAfterSuccess: 3600
     secondsAfterFailure: 86400
