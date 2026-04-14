@@ -121,7 +121,7 @@ spec:
         - --function
         - '{{inputs.parameters.function}}'
         - --output
-        - /tmp/matching_pairs
+        - /tmp/matching_pairs.json
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -142,10 +142,9 @@ spec:
         persistentVolumeClaim:
           claimName: pipeline-embedding-model-cache-claim
       outputs:
-        parameters:
-        - name: matching_pairs
-          valueFrom:
-            path: /tmp/matching_pairs
+        artifacts:
+          - name: matching_pairs
+            path: /tmp/matching_pairs.json
 
     - name: cg-feature-extraction
       inputs:
@@ -224,15 +223,46 @@ spec:
     - name: prediction
       inputs:
         parameters:
+        - name: function
+        artifacts:
         - name: matching_pairs
-          value: ""
+          path: /tmp/matching_pairs.json
       container:
         name: main
-        image: busybox
-        command: [sh, -c]
+        image: kevinoulai/erctl:prediction
+        command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
         args:
-        - |
-          echo "predicted_matching_from_{{inputs.parameters.matching_pairs}}" > /tmp/predicted_matching
+        - --matching_pairs
+        - '{{inputs.artifacts.matching_pairs.path}}'
+        - --function
+        - '{{inputs.parameters.function}}'
+        - --output
+        - /tmp/predicted_matching
+        volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: decision-evaluation-distribution
+          mountPath: /app/distributions/decision_evaluation.py
+          subPath: decision_evaluation.py
+        #- name: pipeline-decision-evaluation-cache
+        #  mountPath: /app/cache
+        - name: pipeline-embedding-model-cache
+          mountPath: /app/cache
+      volumes:
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: decision-evaluation-distribution
+        configMap:
+          name: eaer-decision-evaluation
+      #- name: pipeline-decision-evaluation-cache
+      #  persistentVolumeClaim:
+      #    claimName: pipeline-decision-evaluation-cache-claim
+      - name: pipeline-embedding-model-cache
+        persistentVolumeClaim:
+          claimName: pipeline-embedding-model-cache-claim
+
       outputs:
         parameters:
         - name: predicted_matching
@@ -442,14 +472,17 @@ spec:
             - name: function
               value: calculating_similarity
 
-        #- name: decision-making
-        #  when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-        #  template: prediction
-        #  dependencies: [calculating-similarity]
-        #  arguments:
-        #    parameters:
-        #    - name: matching_pairs
-        #      value: '{{tasks.calculating-similarity.outputs.parameters.matching_pairs}}'
+        - name: decision-making
+          dependencies: [calculating-similarity]
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+          template: prediction
+          arguments:
+            parameters:
+            - name: function
+              value: decision_making
+            artifacts:
+            - name: matching_pairs
+              from: '{{tasks.calculating-similarity.outputs.artifacts.matching_pairs}}'
 
         #- name: evaluation
         #  dependencies: [pipeline-init]

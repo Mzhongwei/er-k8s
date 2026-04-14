@@ -1,0 +1,12 @@
+FROM kevinoulai/erctl:min
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/decision_making.py /app/pipeline/decision_making.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/evaluation.py /app/pipeline/evaluation.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/similarity_graph.py /app/models/similarity_graph.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/embedding_model.py /app/models/embedding_model.py

@@ -18,7 +18,7 @@ CG_FEATURE_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions
 FEATURE_INDEX_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/featureindex_candidate.py"
 GRAPH_RANDOMWALK_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/graph_randomwalk.py"
 EMBEDDING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/embedding_calculating.py"
-
+DECISION_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/decision_evaluation.py"
 CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml"
 
 require_cmd() {
@@ -54,4 +54,5 @@ create_or_update_configmap "eaer-cg-feature-distribution" "cg_feature_distributi
 create_or_update_configmap "eaer-feature-index" "featureindex_candidate.py" "$FEATURE_INDEX_SCRIPT"
 create_or_update_configmap "eaer-graph-distribution" "graph_distribution.py" "$GRAPH_RANDOMWALK_SCRIPT"
 create_or_update_configmap "eaer-embedding-calculating" "embedding_calculating.py" "$EMBEDDING_SCRIPT"
+create_or_update_configmap "eaer-decision-evaluation" "decision_evaluation.py" "$DECISION_EVALUATION_SCRIPT"
 kubectl -n argo create configmap er-pipeline-config   --from-file=config.yaml=${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml   --dry-run=client -o yaml | kubectl -n argo apply -f -
