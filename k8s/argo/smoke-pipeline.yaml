@@ -234,7 +234,30 @@ spec:
         command: [sh, -c]
         args:
         - |
-          /app/scripts/extract-config-mode.sh '{{inputs.parameters.fallback_mode}}' > /tmp/mode
+          set -eu
+          FALLBACK_MODE='{{inputs.parameters.fallback_mode}}'
+          CONFIG_SRC=""
+
+          for p in /app/config/examples/config-embedding.yaml /app/examples/config.yaml; do
+            if [ -f "$p" ]; then
+              CONFIG_SRC="$p"
+              break
+            fi
+          done
+
+          if [ -n "$CONFIG_SRC" ]; then
+            cp "$CONFIG_SRC" /tmp/config.yaml
+          else
+            printf 'mode: "%s"\n' "$FALLBACK_MODE" > /tmp/config.yaml
+          fi
+
+          MODE_FROM_CONFIG="$(sed -n 's/^mode:[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' /tmp/config.yaml | head -n1 | tr -d '\r')"
+
+          if [ -z "$MODE_FROM_CONFIG" ]; then
+            MODE_FROM_CONFIG="$FALLBACK_MODE"
+          fi
+
+          printf '%s' "$MODE_FROM_CONFIG" > /tmp/mode
         volumeMounts:
           - name: pipeline-config
             mountPath: /app/config/examples/config-bert.yaml
