@@ -7,6 +7,11 @@ metadata:
 spec:
   imagePullSecrets:
   - name: regcred
+  podGC:
+    strategy: OnWorkflowCompletion
+  ttlStrategy:
+    secondsAfterSuccess: 3600
+    secondsAfterFailure: 86400
   artifactGC:
     strategy: OnWorkflowCompletion
   arguments:
