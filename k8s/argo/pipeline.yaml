@@ -73,15 +73,18 @@ spec:
       inputs:
         parameters:
         - name: processed_data
+        - name: mode
         - name: function
       container:
         name: main
         image: kevinoulai/erctl:graph
         imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/distributions/graph_distribution.py]
+        command: [/opt/venv/bin/python, /app/distributions/graph_randomwalk.py]
         args:
         - --processed_data
         - '{{inputs.parameters.processed_data}}'
+        - --mode
+        - '{{inputs.parameters.mode}}'
         - --function
         - '{{inputs.parameters.function}}'
         - --output
@@ -91,8 +94,8 @@ spec:
           mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
         - name: graph-distribution
-          mountPath: /app/distributions/graph_distribution.py
-          subPath: graph_distribution.py
+          mountPath: /app/distributions/graph_randomwalk.py
+          subPath: graph_randomwalk.py
         - name: pipeline-graph-cache
           mountPath: /app/cache
       volumes:
@@ -120,12 +123,15 @@ spec:
           path: /tmp/candidate_pairs.json
           optional: true
         parameters:
+        - name: mode
         - name: function
       container:
         name: main
         image: kevinoulai/erctl:embedding
         command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
         args:
+        - --mode
+        - '{{inputs.parameters.mode}}'
         - --sequences
         - /tmp/sequences.json
         - --candidate_pairs
@@ -195,6 +201,7 @@ spec:
       inputs:
         parameters:
         - name: cg_feature
+        - name: mode
         - name: function
       container:
         name: main
@@ -204,6 +211,8 @@ spec:
         args:
         - --cg_feature
         - '{{inputs.parameters.cg_feature}}'
+        - --mode
+        - '{{inputs.parameters.mode}}'
         - --function
         - '{{inputs.parameters.function}}'
         - --output
@@ -235,6 +244,7 @@ spec:
     - name: prediction
       inputs:
         parameters:
+        - name: mode
         - name: function
         artifacts:
         - name: matching_pairs
@@ -245,6 +255,8 @@ spec:
         image: kevinoulai/erctl:prediction
         command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
         args:
+        - --mode
+        - '{{inputs.parameters.mode}}'
         - --matching_pairs
         - '{{inputs.artifacts.matching_pairs.path}}'
         - --function
@@ -425,6 +437,8 @@ spec:
             parameters:
             - name: processed_data
               value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
               value: graph_construction
 
@@ -436,6 +450,8 @@ spec:
             parameters:
             - name: processed_data
               value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
               value: random_walk
 
@@ -448,6 +464,8 @@ spec:
             - name: sequences
               from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
             parameters:
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
               value: embedding_training
 
@@ -468,6 +486,8 @@ spec:
             parameters:
             - name: cg_feature
               value: '{{tasks.cg-feature-extraction.outputs.parameters.cg_feature}}'
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
               value: feature_index_construction
 
@@ -479,6 +499,8 @@ spec:
             parameters:
             - name: cg_feature
               value: '{{tasks.cg-feature-extraction.outputs.parameters.cg_feature}}'
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
               value: candidate_enumeration
 
@@ -491,6 +513,8 @@ spec:
             - name: candidate_pairs
               from: '{{tasks.candidate-enumeration.outputs.artifacts.candidate_pairs}}'
             parameters:
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
               value: calculating_similarity
 
@@ -500,6 +524,8 @@ spec:
           template: prediction
           arguments:
             parameters:
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
               value: decision_making
             artifacts:
@@ -512,6 +538,8 @@ spec:
           template: prediction
           arguments:
             parameters:
+            - name: mode
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
               value: evaluation
 
