@@ -416,7 +416,7 @@ spec:
 
         - name: normalization
           dependencies: [pipeline-init]
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*')"
           template: normalization
           arguments:
             parameters:
@@ -543,35 +543,80 @@ spec:
             - name: function
               value: evaluation
 
-        - name: bert-training
+        - name: bert-normalization-training
+          dependencies: [pipeline-init]
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
-          template: bert
-          dependencies: [normalization]
+          template: normalization
           arguments:
             parameters:
-            - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: training
 
+        - name: bert-training
+          dependencies: [bert-normalization-training]
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
+          template: bert
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.bert-normalization-training.outputs.parameters.processed_data}}'
+            - name: mode
+              value: training
+
+        - name: bert-normalization-inference
+          dependencies: [pipeline-init]
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
+            - name: mode
+              value: bert-inference
+
         - name: bert-inference
+          dependencies: [bert-normalization-inference]
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: bert
-          dependencies: [normalization]
           arguments:
             parameters:
             - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+              value: '{{tasks.bert-normalization-inference.outputs.parameters.processed_data}}'
             - name: mode
-              value: inference
+              value: bert-inference
+
+        - name: bert-normalization-b-evaluation
+          dependencies: [pipeline-init]
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
+            - name: mode
+              value: bert-b_evaluation
 
         - name: bert-evaluation
+          dependencies: [bert-normalization-b-evaluation]
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
           template: bert
-          dependencies: [normalization]
           arguments:
             parameters:
             - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+              value: '{{tasks.bert-normalization-b-evaluation.outputs.parameters.processed_data}}'
             - name: mode
               value: b_evaluation
