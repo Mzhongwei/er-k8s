@@ -571,7 +571,7 @@ spec:
 
         - name: bert-normalization-inference
           depends: "pipeline-init.Succeeded && (bert-training.Succeeded || bert-training.Omitted)"
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' == 'bert-inference' || '{{tasks.pipeline-init.outputs.parameters.mode}}' == 'bert-training-inference'"
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: normalization
           arguments:
             parameters:
@@ -586,7 +586,7 @@ spec:
 
         - name: bert-inference
           depends: bert-normalization-inference.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' == 'bert-inference' || '{{tasks.pipeline-init.outputs.parameters.mode}}' == 'bert-training-inference'"
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: bert
           arguments:
             parameters:
