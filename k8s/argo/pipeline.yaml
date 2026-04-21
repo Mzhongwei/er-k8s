@@ -97,7 +97,7 @@ spec:
           mountPath: /app/distributions/graph_randomwalk.py
           subPath: graph_randomwalk.py
         - name: pipeline-graph-cache
-          mountPath: /app/cache
+          mountPath: /app/data
       volumes:
       - name: pipeline-config
         configMap:
@@ -148,7 +148,7 @@ spec:
           mountPath: /app/distributions/embedding_calculating.py
           subPath: embedding_calculating.py
         - name: pipeline-embedding-model-cache
-          mountPath: /app/cache
+          mountPath: /app/data
       volumes:
       - name: pipeline-config
         configMap:
@@ -225,7 +225,7 @@ spec:
           mountPath: /app/distributions/featureindex_candidate.py
           subPath: featureindex_candidate.py
         - name: pipeline-feature-index-cache
-          mountPath: /app/cache
+          mountPath: /app/data
       volumes:
       - name: pipeline-config
         configMap:
@@ -273,9 +273,9 @@ spec:
         - name: pipeline-bert-data
           mountPath: /app/Data_example
         #- name: pipeline-decision-evaluation-cache
-        #  mountPath: /app/cache
+        #  mountPath: /app/data
         - name: pipeline-embedding-model-cache
-          mountPath: /app/cache
+          mountPath: /app/data
       volumes:
       - name: pipeline-config
         configMap:
@@ -415,8 +415,8 @@ spec:
               value: '{{workflow.parameters.mode}}'
 
         - name: normalization
-          dependencies: [pipeline-init]
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
+          depends: pipeline-init.Succeeded
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*')"
           template: normalization
           arguments:
             parameters:
@@ -432,7 +432,7 @@ spec:
         - name: graph-construction
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
           template: graph
-          dependencies: [normalization]
+          depends: normalization.Succeeded
           arguments:
             parameters:
             - name: processed_data
@@ -445,7 +445,7 @@ spec:
         - name: random-walk
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
           template: graph
-          dependencies: [graph-construction]
+          depends: graph-construction.Succeeded
           arguments:
             parameters:
             - name: processed_data
@@ -458,7 +458,7 @@ spec:
         - name: embedding-training
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
           template: embedding
-          dependencies: [random-walk]
+          depends: random-walk.Succeeded
           arguments:
             artifacts:
             - name: sequences
@@ -472,7 +472,7 @@ spec:
         - name: cg-feature-extraction
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
           template: cg-feature-extraction
-          dependencies: [normalization]
+          depends: normalization.Succeeded
           arguments:
             parameters:
             - name: processed_data
@@ -481,7 +481,7 @@ spec:
         - name: feature-index-construction
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
           template: feature-index
-          dependencies: [cg-feature-extraction]
+          depends: cg-feature-extraction.Succeeded
           arguments:
             parameters:
             - name: cg_feature
@@ -494,7 +494,7 @@ spec:
         - name: candidate-enumeration
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: feature-index
-          dependencies: [feature-index-construction]
+          depends: feature-index-construction.Succeeded
           arguments:
             parameters:
             - name: cg_feature
@@ -507,7 +507,7 @@ spec:
         - name: calculating-similarity
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: embedding
-          dependencies: [candidate-enumeration, embedding-training]
+          depends: candidate-enumeration.Succeeded && embedding-training.Succeeded
           arguments:
             artifacts:
             - name: candidate_pairs
@@ -519,7 +519,7 @@ spec:
               value: calculating_similarity
 
         - name: decision-making
-          dependencies: [calculating-similarity]
+          depends: calculating-similarity.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: prediction
           arguments:
@@ -533,7 +533,7 @@ spec:
               from: '{{tasks.calculating-similarity.outputs.artifacts.matching_pairs}}'
 
         - name: evaluation
-          dependencies: [decision-making]
+          depends: decision-making.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
           template: prediction
           arguments:
@@ -543,35 +543,80 @@ spec:
             - name: function
               value: evaluation
 
-        - name: bert-training
+        - name: bert-normalization-training
+          depends: pipeline-init.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
-          template: bert
-          dependencies: [normalization]
+          template: normalization
           arguments:
             parameters:
-            - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: training
 
+        - name: bert-training
+          depends: bert-normalization-training.Succeeded
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
+          template: bert
+          arguments:
+            parameters:
+            - name: processed_data
+              value: '{{tasks.bert-normalization-training.outputs.parameters.processed_data}}'
+            - name: mode
+              value: training
+
+        - name: bert-normalization-inference
+          depends: "pipeline-init.Succeeded && (bert-training.Succeeded || bert-training.Omitted)"
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
+            - name: mode
+              value: bert-inference
+
         - name: bert-inference
+          depends: bert-normalization-inference.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: bert
-          dependencies: [normalization]
           arguments:
             parameters:
             - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+              value: '{{tasks.bert-normalization-inference.outputs.parameters.processed_data}}'
             - name: mode
-              value: inference
+              value: bert-inference
+
+        - name: bert-normalization-b-evaluation
+          depends: "pipeline-init.Succeeded && (bert-inference.Succeeded || bert-inference.Omitted) && (bert-training.Succeeded || bert-training.Omitted)"
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
+            - name: mode
+              value: bert-b_evaluation
 
         - name: bert-evaluation
+          depends: bert-normalization-b-evaluation.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
           template: bert
-          dependencies: [normalization]
           arguments:
             parameters:
             - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
+              value: '{{tasks.bert-normalization-b-evaluation.outputs.parameters.processed_data}}'
             - name: mode
               value: b_evaluation
