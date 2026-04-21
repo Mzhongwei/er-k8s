@@ -97,7 +97,7 @@ spec:
           mountPath: /app/distributions/graph_randomwalk.py
           subPath: graph_randomwalk.py
         - name: pipeline-graph-cache
-          mountPath: /app/cache
+          mountPath: /app/data
       volumes:
       - name: pipeline-config
         configMap:
@@ -148,7 +148,7 @@ spec:
           mountPath: /app/distributions/embedding_calculating.py
           subPath: embedding_calculating.py
         - name: pipeline-embedding-model-cache
-          mountPath: /app/cache
+          mountPath: /app/data
       volumes:
       - name: pipeline-config
         configMap:
@@ -225,7 +225,7 @@ spec:
           mountPath: /app/distributions/featureindex_candidate.py
           subPath: featureindex_candidate.py
         - name: pipeline-feature-index-cache
-          mountPath: /app/cache
+          mountPath: /app/data
       volumes:
       - name: pipeline-config
         configMap:
@@ -273,9 +273,9 @@ spec:
         - name: pipeline-bert-data
           mountPath: /app/Data_example
         #- name: pipeline-decision-evaluation-cache
-        #  mountPath: /app/cache
+        #  mountPath: /app/data
         - name: pipeline-embedding-model-cache
-          mountPath: /app/cache
+          mountPath: /app/data
       volumes:
       - name: pipeline-config
         configMap:

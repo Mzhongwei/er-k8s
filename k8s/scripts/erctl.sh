@@ -111,12 +111,17 @@ Create or update the ConfigMaps that provide the distribution Python scripts.
 EOF
                     exit 0
                     ;;
+                embedding|bert)
+                    run_script "configmaps.sh" "$1"
+                    exit 0
+                    ;;
                 *)
                     echo "Unknown option for configmaps: $1"
                     echo "Use '$0 help' for usage information."
                     exit 1
                     ;;
             esac
+            shift
         done
 
         run_script "configmaps.sh"

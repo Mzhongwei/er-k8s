@@ -7,6 +7,26 @@ fi
 
 set -euo pipefail
 
+# Get arguments to know if we get bert or embedding config. Default bert.
+CONFIG_TYPE="bert"
+if [ $# -gt 0 ]; then
+    case "$1" in
+        embedding|bert)
+            CONFIG_TYPE="$1"
+            export CONFIG_TYPE
+            ;;
+        *)
+            echo "Unknown option for configmaps: $1"
+            echo "Use '$0 help' for usage information."
+            exit 1
+            ;;
+    esac
+fi
+if [[ "$CONFIG_TYPE" != "bert" && "$CONFIG_TYPE" != "embedding" ]]; then
+    echo "Invalid config type: $CONFIG_TYPE. Must be 'bert' or 'embedding'."
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
@@ -19,7 +39,7 @@ FEATURE_INDEX_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributi
 GRAPH_RANDOMWALK_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/graph_randomwalk.py"
 EMBEDDING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/embedding_calculating.py"
 DECISION_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/decision_evaluation.py"
-CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-bert.yaml"
+CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-${CONFIG_TYPE}.yaml"
 
 require_cmd() {
     local cmd="$1"
