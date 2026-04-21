@@ -253,6 +253,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:prediction
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
         args:
         - --mode
