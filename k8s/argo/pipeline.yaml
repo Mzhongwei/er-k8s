@@ -10,8 +10,8 @@ spec:
     strategy: OnWorkflowCompletion
     deleteDelayDuration: 30m
   ttlStrategy:
-    secondsAfterSuccess: 3600
-    secondsAfterFailure: 86400
+    secondsAfterSuccess: 3600 # 1 hour
+    secondsAfterFailure: 86400 # 1 day
   artifactGC:
     strategy: OnWorkflowCompletion
   arguments:
@@ -36,6 +36,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:normalization
+        imagePullPolicy: IfNotPresent
         command: [sh, -c]
         args:
         - |
@@ -63,25 +64,26 @@ spec:
         persistentVolumeClaim:
           claimName: pipeline-bert-data-claim
       outputs:
-        parameters:
+        artifacts:
         - name: processed_data
-          valueFrom:
-            path: /tmp/processed_data
+          path: /tmp/processed_data
 
     - name: graph
       inputs:
-        parameters:
+        artifacts:
         - name: processed_data
+          path: /tmp/processed_data
+        parameters:
         - name: mode
         - name: function
       container:
         name: main
         image: kevinoulai/erctl:graph
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/graph_randomwalk.py]
         args:
         - --processed_data
-        - '{{inputs.parameters.processed_data}}'
+        - /tmp/processed_data
         - --mode
         - '{{inputs.parameters.mode}}'
         - --function
@@ -127,6 +129,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:embedding
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
         args:
         - --mode
@@ -165,15 +168,17 @@ spec:
 
     - name: cg-feature-extraction
       inputs:
-        parameters:
+        artifacts:
         - name: processed_data
+          path: /tmp/processed_data
       container:
         name: main
         image: kevinoulai/erctl:cgfeature
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/cg_feature_distribution.py]
         args:
         - --processed_data
-        - '{{inputs.parameters.processed_data}}'
+        - /tmp/processed_data
         - --output
         - /tmp/cg_feature
         volumeMounts:
@@ -191,25 +196,26 @@ spec:
         configMap:
           name: eaer-cg-feature-distribution
       outputs:
-        parameters:
+        artifacts:
         - name: cg_feature
-          valueFrom:
-            path: /tmp/cg_feature
+          path: /tmp/cg_feature
 
     - name: feature-index
       inputs:
-        parameters:
+        artifacts:
         - name: cg_feature
+          path: /tmp/cg_feature
+        parameters:
         - name: mode
         - name: function
       container:
         name: main
         image: kevinoulai/erctl:featureindex
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/featureindex_candidate.py]
         args:
         - --cg_feature
-        - '{{inputs.parameters.cg_feature}}'
+        - /tmp/cg_feature
         - --mode
         - '{{inputs.parameters.mode}}'
         - --function
@@ -252,7 +258,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:prediction
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
         args:
         - --mode
@@ -296,19 +302,21 @@ spec:
 
     - name: bert
       inputs:
+        artifacts:
+        - name: processed_data
+          path: /tmp/processed_data
         parameters:
         - name: mode
-        - name: processed_data
       container:
         name: main
         image: kevinoulai/erctl:bert
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/bert_distribution.py]
         args:
         - --mode
         - '{{inputs.parameters.mode}}'
         - --processed_data
-        - '{{inputs.parameters.processed_data}}'
+        - /tmp/processed_data
         - --output
         - /tmp/bert_output
         volumeMounts:
@@ -354,7 +362,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:config
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: [sh, -c]
         args:
         - |
@@ -428,9 +436,10 @@ spec:
           template: graph
           depends: normalization-embedding-training.Succeeded
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.normalization-embedding-training.outputs.parameters.processed_data}}'
+              from: '{{tasks.normalization-embedding-training.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
@@ -440,9 +449,10 @@ spec:
           template: graph
           depends: graph-construction-embedding-training.Succeeded
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.normalization-embedding-training.outputs.parameters.processed_data}}'
+              from: '{{tasks.normalization-embedding-training.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
@@ -465,17 +475,18 @@ spec:
           template: cg-feature-extraction
           depends: normalization-embedding-training.Succeeded
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.normalization-embedding-training.outputs.parameters.processed_data}}'
+              from: '{{tasks.normalization-embedding-training.outputs.artifacts.processed_data}}'
 
         - name: feature-index-construction
           template: feature-index
           depends: cg-feature-extraction-embedding-training.Succeeded
           arguments:
-            parameters:
+            artifacts:
             - name: cg_feature
-              value: '{{tasks.cg-feature-extraction-embedding-training.outputs.parameters.cg_feature}}'
+              from: '{{tasks.cg-feature-extraction-embedding-training.outputs.artifacts.cg_feature}}'
+            parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
@@ -500,9 +511,10 @@ spec:
           template: graph
           depends: normalization-embedding-inference.Succeeded
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.normalization-embedding-inference.outputs.parameters.processed_data}}'
+              from: '{{tasks.normalization-embedding-inference.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
@@ -512,9 +524,10 @@ spec:
           template: graph
           depends: graph-construction-embedding-inference.Succeeded
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.normalization-embedding-inference.outputs.parameters.processed_data}}'
+              from: '{{tasks.normalization-embedding-inference.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
@@ -537,17 +550,18 @@ spec:
           template: cg-feature-extraction
           depends: normalization-embedding-inference.Succeeded
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.normalization-embedding-inference.outputs.parameters.processed_data}}'
+              from: '{{tasks.normalization-embedding-inference.outputs.artifacts.processed_data}}'
 
         - name: candidate-enumeration
           template: feature-index
           depends: cg-feature-extraction-embedding-inference.Succeeded
           arguments:
-            parameters:
+            artifacts:
             - name: cg_feature
-              value: '{{tasks.cg-feature-extraction-embedding-inference.outputs.parameters.cg_feature}}'
+              from: '{{tasks.cg-feature-extraction-embedding-inference.outputs.artifacts.cg_feature}}'
+            parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
             - name: function
@@ -609,9 +623,10 @@ spec:
           depends: bert-normalization-training.Succeeded
           template: bert
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.bert-normalization-training.outputs.parameters.processed_data}}'
+              from: '{{tasks.bert-normalization-training.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: training
 
@@ -634,9 +649,10 @@ spec:
           depends: bert-normalization-inference.Succeeded
           template: bert
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.bert-normalization-inference.outputs.parameters.processed_data}}'
+              from: '{{tasks.bert-normalization-inference.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: bert-inference
 
@@ -659,8 +675,9 @@ spec:
           depends: bert-normalization-b-evaluation.Succeeded
           template: bert
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.bert-normalization-b-evaluation.outputs.parameters.processed_data}}'
+              from: '{{tasks.bert-normalization-b-evaluation.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: b_evaluation
