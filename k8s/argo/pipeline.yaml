@@ -407,6 +407,212 @@ spec:
         - name: config
           path: /tmp/config.yaml
 
+    - name: embedding-training-dag
+      inputs:
+        parameters:
+        - name: mode
+      dag:
+        tasks:
+        - name: normalization
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+        
+        - name: graph-construction
+          template: graph
+          depends: normalization.Succeeded
+          arguments:
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: graph_construction
+
+        - name: random-walk
+          template: graph
+          depends: graph-construction.Succeeded
+          arguments:
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: random_walk
+
+        - name: embedding-training
+          template: embedding
+          depends: random-walk.Succeeded
+          arguments:
+            artifacts:
+            - name: sequences
+              from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: embedding_training
+
+        - name: cg-feature-extraction
+          template: cg-feature-extraction
+          depends: normalization.Succeeded
+          arguments:
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+
+        - name: feature-index-construction
+          template: feature-index
+          depends: cg-feature-extraction.Succeeded
+          arguments:
+            artifacts:
+            - name: cg_feature
+              from: '{{tasks.cg-feature-extraction.outputs.artifacts.cg_feature}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: feature_index_construction
+
+        - name: evaluation
+          depends: feature-index-construction.Succeeded && embedding-training.Succeeded
+          when: "'{{inputs.parameters.mode}}' =~ '.*evaluation.*' && !('{{inputs.parameters.mode}}' =~ '.*inference.*')"
+          template: prediction
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: evaluation
+      
+    - name: embedding-inference-dag
+      inputs:
+        parameters:
+        - name: mode
+      dag:
+        tasks:
+        - name: normalization
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+        
+        - name: graph-construction
+          template: graph
+          depends: normalization.Succeeded
+          arguments:
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: graph_construction
+
+        - name: random-walk
+          template: graph
+          depends: graph-construction.Succeeded
+          arguments:
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: random_walk
+
+        - name: embedding-training
+          template: embedding
+          depends: random-walk.Succeeded
+          arguments:
+            artifacts:
+            - name: sequences
+              from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: embedding_training
+
+        - name: cg-feature-extraction
+          template: cg-feature-extraction
+          depends: normalization.Succeeded
+          arguments:
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+
+        - name: candidate-enumeration
+          template: feature-index
+          depends: cg-feature-extraction.Succeeded
+          arguments:
+            artifacts:
+            - name: cg_feature
+              from: '{{tasks.cg-feature-extraction.outputs.artifacts.cg_feature}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: candidate_enumeration
+
+        - name: calculating-similarity
+          template: embedding
+          depends: candidate-enumeration.Succeeded && embedding-training.Succeeded
+          arguments:
+            artifacts:
+            - name: candidate_pairs
+              from: '{{tasks.candidate-enumeration.outputs.artifacts.candidate_pairs}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: calculating_similarity
+
+        - name: decision-making
+          depends: calculating-similarity.Succeeded
+          template: prediction
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: decision_making
+            artifacts:
+            - name: matching_pairs
+              from: '{{tasks.calculating-similarity.outputs.artifacts.matching_pairs}}'
+
+        - name: evaluation
+          depends: decision-making.Succeeded
+          when: "'{{inputs.parameters.mode}}' =~ '.*evaluation.*'"
+          template: prediction
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: evaluation
+
     - name: main
       dag:
         tasks:
@@ -417,184 +623,26 @@ spec:
             - name: fallback_mode
               value: '{{workflow.parameters.mode}}'
 
-        - name: normalization-embedding-training
+        - name: embedding-training
           depends: pipeline-init.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
-          template: normalization
+          template: embedding-training-dag
           arguments:
             parameters:
-            - name: raw_data
-              value: '{{workflow.parameters.raw_data}}'
-            - name: data_source_A
-              value: '{{workflow.parameters.data_source_A}}'
-            - name: data_source_B
-              value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
 
-        - name: graph-construction-embedding-training
-          template: graph
-          depends: normalization-embedding-training.Succeeded
-          arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization-embedding-training.outputs.artifacts.processed_data}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: graph_construction
-
-        - name: random-walk-embedding-training
-          template: graph
-          depends: graph-construction-embedding-training.Succeeded
-          arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization-embedding-training.outputs.artifacts.processed_data}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: random_walk
-
-        - name: embedding-training-embedding-training
-          template: embedding
-          depends: random-walk-embedding-training.Succeeded
-          arguments:
-            artifacts:
-            - name: sequences
-              from: '{{tasks.random-walk-embedding-training.outputs.artifacts.sequences}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: embedding_training
-
-        - name: cg-feature-extraction-embedding-training
-          template: cg-feature-extraction
-          depends: normalization-embedding-training.Succeeded
-          arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization-embedding-training.outputs.artifacts.processed_data}}'
-
-        - name: feature-index-construction
-          template: feature-index
-          depends: cg-feature-extraction-embedding-training.Succeeded
-          arguments:
-            artifacts:
-            - name: cg_feature
-              from: '{{tasks.cg-feature-extraction-embedding-training.outputs.artifacts.cg_feature}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: feature_index_construction
-
-        - name: normalization-embedding-inference
-          depends: pipeline-init.Succeeded && ( feature-index-construction.Succeeded || feature-index-construction.Omitted ) && ( embedding-training-embedding-training.Succeeded || embedding-training-embedding-training.Omitted )
+        - name: embedding-inference
+          depends: pipeline-init.Succeeded && (embedding-training.Succeeded || embedding-training.Skipped)
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: normalization
-          arguments:
-            parameters:
-            - name: raw_data
-              value: '{{workflow.parameters.raw_data}}'
-            - name: data_source_A
-              value: '{{workflow.parameters.data_source_A}}'
-            - name: data_source_B
-              value: '{{workflow.parameters.data_source_B}}'
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-
-        - name: graph-construction-embedding-inference
-          template: graph
-          depends: normalization-embedding-inference.Succeeded
-          arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization-embedding-inference.outputs.artifacts.processed_data}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: graph_construction
-
-        - name: random-walk-embedding-inference
-          template: graph
-          depends: graph-construction-embedding-inference.Succeeded
-          arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization-embedding-inference.outputs.artifacts.processed_data}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: random_walk
-
-        - name: embedding-training-embedding-inference
-          template: embedding
-          depends: random-walk-embedding-inference.Succeeded
-          arguments:
-            artifacts:
-            - name: sequences
-              from: '{{tasks.random-walk-embedding-inference.outputs.artifacts.sequences}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: embedding_training
-
-        - name: cg-feature-extraction-embedding-inference
-          template: cg-feature-extraction
-          depends: normalization-embedding-inference.Succeeded
-          arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization-embedding-inference.outputs.artifacts.processed_data}}'
-
-        - name: candidate-enumeration
-          template: feature-index
-          depends: cg-feature-extraction-embedding-inference.Succeeded
-          arguments:
-            artifacts:
-            - name: cg_feature
-              from: '{{tasks.cg-feature-extraction-embedding-inference.outputs.artifacts.cg_feature}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: candidate_enumeration
-
-        - name: calculating-similarity
-          template: embedding
-          depends: candidate-enumeration.Succeeded && embedding-training-embedding-inference.Succeeded
-          arguments:
-            artifacts:
-            - name: candidate_pairs
-              from: '{{tasks.candidate-enumeration.outputs.artifacts.candidate_pairs}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: calculating_similarity
-
-        - name: decision-making
-          depends: calculating-similarity.Succeeded
-          template: prediction
+          template: embedding-inference-dag
           arguments:
             parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: decision_making
-            artifacts:
-            - name: matching_pairs
-              from: '{{tasks.calculating-similarity.outputs.artifacts.matching_pairs}}'
 
         - name: evaluation
-          depends: pipeline-init.Succeeded && ( decision-making.Succeeded || decision-making.Omitted ) && ( feature-index-construction.Succeeded || feature-index-construction.Omitted ) && ( embedding-training-embedding-training.Succeeded || embedding-training-embedding-training.Omitted )
+          depends: pipeline-init.Succeeded && embedding-training.Skipped && embedding-inference.Skipped
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
           template: prediction
           arguments:
