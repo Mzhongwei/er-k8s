@@ -5,18 +5,18 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-COPY code/Energy-Aware-Entity-Resolution/requirements-min.txt /app/requirements.txt
+COPY ./code/Energy-Aware-Entity-Resolution/requirements-kafka.txt /app/requirements.txt
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         python3-dev \
+        tar \
     && python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
     && /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt \
-    && /opt/venv/bin/pip install --no-cache-dir kafka-python \
-    && /opt/venv/bin/pip install --no-cache-dir pylint \
     && rm -rf /var/lib/apt/lists/* /root/.cache/pip
+
 
 FROM python:3.10-slim
 
@@ -30,4 +30,3 @@ WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 COPY ./code/Energy-Aware-Entity-Resolution/utils /app/utils
-COPY ./code/Energy-Aware-Entity-Resolution/config /app/config

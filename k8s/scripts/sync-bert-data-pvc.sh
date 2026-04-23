@@ -11,13 +11,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 NAMESPACE="${EAER_DATA_NAMESPACE:-argo}"
-PVC_NAME="${EAER_BERT_DATA_PVC:-pipeline-bert-data-claim}"
+PVC_NAME="${EAER_BERT_DATA_PVC:-pipeline-data-claim}"
 LOCAL_BERT_DATA_DIR="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/bert"
 GROUND_TRUTH_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-matches.txt"
 FODORS_TABLE_A_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableA.csv"
 FODORS_TABLE_B_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableB.csv"
 PVC_MANIFEST="${ROOT_DIR}/k8s/argo/pvc-manifests/pvc-bert-data.yaml"
-SYNC_POD="bert-data-sync-$$"
+SYNC_POD="data-sync-$$"
 
 require_cmd() {
     local cmd="$1"

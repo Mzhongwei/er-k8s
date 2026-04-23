@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-server
+spec:
+  selector:
+    app.kubernetes.io/name: kafka-server
+  ports:
+  - port: 9092
+    targetPort: 9092
+

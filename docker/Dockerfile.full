@@ -1,4 +1,4 @@
-FROM erctl:min AS builder
+FROM kevinoulai/erctl:min AS builder
 
 ENV PIP_NO_CACHE_DIR=1
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -9,7 +9,7 @@ COPY code/Energy-Aware-Entity-Resolution/requirements-full.txt /app/requirements
 
 RUN /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt 
 
-FROM erctl:min
+FROM kevinoulai/erctl:min
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1

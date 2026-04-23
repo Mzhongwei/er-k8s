@@ -33,7 +33,7 @@ build() {
     dockerfiles=("${IMAGES_DIR}"/Dockerfile.*)
     for dockerfile in "${dockerfiles[@]}"; do
         image_name=$(basename "$dockerfile" | cut -d. -f2)
-        if [[ "$image_name" == "min" || "$image_name" == "full" ]]; then
+        if [[ "$image_name" == "min" || "$image_name" == "full" || "$image_name" == *"kafka"* ]]; then
             continue
         fi
         ${PREFIX} docker build -t "kevinoulai/erctl:${image_name}" -f "$dockerfile" "${IMAGES_DIR}/.."
@@ -42,7 +42,7 @@ build() {
 
 push() {
     echo "Pushing Docker images to Docker Hub..."
-    images=($(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^kevinoulai/erctl:"))
+    images=($($PREFIX docker images --format "{{.Repository}}:{{.Tag}}" | grep "^kevinoulai/erctl:"))
     for image in "${images[@]}"; do
         ${PREFIX} docker push "$image"
         echo "Pushed $image to Docker Hub"

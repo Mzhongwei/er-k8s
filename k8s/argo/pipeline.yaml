@@ -36,7 +36,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:normalization
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [sh, -c]
         args:
         - |
@@ -51,7 +51,7 @@ spec:
         - name: normalization-distribution
           mountPath: /app/distributions/normalization_distribution.py
           subPath: normalization_distribution.py
-        - name: pipeline-bert-data
+        - name: pipeline-data
           mountPath: /app/Data_example
       volumes:
       - name: pipeline-config
@@ -60,9 +60,9 @@ spec:
       - name: normalization-distribution
         configMap:
           name: eaer-normalization-distribution
-      - name: pipeline-bert-data
+      - name: pipeline-data
         persistentVolumeClaim:
-          claimName: pipeline-bert-data-claim
+          claimName: pipeline-data-claim
       outputs:
         artifacts:
         - name: processed_data
@@ -79,7 +79,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:graph
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/graph_randomwalk.py]
         args:
         - --processed_data
@@ -129,7 +129,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:embedding
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
         args:
         - --mode
@@ -174,7 +174,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:cgfeature
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/cg_feature_distribution.py]
         args:
         - --processed_data
@@ -211,7 +211,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:featureindex
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/featureindex_candidate.py]
         args:
         - --cg_feature
@@ -258,7 +258,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:prediction
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
         args:
         - --mode
@@ -276,7 +276,7 @@ spec:
         - name: decision-evaluation-distribution
           mountPath: /app/distributions/decision_evaluation.py
           subPath: decision_evaluation.py
-        - name: pipeline-bert-data
+        - name: pipeline-data
           mountPath: /app/Data_example
         - name: pipeline-embedding-model-cache
           mountPath: /app/data
@@ -287,9 +287,9 @@ spec:
       - name: decision-evaluation-distribution
         configMap:
           name: eaer-decision-evaluation
-      - name: pipeline-bert-data
+      - name: pipeline-data
         persistentVolumeClaim:
-          claimName: pipeline-bert-data-claim
+          claimName: pipeline-data-claim
       - name: pipeline-embedding-model-cache
         persistentVolumeClaim:
           claimName: pipeline-embedding-model-cache-claim
@@ -310,7 +310,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:bert
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/bert_distribution.py]
         args:
         - --mode
@@ -331,7 +331,7 @@ spec:
         - name: bert-training
           mountPath: /app/pipeline/bert_training.py
           subPath: bert_training.py
-        - name: pipeline-bert-data
+        - name: pipeline-data
           mountPath: /app/Data_example
       volumes:
       - name: pipeline-config
@@ -346,9 +346,9 @@ spec:
       - name: bert-training
         configMap:
           name: eaer-bert-training
-      - name: pipeline-bert-data
+      - name: pipeline-data
         persistentVolumeClaim:
-          claimName: pipeline-bert-data-claim
+          claimName: pipeline-data-claim
       outputs:
         parameters:
         - name: bert_output
@@ -362,7 +362,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:config
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [sh, -c]
         args:
         - |
@@ -406,6 +406,64 @@ spec:
         artifacts:
         - name: config
           path: /tmp/config.yaml
+      
+    - name: kafka-producer
+      daemon: true
+      container:
+        name: main
+        image: kevinoulai/kafka:producer
+        imagePullPolicy: Always
+        command: [python, /app/producer.py]
+        ports:
+        - containerPort: 9092
+        volumeMounts:
+          - name: pipeline-kafka-producer
+            mountPath: /app/producer.py
+            subPath: producer.py
+          - name: pipeline-config
+            mountPath: /app/config/examples/config-embedding.yaml
+            subPath: config.yaml
+          - name: pipeline-data
+            mountPath: /app/Data_example
+      volumes:
+      - name: pipeline-kafka-producer
+        configMap:
+          name: eaer-kafka-producer
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: pipeline-data
+        persistentVolumeClaim:
+          claimName: pipeline-data-claim
+
+    - name: kafka-consumer
+      daemon: true
+      container:
+        name: main
+        image: kevinoulai/kafka:python
+        imagePullPolicy: Always
+        command: [python, /app/consumer.py]
+        ports:
+        - containerPort: 9092
+        volumeMounts:
+          - name: pipeline-kafka-consumer
+            mountPath: /app/consumer.py
+            subPath: consumer.py
+          - name: pipeline-config
+            mountPath: /app/config/examples/config-embedding.yaml
+            subPath: config.yaml
+          - name: pipeline-data
+            mountPath: /app/Data_example
+      volumes:
+      - name: pipeline-kafka-consumer
+        configMap:
+          name: eaer-kafka-consumer
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: pipeline-data
+        persistentVolumeClaim:
+          claimName: pipeline-data-claim
 
     - name: embedding-training-dag
       inputs:
@@ -623,6 +681,15 @@ spec:
             - name: fallback_mode
               value: '{{workflow.parameters.mode}}'
 
+        - name: kafka-producer
+          template: kafka-producer
+          depends: pipeline-init.Succeeded && ( embedding-training.Succeeded || embedding-training.Skipped )
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+
+        - name: kafka-consumer
+          template: kafka-consumer
+          depends: pipeline-init.Succeeded && kafka-producer.Daemoned
+
         - name: embedding-training
           depends: pipeline-init.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
@@ -633,7 +700,7 @@ spec:
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
 
         - name: embedding-inference
-          depends: pipeline-init.Succeeded && (embedding-training.Succeeded || embedding-training.Skipped)
+          depends: kafka-consumer.Daemoned && (embedding-training.Succeeded || embedding-training.Skipped)
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: embedding-inference-dag
           arguments:

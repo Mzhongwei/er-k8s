@@ -1,0 +1,16 @@
+FROM kevinoulai/kafka:python
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		default-jdk-headless \
+		maven \
+	&& rm -rf /var/lib/apt/lists/*
+
+COPY code/Energy-Aware-Entity-Resolution/services /app/services
+
+WORKDIR /app/services/dataStreamSimulator
+
+# Resolve dependencies and build the Spring Boot jar at image build time.
+RUN mvn -B -ntp -DskipTests clean package
+
+WORKDIR /app

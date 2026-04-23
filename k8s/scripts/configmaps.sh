@@ -40,6 +40,8 @@ GRAPH_RANDOMWALK_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distrib
 EMBEDDING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/embedding_calculating.py"
 DECISION_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/decision_evaluation.py"
 CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-${CONFIG_TYPE}.yaml"
+KAFKA_PRODUCER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/services/producer.py"
+KAFKA_CONSUMER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/services/consumer.py"
 
 require_cmd() {
     local cmd="$1"
@@ -76,3 +78,5 @@ create_or_update_configmap "eaer-graph-distribution" "graph_randomwalk.py" "$GRA
 create_or_update_configmap "eaer-embedding-calculating" "embedding_calculating.py" "$EMBEDDING_SCRIPT"
 create_or_update_configmap "eaer-decision-evaluation" "decision_evaluation.py" "$DECISION_EVALUATION_SCRIPT"
 create_or_update_configmap "er-pipeline-config" "config.yaml" "$CONFIG_FILE"
+create_or_update_configmap "eaer-kafka-producer" "producer.py" "$KAFKA_PRODUCER_SCRIPT"
+create_or_update_configmap "eaer-kafka-consumer" "consumer.py" "$KAFKA_CONSUMER_SCRIPT"
