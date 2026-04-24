@@ -437,7 +437,7 @@ spec:
           claimName: pipeline-data-claim
 
     - name: kafka-consumer
-      daemon: true
+      serviceAccountName: argo
       container:
         name: main
         image: kevinoulai/kafka:python
@@ -454,6 +454,9 @@ spec:
             subPath: config.yaml
           - name: pipeline-data
             mountPath: /app/Data_example
+          - name: pipeline-argo-manifest
+            mountPath: /app/pipeline.yaml
+            subPath: pipeline.yaml
       volumes:
       - name: pipeline-kafka-consumer
         configMap:
@@ -464,6 +467,9 @@ spec:
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
+      - name: pipeline-argo-manifest
+        configMap:
+          name: eaer-argo-pipeline
 
     - name: embedding-training-dag
       inputs:
@@ -660,16 +666,16 @@ spec:
             - name: matching_pairs
               from: '{{tasks.calculating-similarity.outputs.artifacts.matching_pairs}}'
 
-        - name: evaluation
-          depends: decision-making.Succeeded
-          when: "'{{inputs.parameters.mode}}' =~ '.*evaluation.*'"
-          template: prediction
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: evaluation
+        #- name: evaluation
+        #  depends: decision-making.Succeeded
+        #  when: "'{{inputs.parameters.mode}}' =~ '.*evaluation.*'"
+        #  template: prediction
+        #  arguments:
+        #    parameters:
+        #    - name: mode
+        #      value: '{{inputs.parameters.mode}}'
+        #    - name: function
+        #      value: evaluation
 
     - name: main
       dag:
@@ -688,7 +694,7 @@ spec:
 
         - name: kafka-consumer
           template: kafka-consumer
-          depends: pipeline-init.Succeeded && kafka-producer.Daemoned
+          depends: kafka-producer.Daemoned
 
         - name: embedding-training
           depends: pipeline-init.Succeeded
@@ -699,18 +705,9 @@ spec:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
 
-        - name: embedding-inference
-          depends: kafka-consumer.Daemoned && (embedding-training.Succeeded || embedding-training.Skipped)
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: embedding-inference-dag
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-
         - name: evaluation
-          depends: pipeline-init.Succeeded && embedding-training.Skipped && embedding-inference.Skipped
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
+          depends: pipeline-init.Succeeded && embedding-training.Skipped && (kafka-consumer.Succeeded || kafka-consumer.Omitted)
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*' && !('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
           template: prediction
           arguments:
             parameters:

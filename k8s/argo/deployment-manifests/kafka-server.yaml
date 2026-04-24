@@ -28,7 +28,12 @@ spec:
           - name: redpanda-config
             mountPath: /etc/redpanda/redpanda.yaml
             subPath: redpanda.yaml
+          - name: redpanda-data
+            mountPath: /var/lib/redpanda/data
       volumes:
         - name: redpanda-config
           configMap:
             name: kafka-server-redpanda-config
+        - name: redpanda-data
+          persistentVolumeClaim:
+            claimName: pipeline-kafka-data-claim

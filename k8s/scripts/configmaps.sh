@@ -42,6 +42,7 @@ DECISION_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/dist
 CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-${CONFIG_TYPE}.yaml"
 KAFKA_PRODUCER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/services/producer.py"
 KAFKA_CONSUMER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/services/consumer.py"
+ARGO_PIPELINE_FILE="${ROOT_DIR}/k8s/argo/pipeline.yaml"
 
 require_cmd() {
     local cmd="$1"
@@ -80,3 +81,4 @@ create_or_update_configmap "eaer-decision-evaluation" "decision_evaluation.py" "
 create_or_update_configmap "er-pipeline-config" "config.yaml" "$CONFIG_FILE"
 create_or_update_configmap "eaer-kafka-producer" "producer.py" "$KAFKA_PRODUCER_SCRIPT"
 create_or_update_configmap "eaer-kafka-consumer" "consumer.py" "$KAFKA_CONSUMER_SCRIPT"
+create_or_update_configmap "eaer-argo-pipeline" "pipeline.yaml" "$ARGO_PIPELINE_FILE"
