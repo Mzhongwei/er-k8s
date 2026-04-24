@@ -4,6 +4,7 @@ metadata:
   generateName: pipeline-
   namespace: argo
 spec:
+  serviceAccountName: argo
   imagePullSecrets:
   - name: regcred
   podGC:
@@ -51,6 +52,9 @@ spec:
         - name: normalization-distribution
           mountPath: /app/distributions/normalization_distribution.py
           subPath: normalization_distribution.py
+        - name: kafka-chain-helper
+          mountPath: /app/distributions/kafka_chain.py
+          subPath: kafka_chain.py
         - name: pipeline-data
           mountPath: /app/Data_example
       volumes:
@@ -60,6 +64,9 @@ spec:
       - name: normalization-distribution
         configMap:
           name: eaer-normalization-distribution
+      - name: kafka-chain-helper
+        configMap:
+          name: eaer-kafka-chain
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
@@ -73,6 +80,7 @@ spec:
         artifacts:
         - name: processed_data
           path: /tmp/processed_data
+          optional: true
         parameters:
         - name: mode
         - name: function
@@ -97,6 +105,9 @@ spec:
         - name: graph-distribution
           mountPath: /app/distributions/graph_randomwalk.py
           subPath: graph_randomwalk.py
+        - name: kafka-chain-helper
+          mountPath: /app/distributions/kafka_chain.py
+          subPath: kafka_chain.py
         - name: pipeline-graph-cache
           mountPath: /app/data
       volumes:
@@ -106,6 +117,9 @@ spec:
       - name: graph-distribution
         configMap:
           name: eaer-graph-distribution
+      - name: kafka-chain-helper
+        configMap:
+          name: eaer-kafka-chain
       - name: pipeline-graph-cache
         persistentVolumeClaim:
           claimName: pipeline-graph-cache-claim
@@ -149,6 +163,9 @@ spec:
         - name: embedding-distribution
           mountPath: /app/distributions/embedding_calculating.py
           subPath: embedding_calculating.py
+        - name: kafka-chain-helper
+          mountPath: /app/distributions/kafka_chain.py
+          subPath: kafka_chain.py
         - name: pipeline-embedding-model-cache
           mountPath: /app/data
       volumes:
@@ -158,6 +175,9 @@ spec:
       - name: embedding-distribution
         configMap:
           name: eaer-embedding-calculating
+      - name: kafka-chain-helper
+        configMap:
+          name: eaer-kafka-chain
       - name: pipeline-embedding-model-cache
         persistentVolumeClaim:
           claimName: pipeline-embedding-model-cache-claim
@@ -168,15 +188,20 @@ spec:
 
     - name: cg-feature-extraction
       inputs:
+        parameters:
+        - name: mode
         artifacts:
         - name: processed_data
           path: /tmp/processed_data
+          optional: true
       container:
         name: main
         image: kevinoulai/erctl:cgfeature
         imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/cg_feature_distribution.py]
         args:
+        - --mode
+        - '{{inputs.parameters.mode}}'
         - --processed_data
         - /tmp/processed_data
         - --output
@@ -188,6 +213,9 @@ spec:
         - name: cg-feature-distribution
           mountPath: /app/distributions/cg_feature_distribution.py
           subPath: cg_feature_distribution.py
+        - name: kafka-chain-helper
+          mountPath: /app/distributions/kafka_chain.py
+          subPath: kafka_chain.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -195,6 +223,9 @@ spec:
       - name: cg-feature-distribution
         configMap:
           name: eaer-cg-feature-distribution
+      - name: kafka-chain-helper
+        configMap:
+          name: eaer-kafka-chain
       outputs:
         artifacts:
         - name: cg_feature
@@ -205,6 +236,7 @@ spec:
         artifacts:
         - name: cg_feature
           path: /tmp/cg_feature
+          optional: true
         parameters:
         - name: mode
         - name: function
@@ -229,6 +261,9 @@ spec:
         - name: feature-index-distribution
           mountPath: /app/distributions/featureindex_candidate.py
           subPath: featureindex_candidate.py
+        - name: kafka-chain-helper
+          mountPath: /app/distributions/kafka_chain.py
+          subPath: kafka_chain.py
         - name: pipeline-feature-index-cache
           mountPath: /app/data
       volumes:
@@ -238,6 +273,9 @@ spec:
       - name: feature-index-distribution
         configMap:
           name: eaer-feature-index
+      - name: kafka-chain-helper
+        configMap:
+          name: eaer-kafka-chain
       - name: pipeline-feature-index-cache
         persistentVolumeClaim:
           claimName: pipeline-feature-index-cache-claim
@@ -276,6 +314,9 @@ spec:
         - name: decision-evaluation-distribution
           mountPath: /app/distributions/decision_evaluation.py
           subPath: decision_evaluation.py
+        - name: kafka-chain-helper
+          mountPath: /app/distributions/kafka_chain.py
+          subPath: kafka_chain.py
         - name: pipeline-data
           mountPath: /app/Data_example
         - name: pipeline-embedding-model-cache
@@ -287,6 +328,9 @@ spec:
       - name: decision-evaluation-distribution
         configMap:
           name: eaer-decision-evaluation
+      - name: kafka-chain-helper
+        configMap:
+          name: eaer-kafka-chain
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
@@ -437,6 +481,7 @@ spec:
           claimName: pipeline-data-claim
 
     - name: kafka-consumer
+      daemon: true
       serviceAccountName: argo
       container:
         name: main
@@ -454,9 +499,6 @@ spec:
             subPath: config.yaml
           - name: pipeline-data
             mountPath: /app/Data_example
-          - name: pipeline-argo-manifest
-            mountPath: /app/pipeline.yaml
-            subPath: pipeline.yaml
       volumes:
       - name: pipeline-kafka-consumer
         configMap:
@@ -467,9 +509,6 @@ spec:
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
-      - name: pipeline-argo-manifest
-        configMap:
-          name: eaer-argo-pipeline
 
     - name: embedding-training-dag
       inputs:
@@ -494,22 +533,19 @@ spec:
           template: graph
           depends: normalization.Succeeded
           arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: graph_construction
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
 
         - name: random-walk
           template: graph
           depends: graph-construction.Succeeded
           arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
@@ -520,9 +556,6 @@ spec:
           template: embedding
           depends: random-walk.Succeeded
           arguments:
-            artifacts:
-            - name: sequences
-              from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
@@ -533,6 +566,9 @@ spec:
           template: cg-feature-extraction
           depends: normalization.Succeeded
           arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
             artifacts:
             - name: processed_data
               from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
@@ -582,11 +618,7 @@ spec:
         
         - name: graph-construction
           template: graph
-          depends: normalization.Succeeded
           arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
@@ -595,11 +627,7 @@ spec:
 
         - name: random-walk
           template: graph
-          depends: graph-construction.Succeeded
           arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
@@ -608,11 +636,7 @@ spec:
 
         - name: embedding-training
           template: embedding
-          depends: random-walk.Succeeded
           arguments:
-            artifacts:
-            - name: sequences
-              from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
@@ -621,19 +645,14 @@ spec:
 
         - name: cg-feature-extraction
           template: cg-feature-extraction
-          depends: normalization.Succeeded
           arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
 
         - name: candidate-enumeration
           template: feature-index
-          depends: cg-feature-extraction.Succeeded
           arguments:
-            artifacts:
-            - name: cg_feature
-              from: '{{tasks.cg-feature-extraction.outputs.artifacts.cg_feature}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
@@ -642,11 +661,7 @@ spec:
 
         - name: calculating-similarity
           template: embedding
-          depends: candidate-enumeration.Succeeded && embedding-training.Succeeded
           arguments:
-            artifacts:
-            - name: candidate_pairs
-              from: '{{tasks.candidate-enumeration.outputs.artifacts.candidate_pairs}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
@@ -654,7 +669,6 @@ spec:
               value: calculating_similarity
 
         - name: decision-making
-          depends: calculating-similarity.Succeeded
           template: prediction
           arguments:
             parameters:
@@ -662,9 +676,6 @@ spec:
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: decision_making
-            artifacts:
-            - name: matching_pairs
-              from: '{{tasks.calculating-similarity.outputs.artifacts.matching_pairs}}'
 
         #- name: evaluation
         #  depends: decision-making.Succeeded
@@ -703,7 +714,16 @@ spec:
           arguments:
             parameters:
             - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
+              value: embedding-training
+
+        - name: embedding-inference
+          depends: kafka-consumer.Daemoned && ( embedding-training.Succeeded || embedding-training.Skipped )
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
+          template: embedding-inference-dag
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
 
         - name: evaluation
           depends: pipeline-init.Succeeded && embedding-training.Skipped && (kafka-consumer.Succeeded || kafka-consumer.Omitted)
