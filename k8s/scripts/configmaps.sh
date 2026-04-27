@@ -32,7 +32,6 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 NAMESPACE="argo"
 NORMALIZATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/normalization_distribution.py"
-KAFKA_CHAIN_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/kafka_chain.py"
 BERT_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/bert_distribution.py"
 BERT_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/pipeline/bert_training.py"
 CG_FEATURE_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/cg_feature_distribution.py"
@@ -43,7 +42,7 @@ DECISION_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/dist
 CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-${CONFIG_TYPE}.yaml"
 KAFKA_PRODUCER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/services/producer.py"
 KAFKA_CONSUMER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/services/consumer.py"
-
+KAFKA_BUFFERS_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/utils/buffers.py"
 
 require_cmd() {
     local cmd="$1"
@@ -72,7 +71,6 @@ create_or_update_configmap() {
 require_cmd kubectl
 
 create_or_update_configmap "eaer-normalization-distribution" "normalization_distribution.py" "$NORMALIZATION_SCRIPT"
-create_or_update_configmap "eaer-kafka-chain" "kafka_chain.py" "$KAFKA_CHAIN_SCRIPT"
 create_or_update_configmap "eaer-bert-distribution" "bert_distribution.py" "$BERT_SCRIPT"
 create_or_update_configmap "eaer-bert-training" "bert_training.py" "$BERT_TRAINING_SCRIPT"
 create_or_update_configmap "eaer-cg-feature-distribution" "cg_feature_distribution.py" "$CG_FEATURE_SCRIPT"
@@ -83,3 +81,4 @@ create_or_update_configmap "eaer-decision-evaluation" "decision_evaluation.py" "
 create_or_update_configmap "er-pipeline-config" "config.yaml" "$CONFIG_FILE"
 create_or_update_configmap "eaer-kafka-producer" "producer.py" "$KAFKA_PRODUCER_SCRIPT"
 create_or_update_configmap "eaer-kafka-consumer" "consumer.py" "$KAFKA_CONSUMER_SCRIPT"
+create_or_update_configmap "eaer-kafka-buffers" "buffers.py" "${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/utils/buffers.py"

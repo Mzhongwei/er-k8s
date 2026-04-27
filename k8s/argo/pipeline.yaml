@@ -57,6 +57,11 @@ spec:
           subPath: kafka_chain.py
         - name: pipeline-data
           mountPath: /app/Data_example
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -70,6 +75,12 @@ spec:
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
       outputs:
         artifacts:
         - name: processed_data
@@ -499,7 +510,15 @@ spec:
             subPath: config.yaml
           - name: pipeline-data
             mountPath: /app/Data_example
+          - name: pipeline-buffer-data
+            mountPath: /app/data/buffers
+          - name: pipeline-buffer-utils
+            mountPath: /app/utils/buffers.py
+            subPath: buffers.py
       volumes:
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
       - name: pipeline-kafka-consumer
         configMap:
           name: eaer-kafka-consumer
@@ -509,6 +528,9 @@ spec:
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
 
     - name: embedding-training-dag
       inputs:
@@ -616,66 +638,66 @@ spec:
             - name: mode
               value: '{{inputs.parameters.mode}}'
         
-        - name: graph-construction
-          template: graph
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: graph_construction
+        # - name: graph-construction
+        #   template: graph
+        #   arguments:
+        #     parameters:
+        #     - name: mode
+        #       value: '{{inputs.parameters.mode}}'
+        #     - name: function
+        #       value: graph_construction
 
-        - name: random-walk
-          template: graph
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: random_walk
+        # - name: random-walk
+        #   template: graph
+        #   arguments:
+        #     parameters:
+        #     - name: mode
+        #       value: '{{inputs.parameters.mode}}'
+        #     - name: function
+        #       value: random_walk
 
-        - name: embedding-training
-          template: embedding
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: embedding_training
+        # - name: embedding-training
+        #   template: embedding
+        #   arguments:
+        #     parameters:
+        #     - name: mode
+        #       value: '{{inputs.parameters.mode}}'
+        #     - name: function
+        #       value: embedding_training
 
-        - name: cg-feature-extraction
-          template: cg-feature-extraction
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
+        # - name: cg-feature-extraction
+        #   template: cg-feature-extraction
+        #   arguments:
+        #     parameters:
+        #     - name: mode
+        #       value: '{{inputs.parameters.mode}}'
 
-        - name: candidate-enumeration
-          template: feature-index
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: candidate_enumeration
+        # - name: candidate-enumeration
+        #   template: feature-index
+        #   arguments:
+        #     parameters:
+        #     - name: mode
+        #       value: '{{inputs.parameters.mode}}'
+        #     - name: function
+        #       value: candidate_enumeration
 
-        - name: calculating-similarity
-          template: embedding
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: calculating_similarity
+        # - name: calculating-similarity
+        #   template: embedding
+        #   arguments:
+        #     parameters:
+        #     - name: mode
+        #       value: '{{inputs.parameters.mode}}'
+        #     - name: function
+        #       value: calculating_similarity
 
-        - name: decision-making
-          template: prediction
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: decision_making
+        # - name: decision-making
+        #   template: prediction
+        #   arguments:
+        #     parameters:
+        #     - name: mode
+        #       value: '{{inputs.parameters.mode}}'
+        #     - name: function
+        #       value: decision_making
 
         #- name: evaluation
         #  depends: decision-making.Succeeded
