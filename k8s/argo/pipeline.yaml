@@ -178,6 +178,11 @@ spec:
           subPath: kafka_chain.py
         - name: pipeline-embedding-model-cache
           mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -191,6 +196,12 @@ spec:
       - name: pipeline-embedding-model-cache
         persistentVolumeClaim:
           claimName: pipeline-embedding-model-cache-claim
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
       outputs:
         artifacts:
           - name: matching_pairs
@@ -646,23 +657,23 @@ spec:
             - name: function
               value: graph_construction
 
-        # - name: random-walk
-        #   template: graph
-        #   arguments:
-        #     parameters:
-        #     - name: mode
-        #       value: '{{inputs.parameters.mode}}'
-        #     - name: function
-        #       value: random_walk
+        - name: random-walk
+          template: graph
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: random_walk
 
-        # - name: embedding-training
-        #   template: embedding
-        #   arguments:
-        #     parameters:
-        #     - name: mode
-        #       value: '{{inputs.parameters.mode}}'
-        #     - name: function
-        #       value: embedding_training
+        - name: embedding-training
+          template: embedding
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: embedding_training
 
         # - name: cg-feature-extraction
         #   template: cg-feature-extraction
