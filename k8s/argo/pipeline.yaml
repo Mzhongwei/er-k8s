@@ -173,9 +173,6 @@ spec:
         - name: embedding-distribution
           mountPath: /app/distributions/embedding_calculating.py
           subPath: embedding_calculating.py
-        - name: kafka-chain-helper
-          mountPath: /app/distributions/kafka_chain.py
-          subPath: kafka_chain.py
         - name: pipeline-embedding-model-cache
           mountPath: /app/data
         - name: pipeline-buffer-data
@@ -190,9 +187,6 @@ spec:
       - name: embedding-distribution
         configMap:
           name: eaer-embedding-calculating
-      - name: kafka-chain-helper
-        configMap:
-          name: eaer-kafka-chain
       - name: pipeline-embedding-model-cache
         persistentVolumeClaim:
           claimName: pipeline-embedding-model-cache-claim
@@ -234,9 +228,11 @@ spec:
         - name: cg-feature-distribution
           mountPath: /app/distributions/cg_feature_distribution.py
           subPath: cg_feature_distribution.py
-        - name: kafka-chain-helper
-          mountPath: /app/distributions/kafka_chain.py
-          subPath: kafka_chain.py
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
       volumes:
       - name: pipeline-config
         configMap:
@@ -244,9 +240,12 @@ spec:
       - name: cg-feature-distribution
         configMap:
           name: eaer-cg-feature-distribution
-      - name: kafka-chain-helper
+      - name: pipeline-buffer-utils
         configMap:
-          name: eaer-kafka-chain
+          name: eaer-kafka-buffers
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
       outputs:
         artifacts:
         - name: cg_feature
@@ -282,11 +281,13 @@ spec:
         - name: feature-index-distribution
           mountPath: /app/distributions/featureindex_candidate.py
           subPath: featureindex_candidate.py
-        - name: kafka-chain-helper
-          mountPath: /app/distributions/kafka_chain.py
-          subPath: kafka_chain.py
         - name: pipeline-feature-index-cache
           mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -294,12 +295,15 @@ spec:
       - name: feature-index-distribution
         configMap:
           name: eaer-feature-index
-      - name: kafka-chain-helper
-        configMap:
-          name: eaer-kafka-chain
       - name: pipeline-feature-index-cache
         persistentVolumeClaim:
           claimName: pipeline-feature-index-cache-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
       outputs:
         artifacts:
         - name: candidate_pairs
@@ -335,9 +339,6 @@ spec:
         - name: decision-evaluation-distribution
           mountPath: /app/distributions/decision_evaluation.py
           subPath: decision_evaluation.py
-        - name: kafka-chain-helper
-          mountPath: /app/distributions/kafka_chain.py
-          subPath: kafka_chain.py
         - name: pipeline-data
           mountPath: /app/Data_example
         - name: pipeline-embedding-model-cache
@@ -349,9 +350,6 @@ spec:
       - name: decision-evaluation-distribution
         configMap:
           name: eaer-decision-evaluation
-      - name: kafka-chain-helper
-        configMap:
-          name: eaer-kafka-chain
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
@@ -428,41 +426,29 @@ spec:
         name: main
         image: kevinoulai/erctl:config
         imagePullPolicy: Always
-        command: [sh, -c]
-        args:
-        - |
-          set -eu
-          FALLBACK_MODE='{{inputs.parameters.fallback_mode}}'
-          CONFIG_SRC=""
-
-          for p in /app/config/examples/config-embedding.yaml /app/examples/config.yaml; do
-            if [ -f "$p" ]; then
-              CONFIG_SRC="$p"
-              break
-            fi
-          done
-
-          if [ -n "$CONFIG_SRC" ]; then
-            cp "$CONFIG_SRC" /tmp/config.yaml
-          else
-            printf 'mode: "%s"\n' "$FALLBACK_MODE" > /tmp/config.yaml
-          fi
-
-          MODE_FROM_CONFIG="$(sed -n 's/^mode:[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' /tmp/config.yaml | head -n1 | tr -d '\r')"
-
-          if [ -z "$MODE_FROM_CONFIG" ]; then
-            MODE_FROM_CONFIG="$FALLBACK_MODE"
-          fi
-
-          printf '%s' "$MODE_FROM_CONFIG" > /tmp/mode
+        command: [sh, /app/init.sh]
+        env:
+        - name: FALLBACK_MODE
+          value: '{{inputs.parameters.fallback_mode}}'
         volumeMounts:
           - name: pipeline-config
             mountPath: /app/config/examples/config-embedding.yaml
             subPath: config.yaml
+          - name: pipeline-init-script
+            mountPath: /app/init.sh
+            subPath: init.sh
+          - name: pipeline-buffer-data
+            mountPath: /app/data/buffers
       volumes:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
+      - name: pipeline-init-script
+        configMap:
+          name: eaer-pipeline-init
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
       outputs:
         parameters:
         - name: mode
@@ -675,21 +661,30 @@ spec:
             - name: function
               value: embedding_training
 
-        # - name: cg-feature-extraction
-        #   template: cg-feature-extraction
-        #   arguments:
-        #     parameters:
-        #     - name: mode
-        #       value: '{{inputs.parameters.mode}}'
+        - name: cg-feature-extraction
+          template: cg-feature-extraction
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
 
-        # - name: candidate-enumeration
-        #   template: feature-index
-        #   arguments:
-        #     parameters:
-        #     - name: mode
-        #       value: '{{inputs.parameters.mode}}'
-        #     - name: function
-        #       value: candidate_enumeration
+        - name: feature-index-construction
+          template: feature-index
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: feature_index_construction
+
+        - name: candidate-enumeration
+          template: feature-index
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: candidate_enumeration
 
         # - name: calculating-similarity
         #   template: embedding
