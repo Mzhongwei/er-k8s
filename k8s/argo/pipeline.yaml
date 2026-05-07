@@ -1,18 +1,18 @@
-# TODO: Mount volumes on data instead of cache
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
   generateName: pipeline-
   namespace: argo
 spec:
+  serviceAccountName: argo
   imagePullSecrets:
   - name: regcred
   podGC:
     strategy: OnWorkflowCompletion
     deleteDelayDuration: 30m
   ttlStrategy:
-    secondsAfterSuccess: 3600
-    secondsAfterFailure: 86400
+    secondsAfterSuccess: 3600 # 1 hour
+    secondsAfterFailure: 86400 # 1 day
   artifactGC:
     strategy: OnWorkflowCompletion
   arguments:
@@ -37,6 +37,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:normalization
+        imagePullPolicy: IfNotPresent
         command: [sh, -c]
         args:
         - |
@@ -51,8 +52,13 @@ spec:
         - name: normalization-distribution
           mountPath: /app/distributions/normalization_distribution.py
           subPath: normalization_distribution.py
-        - name: pipeline-bert-data
+        - name: pipeline-data
           mountPath: /app/Data_example
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -60,19 +66,27 @@ spec:
       - name: normalization-distribution
         configMap:
           name: eaer-normalization-distribution
-      - name: pipeline-bert-data
+      - name: pipeline-data
         persistentVolumeClaim:
-          claimName: pipeline-bert-data-claim
+          claimName: pipeline-data-claim
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
       outputs:
-        parameters:
+        artifacts:
         - name: processed_data
-          valueFrom:
-            path: /tmp/processed_data
+          path: /tmp/processed_data
 
     - name: graph
       inputs:
-        parameters:
+        artifacts:
         - name: processed_data
+          path: /tmp/processed_data
+          optional: true
+        parameters:
         - name: mode
         - name: function
       container:
@@ -82,7 +96,7 @@ spec:
         command: [/opt/venv/bin/python, /app/distributions/graph_randomwalk.py]
         args:
         - --processed_data
-        - '{{inputs.parameters.processed_data}}'
+        - /tmp/processed_data
         - --mode
         - '{{inputs.parameters.mode}}'
         - --function
@@ -98,6 +112,11 @@ spec:
           subPath: graph_randomwalk.py
         - name: pipeline-graph-cache
           mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -108,6 +127,12 @@ spec:
       - name: pipeline-graph-cache
         persistentVolumeClaim:
           claimName: pipeline-graph-cache-claim
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
       outputs:
         artifacts:
         - name: sequences
@@ -128,6 +153,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:embedding
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
         args:
         - --mode
@@ -149,6 +175,11 @@ spec:
           subPath: embedding_calculating.py
         - name: pipeline-embedding-model-cache
           mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -159,6 +190,12 @@ spec:
       - name: pipeline-embedding-model-cache
         persistentVolumeClaim:
           claimName: pipeline-embedding-model-cache-claim
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
       outputs:
         artifacts:
           - name: matching_pairs
@@ -167,14 +204,21 @@ spec:
     - name: cg-feature-extraction
       inputs:
         parameters:
+        - name: mode
+        artifacts:
         - name: processed_data
+          path: /tmp/processed_data
+          optional: true
       container:
         name: main
         image: kevinoulai/erctl:cgfeature
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/cg_feature_distribution.py]
         args:
+        - --mode
+        - '{{inputs.parameters.mode}}'
         - --processed_data
-        - '{{inputs.parameters.processed_data}}'
+        - /tmp/processed_data
         - --output
         - /tmp/cg_feature
         volumeMounts:
@@ -184,6 +228,11 @@ spec:
         - name: cg-feature-distribution
           mountPath: /app/distributions/cg_feature_distribution.py
           subPath: cg_feature_distribution.py
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
       volumes:
       - name: pipeline-config
         configMap:
@@ -191,26 +240,34 @@ spec:
       - name: cg-feature-distribution
         configMap:
           name: eaer-cg-feature-distribution
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
       outputs:
-        parameters:
+        artifacts:
         - name: cg_feature
-          valueFrom:
-            path: /tmp/cg_feature
+          path: /tmp/cg_feature
 
     - name: feature-index
       inputs:
-        parameters:
+        artifacts:
         - name: cg_feature
+          path: /tmp/cg_feature
+          optional: true
+        parameters:
         - name: mode
         - name: function
       container:
         name: main
         image: kevinoulai/erctl:featureindex
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/featureindex_candidate.py]
         args:
         - --cg_feature
-        - '{{inputs.parameters.cg_feature}}'
+        - /tmp/cg_feature
         - --mode
         - '{{inputs.parameters.mode}}'
         - --function
@@ -226,6 +283,11 @@ spec:
           subPath: featureindex_candidate.py
         - name: pipeline-feature-index-cache
           mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -236,6 +298,12 @@ spec:
       - name: pipeline-feature-index-cache
         persistentVolumeClaim:
           claimName: pipeline-feature-index-cache-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
       outputs:
         artifacts:
         - name: candidate_pairs
@@ -253,7 +321,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:prediction
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
         args:
         - --mode
@@ -271,12 +339,15 @@ spec:
         - name: decision-evaluation-distribution
           mountPath: /app/distributions/decision_evaluation.py
           subPath: decision_evaluation.py
-        - name: pipeline-bert-data
+        - name: pipeline-data
           mountPath: /app/Data_example
-        #- name: pipeline-decision-evaluation-cache
-        #  mountPath: /app/data
         - name: pipeline-embedding-model-cache
           mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -284,15 +355,18 @@ spec:
       - name: decision-evaluation-distribution
         configMap:
           name: eaer-decision-evaluation
-      - name: pipeline-bert-data
+      - name: pipeline-data
         persistentVolumeClaim:
-          claimName: pipeline-bert-data-claim
-      #- name: pipeline-decision-evaluation-cache
-      #  persistentVolumeClaim:
-      #    claimName: pipeline-decision-evaluation-cache-claim
+          claimName: pipeline-data-claim
       - name: pipeline-embedding-model-cache
         persistentVolumeClaim:
           claimName: pipeline-embedding-model-cache-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
 
       outputs:
         parameters:
@@ -302,19 +376,21 @@ spec:
 
     - name: bert
       inputs:
+        artifacts:
+        - name: processed_data
+          path: /tmp/processed_data
         parameters:
         - name: mode
-        - name: processed_data
       container:
         name: main
         image: kevinoulai/erctl:bert
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/bert_distribution.py]
         args:
         - --mode
         - '{{inputs.parameters.mode}}'
         - --processed_data
-        - '{{inputs.parameters.processed_data}}'
+        - /tmp/processed_data
         - --output
         - /tmp/bert_output
         volumeMounts:
@@ -329,7 +405,7 @@ spec:
         - name: bert-training
           mountPath: /app/pipeline/bert_training.py
           subPath: bert_training.py
-        - name: pipeline-bert-data
+        - name: pipeline-data
           mountPath: /app/Data_example
       volumes:
       - name: pipeline-config
@@ -344,9 +420,9 @@ spec:
       - name: bert-training
         configMap:
           name: eaer-bert-training
-      - name: pipeline-bert-data
+      - name: pipeline-data
         persistentVolumeClaim:
-          claimName: pipeline-bert-data-claim
+          claimName: pipeline-data-claim
       outputs:
         parameters:
         - name: bert_output
@@ -360,42 +436,30 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:config
-        imagePullPolicy: Always
-        command: [sh, -c]
-        args:
-        - |
-          set -eu
-          FALLBACK_MODE='{{inputs.parameters.fallback_mode}}'
-          CONFIG_SRC=""
-
-          for p in /app/config/examples/config-embedding.yaml /app/examples/config.yaml; do
-            if [ -f "$p" ]; then
-              CONFIG_SRC="$p"
-              break
-            fi
-          done
-
-          if [ -n "$CONFIG_SRC" ]; then
-            cp "$CONFIG_SRC" /tmp/config.yaml
-          else
-            printf 'mode: "%s"\n' "$FALLBACK_MODE" > /tmp/config.yaml
-          fi
-
-          MODE_FROM_CONFIG="$(sed -n 's/^mode:[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' /tmp/config.yaml | head -n1 | tr -d '\r')"
-
-          if [ -z "$MODE_FROM_CONFIG" ]; then
-            MODE_FROM_CONFIG="$FALLBACK_MODE"
-          fi
-
-          printf '%s' "$MODE_FROM_CONFIG" > /tmp/mode
+        imagePullPolicy: IfNotPresent
+        command: [sh, /app/init.sh]
+        env:
+        - name: FALLBACK_MODE
+          value: '{{inputs.parameters.fallback_mode}}'
         volumeMounts:
           - name: pipeline-config
             mountPath: /app/config/examples/config-embedding.yaml
             subPath: config.yaml
+          - name: pipeline-init-script
+            mountPath: /app/init.sh
+            subPath: init.sh
+          - name: pipeline-buffer-data
+            mountPath: /app/data/buffers
       volumes:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
+      - name: pipeline-init-script
+        configMap:
+          name: eaer-pipeline-init
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
       outputs:
         parameters:
         - name: mode
@@ -404,6 +468,263 @@ spec:
         artifacts:
         - name: config
           path: /tmp/config.yaml
+      
+    - name: kafka-producer
+      daemon: true
+      container:
+        name: main
+        image: kevinoulai/kafka:producer
+        imagePullPolicy: IfNotPresent
+        command: [python, /app/producer.py]
+        ports:
+        - containerPort: 9092
+        volumeMounts:
+          - name: pipeline-kafka-producer
+            mountPath: /app/producer.py
+            subPath: producer.py
+          - name: pipeline-config
+            mountPath: /app/config/examples/config-embedding.yaml
+            subPath: config.yaml
+          - name: pipeline-data
+            mountPath: /app/Data_example
+      volumes:
+      - name: pipeline-kafka-producer
+        configMap:
+          name: eaer-kafka-producer
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: pipeline-data
+        persistentVolumeClaim:
+          claimName: pipeline-data-claim
+
+    - name: kafka-consumer
+      daemon: true
+      serviceAccountName: argo
+      container:
+        name: main
+        image: kevinoulai/kafka:python
+        imagePullPolicy: IfNotPresent
+        command: [python, /app/consumer.py]
+        ports:
+        - containerPort: 9092
+        volumeMounts:
+          - name: pipeline-kafka-consumer
+            mountPath: /app/consumer.py
+            subPath: consumer.py
+          - name: pipeline-config
+            mountPath: /app/config/examples/config-embedding.yaml
+            subPath: config.yaml
+          - name: pipeline-data
+            mountPath: /app/Data_example
+          - name: pipeline-buffer-data
+            mountPath: /app/data/buffers
+          - name: pipeline-buffer-utils
+            mountPath: /app/utils/buffers.py
+            subPath: buffers.py
+      volumes:
+      - name: pipeline-buffer-data
+        persistentVolumeClaim:
+          claimName: pipeline-buffer-data-claim
+      - name: pipeline-kafka-consumer
+        configMap:
+          name: eaer-kafka-consumer
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: pipeline-data
+        persistentVolumeClaim:
+          claimName: pipeline-data-claim
+      - name: pipeline-buffer-utils
+        configMap:
+          name: eaer-kafka-buffers
+
+    - name: embedding-training-dag
+      inputs:
+        parameters:
+        - name: mode
+      dag:
+        tasks:
+        - name: normalization
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+        
+        - name: graph-construction
+          template: graph
+          depends: normalization.Succeeded
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: graph_construction
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+
+        - name: random-walk
+          template: graph
+          depends: graph-construction.Succeeded
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: random_walk
+
+        - name: embedding-training
+          template: embedding
+          depends: random-walk.Succeeded
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: embedding_training
+
+        - name: cg-feature-extraction
+          template: cg-feature-extraction
+          depends: normalization.Succeeded
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            artifacts:
+            - name: processed_data
+              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+
+        - name: feature-index-construction
+          template: feature-index
+          depends: cg-feature-extraction.Succeeded
+          arguments:
+            artifacts:
+            - name: cg_feature
+              from: '{{tasks.cg-feature-extraction.outputs.artifacts.cg_feature}}'
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: feature_index_construction
+
+        - name: evaluation
+          depends: feature-index-construction.Succeeded && embedding-training.Succeeded
+          when: "'{{inputs.parameters.mode}}' =~ '.*evaluation.*' && !('{{inputs.parameters.mode}}' =~ '.*inference.*')"
+          template: prediction
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: evaluation
+      
+    - name: embedding-inference-dag
+      inputs:
+        parameters:
+        - name: mode
+      dag:
+        tasks:
+        - name: normalization
+          template: normalization
+          arguments:
+            parameters:
+            - name: raw_data
+              value: '{{workflow.parameters.raw_data}}'
+            - name: data_source_A
+              value: '{{workflow.parameters.data_source_A}}'
+            - name: data_source_B
+              value: '{{workflow.parameters.data_source_B}}'
+            - name: mode
+              value: '{{inputs.parameters.mode}}-inc'
+        
+        - name: graph-construction
+          template: graph
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
+            - name: function
+              value: graph_construction
+
+        - name: random-walk
+          template: graph
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
+            - name: function
+              value: random_walk
+
+        - name: embedding-training
+          template: embedding
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
+            - name: function
+              value: embedding_training
+
+        - name: cg-feature-extraction
+          template: cg-feature-extraction
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
+
+        - name: feature-index-construction
+          template: feature-index
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
+            - name: function
+              value: feature_index_construction
+
+        - name: candidate-enumeration
+          template: feature-index
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
+            - name: function
+              value: candidate_enumeration
+
+        - name: calculating-similarity
+          template: embedding
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
+            - name: function
+              value: calculating_similarity
+
+        - name: decision-making
+          template: prediction
+          arguments:
+            parameters:
+            - name: mode
+              value: embedding-inference
+            - name: function
+              value: decision_making
+
+        - name: evaluation
+          depends: decision-making.Succeeded
+          when: "'{{inputs.parameters.mode}}' =~ '.*evaluation.*'"
+          template: prediction
+          arguments:
+            parameters:
+            - name: mode
+              value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: evaluation
 
     - name: main
       dag:
@@ -415,127 +736,36 @@ spec:
             - name: fallback_mode
               value: '{{workflow.parameters.mode}}'
 
-        - name: normalization
-          depends: pipeline-init.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*')"
-          template: normalization
-          arguments:
-            parameters:
-            - name: raw_data
-              value: '{{workflow.parameters.raw_data}}'
-            - name: data_source_A
-              value: '{{workflow.parameters.data_source_A}}'
-            - name: data_source_B
-              value: '{{workflow.parameters.data_source_B}}'
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
+        - name: kafka-producer
+          template: kafka-producer
+          depends: pipeline-init.Succeeded && ( embedding-training.Succeeded || embedding-training.Skipped )
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
 
-        - name: graph-construction
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: graph
-          depends: normalization.Succeeded
-          arguments:
-            parameters:
-            - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: graph_construction
-
-        - name: random-walk
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: graph
-          depends: graph-construction.Succeeded
-          arguments:
-            parameters:
-            - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: random_walk
+        - name: kafka-consumer
+          template: kafka-consumer
+          depends: kafka-producer.Daemoned
 
         - name: embedding-training
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: embedding
-          depends: random-walk.Succeeded
+          depends: pipeline-init.Succeeded
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
+          template: embedding-training-dag
           arguments:
-            artifacts:
-            - name: sequences
-              from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
             parameters:
             - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: embedding_training
+              value: embedding-training
 
-        - name: cg-feature-extraction
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: cg-feature-extraction
-          depends: normalization.Succeeded
-          arguments:
-            parameters:
-            - name: processed_data
-              value: '{{tasks.normalization.outputs.parameters.processed_data}}'
-
-        - name: feature-index-construction
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && ('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*' || '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
-          template: feature-index
-          depends: cg-feature-extraction.Succeeded
-          arguments:
-            parameters:
-            - name: cg_feature
-              value: '{{tasks.cg-feature-extraction.outputs.parameters.cg_feature}}'
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: feature_index_construction
-
-        - name: candidate-enumeration
+        - name: embedding-inference
+          depends: kafka-consumer.Daemoned && ( embedding-training.Succeeded || embedding-training.Skipped )
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: feature-index
-          depends: feature-index-construction.Succeeded
-          arguments:
-            parameters:
-            - name: cg_feature
-              value: '{{tasks.cg-feature-extraction.outputs.parameters.cg_feature}}'
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: candidate_enumeration
-
-        - name: calculating-similarity
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: embedding
-          depends: candidate-enumeration.Succeeded && embedding-training.Succeeded
-          arguments:
-            artifacts:
-            - name: candidate_pairs
-              from: '{{tasks.candidate-enumeration.outputs.artifacts.candidate_pairs}}'
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: calculating_similarity
-
-        - name: decision-making
-          depends: calculating-similarity.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: prediction
+          template: embedding-inference-dag
           arguments:
             parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: decision_making
-            artifacts:
-            - name: matching_pairs
-              from: '{{tasks.calculating-similarity.outputs.artifacts.matching_pairs}}'
 
         - name: evaluation
-          depends: decision-making.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*'"
+          depends: pipeline-init.Succeeded && embedding-training.Skipped && (kafka-consumer.Succeeded || kafka-consumer.Omitted)
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*' && !('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
           template: prediction
           arguments:
             parameters:
@@ -561,12 +791,12 @@ spec:
 
         - name: bert-training
           depends: bert-normalization-training.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
           template: bert
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.bert-normalization-training.outputs.parameters.processed_data}}'
+              from: '{{tasks.bert-normalization-training.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: bert-training
 
@@ -587,12 +817,12 @@ spec:
 
         - name: bert-inference
           depends: bert-normalization-inference.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
           template: bert
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.bert-normalization-inference.outputs.parameters.processed_data}}'
+              from: '{{tasks.bert-normalization-inference.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: bert-inference
 
@@ -613,11 +843,11 @@ spec:
 
         - name: bert-evaluation
           depends: bert-normalization-b-evaluation.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
           template: bert
           arguments:
-            parameters:
+            artifacts:
             - name: processed_data
-              value: '{{tasks.bert-normalization-b-evaluation.outputs.parameters.processed_data}}'
+              from: '{{tasks.bert-normalization-b-evaluation.outputs.artifacts.processed_data}}'
+            parameters:
             - name: mode
               value: bert-b_evaluation

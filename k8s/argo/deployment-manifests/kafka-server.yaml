@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-server
+  labels:
+    app.kubernetes.io/name: kafka-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka-server
+    spec:
+      containers:
+      - name: kafka-server
+        image: kevinoulai/kafka:server
+        imagePullPolicy: Always
+        command:
+          - redpanda
+          - --redpanda-cfg
+          - /etc/redpanda/redpanda.yaml
+        ports:
+          - containerPort: 9092
+        volumeMounts:
+          - name: redpanda-config
+            mountPath: /etc/redpanda/redpanda.yaml
+            subPath: redpanda.yaml
+          - name: redpanda-data
+            mountPath: /var/lib/redpanda/data
+      volumes:
+        - name: redpanda-config
+          configMap:
+            name: kafka-server-redpanda-config
+        - name: redpanda-data
+          persistentVolumeClaim:
+            claimName: pipeline-kafka-data-claim
