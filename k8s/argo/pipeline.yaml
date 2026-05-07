@@ -45,6 +45,10 @@ spec:
         env:
         - name: MODE
           value: '{{inputs.parameters.mode}}'
+        - name: WORKFLOW_NAME
+          value: '{{workflow.name}}'
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -56,9 +60,14 @@ spec:
           mountPath: /app/Data_example
         - name: pipeline-buffer-data
           mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -72,9 +81,15 @@ spec:
       - name: pipeline-buffer-data
         persistentVolumeClaim:
           claimName: pipeline-buffer-data-claim
+      - name: pipeline-reports
+        persistentVolumeClaim:
+          claimName: pipeline-reports-claim
       - name: pipeline-buffer-utils
         configMap:
           name: eaer-kafka-buffers
+      - name: codecarbon
+        configMap:
+          name: eaer-codecarbon
       outputs:
         artifacts:
         - name: processed_data
@@ -103,6 +118,11 @@ spec:
         - '{{inputs.parameters.function}}'
         - --output
         - /tmp/sequences.json
+        env:
+        - name: WORKFLOW_NAME
+          value: '{{workflow.name}}'
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -114,9 +134,14 @@ spec:
           mountPath: /app/data
         - name: pipeline-buffer-data
           mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -130,9 +155,15 @@ spec:
       - name: pipeline-buffer-data
         persistentVolumeClaim:
           claimName: pipeline-buffer-data-claim
+      - name: pipeline-reports
+        persistentVolumeClaim:
+          claimName: pipeline-reports-claim
       - name: pipeline-buffer-utils
         configMap:
           name: eaer-kafka-buffers
+      - name: codecarbon
+        configMap:
+          name: eaer-codecarbon
       outputs:
         artifacts:
         - name: sequences
@@ -166,6 +197,11 @@ spec:
         - '{{inputs.parameters.function}}'
         - --output
         - /tmp/matching_pairs.json
+        env:
+        - name: WORKFLOW_NAME
+          value: '{{workflow.name}}'
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -177,9 +213,14 @@ spec:
           mountPath: /app/data
         - name: pipeline-buffer-data
           mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -196,6 +237,12 @@ spec:
       - name: pipeline-buffer-utils
         configMap:
           name: eaer-kafka-buffers
+      - name: pipeline-reports
+        persistentVolumeClaim:
+          claimName: pipeline-reports-claim
+      - name: codecarbon
+        configMap:
+          name: eaer-codecarbon
       outputs:
         artifacts:
           - name: matching_pairs
@@ -221,6 +268,11 @@ spec:
         - /tmp/processed_data
         - --output
         - /tmp/cg_feature
+        env:
+        - name: WORKFLOW_NAME
+          value: '{{workflow.name}}'
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -233,6 +285,11 @@ spec:
           subPath: buffers.py
         - name: pipeline-buffer-data
           mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -246,6 +303,12 @@ spec:
       - name: pipeline-buffer-data
         persistentVolumeClaim:
           claimName: pipeline-buffer-data-claim
+      - name: pipeline-reports
+        persistentVolumeClaim:
+          claimName: pipeline-reports-claim
+      - name: codecarbon
+        configMap:
+          name: eaer-codecarbon
       outputs:
         artifacts:
         - name: cg_feature
@@ -274,6 +337,11 @@ spec:
         - '{{inputs.parameters.function}}'
         - --output
         - /tmp/candidate_pairs.json
+        env:
+        - name: WORKFLOW_NAME
+          value: '{{workflow.name}}'
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -285,9 +353,14 @@ spec:
           mountPath: /app/data
         - name: pipeline-buffer-data
           mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -304,6 +377,12 @@ spec:
       - name: pipeline-buffer-data
         persistentVolumeClaim:
           claimName: pipeline-buffer-data-claim
+      - name: pipeline-reports
+        persistentVolumeClaim:
+          claimName: pipeline-reports-claim
+      - name: codecarbon
+        configMap:
+          name: eaer-codecarbon
       outputs:
         artifacts:
         - name: candidate_pairs
@@ -332,6 +411,11 @@ spec:
         - '{{inputs.parameters.function}}'
         - --output
         - /tmp/predicted_matching
+        env:
+        - name: WORKFLOW_NAME
+          value: '{{workflow.name}}'
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -345,9 +429,14 @@ spec:
           mountPath: /app/data
         - name: pipeline-buffer-data
           mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -367,7 +456,12 @@ spec:
       - name: pipeline-buffer-data
         persistentVolumeClaim:
           claimName: pipeline-buffer-data-claim
-
+      - name: pipeline-reports
+        persistentVolumeClaim:
+          claimName: pipeline-reports-claim
+      - name: codecarbon
+        configMap:
+          name: eaer-codecarbon
       outputs:
         parameters:
         - name: predicted_matching
@@ -393,6 +487,11 @@ spec:
         - /tmp/processed_data
         - --output
         - /tmp/bert_output
+        env:
+        - name: WORKFLOW_NAME
+          value: '{{workflow.name}}'
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-bert.yaml
@@ -405,8 +504,13 @@ spec:
         - name: bert-training
           mountPath: /app/pipeline/bert_training.py
           subPath: bert_training.py
+        - name: pipeline-reports
+          mountPath: /app/reports
         - name: pipeline-data
           mountPath: /app/Data_example
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -423,6 +527,12 @@ spec:
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
+      - name: pipeline-reports
+        persistentVolumeClaim:
+          claimName: pipeline-reports-claim
+      - name: codecarbon
+        configMap:
+          name: eaer-codecarbon
       outputs:
         parameters:
         - name: bert_output

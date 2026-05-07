@@ -43,6 +43,7 @@ CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/con
 KAFKA_PRODUCER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/services/producer.py"
 KAFKA_CONSUMER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/services/consumer.py"
 KAFKA_BUFFERS_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/utils/buffers.py"
+CODE_CARBON_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/utils/codecarbon.py"
 PIPELINE_INIT_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/init.sh"
 
 require_cmd() {
@@ -84,3 +85,4 @@ create_or_update_configmap "eaer-kafka-producer" "producer.py" "$KAFKA_PRODUCER_
 create_or_update_configmap "eaer-kafka-consumer" "consumer.py" "$KAFKA_CONSUMER_SCRIPT"
 create_or_update_configmap "eaer-kafka-buffers" "buffers.py" "${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/utils/buffers.py"
 create_or_update_configmap "eaer-pipeline-init" "init.sh" "$PIPELINE_INIT_SCRIPT"
+create_or_update_configmap "eaer-codecarbon" "codecarbon.py" "$CODE_CARBON_SCRIPT"

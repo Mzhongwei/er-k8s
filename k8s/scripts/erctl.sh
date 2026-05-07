@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("images" "configmaps" "dataset" "help")
+ACTIONS=("images" "configmaps" "dataset" "fetch-report" "help")
 
 print_help() {
     cat << 'EOF'
@@ -147,6 +147,10 @@ EOF
         done
 
         run_script "sync-bert-data-pvc.sh"
+        ;;
+    fetch-report)
+        # forward all args to the helper script
+        run_script "fetch-codecarbon.sh" "$@"
         ;;
 
     *)
