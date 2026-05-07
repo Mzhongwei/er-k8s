@@ -1,5 +1,3 @@
-# FROM erctl:base1.2.1 AS builder
-
 FROM kevinoulai/erctl:full
 
 ENV PYTHONDONTWRITEBYTECODE=1

@@ -787,7 +787,7 @@ spec:
             - name: data_source_B
               value: '{{workflow.parameters.data_source_B}}'
             - name: mode
-              value: training
+              value: bert-training
 
         - name: bert-training
           depends: bert-normalization-training.Succeeded
@@ -798,7 +798,7 @@ spec:
               from: '{{tasks.bert-normalization-training.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
-              value: training
+              value: bert-training
 
         - name: bert-normalization-inference
           depends: "pipeline-init.Succeeded && (bert-training.Succeeded || bert-training.Omitted)"
@@ -850,4 +850,4 @@ spec:
               from: '{{tasks.bert-normalization-b-evaluation.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
-              value: b_evaluation
+              value: bert-b_evaluation
