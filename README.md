@@ -99,4 +99,4 @@ kubectl get pvc -n argo | grep reports
 
 ## Code
 
-For the pipeline implementation itself, see the submodule [Energy-Aware-Entity-Resolution](https://github.com/kevin-oulai/Energy-Aware-Entity-Resolution)
+For the pipeline implementation itself, see the submodule [Energy-Aware-Entity-Resolution](https://github.com/kevin-oulai/Energy-Aware-Entity-Resolution/tree/distribution-kubernetes)
