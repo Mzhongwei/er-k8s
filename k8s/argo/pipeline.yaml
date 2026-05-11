@@ -862,7 +862,7 @@ spec:
           arguments:
             parameters:
             - name: mode
-              value: embedding-training
+              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
 
         - name: embedding-inference
           depends: kafka-consumer.Daemoned && ( embedding-training.Succeeded || embedding-training.Skipped )
