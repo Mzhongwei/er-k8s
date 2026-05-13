@@ -20,7 +20,7 @@ spec:
     - name: mode
       value: embedding-evaluation
     - name: raw_data
-      value: Data_example/bert/train.csv
+      value: Data_example/fodors_zagats-tableA.csv
     - name: data_source_A
       value: Data_example/fodors_zagats-tableA.csv
     - name: data_source_B
@@ -37,7 +37,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:normalization
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [sh, -c]
         args:
         - |
@@ -184,15 +184,15 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:embedding
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
         args:
         - --mode
         - '{{inputs.parameters.mode}}'
         - --sequences
-        - /tmp/sequences.json
+        - '{{inputs.artifacts.sequences.path}}'
         - --candidate_pairs
-        - /tmp/candidate_pairs.json
+        - '{{inputs.artifacts.candidate_pairs.path}}'
         - --function
         - '{{inputs.parameters.function}}'
         - --output
@@ -400,7 +400,7 @@ spec:
       container:
         name: main
         image: kevinoulai/erctl:prediction
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
         args:
         - --mode
@@ -695,6 +695,9 @@ spec:
           template: embedding
           depends: random-walk.Succeeded
           arguments:
+            artifacts:
+            - name: sequences
+              from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
