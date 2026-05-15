@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("images" "configmaps" "dataset" "fetch-report" "help")
+ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "help")
 
 print_help() {
     cat << 'EOF'
@@ -21,6 +21,7 @@ COMMANDS:
     images      Manage the Docker images for EAER components
     configmaps  Create or update the distribution ConfigMaps
     dataset     Sync Data_example/bert files into the Argo PVC
+    process     Get the PID of processes running in the Argo workflow
     help        Display this help message
 
 OPTIONS:
@@ -47,7 +48,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [images|configmaps|dataset|help] [options]"
+    echo "Usage: $0 [images|configmaps|dataset|process|help] [options]"
     exit 1
 fi
 
@@ -151,6 +152,10 @@ EOF
     fetch-report)
         # forward all args to the helper script
         run_script "fetch-codecarbon.sh" "$@"
+        ;;
+
+    process)
+        run_script "process.sh" "$@"
         ;;
 
     *)
