@@ -8,7 +8,6 @@ fi
 
 set -euo pipefail
 
-# Server mode: commands run directly on the current machine.
 COMMAND_WRAPPER=()
 
 WATCH_INTERVAL="1"
@@ -23,7 +22,6 @@ SUDO_KEEPALIVE_PID=""
 GLOBAL_SESSIONS_FILE=""
 GLOBAL_ROWS_FILE=""
 CLEANUP_DONE=false
-NEEDS_REDRAW=false
 
 print_help() {
   cat <<'EOF'
@@ -129,16 +127,12 @@ handle_stop_signal() {
   global_cleanup 130
 }
 
-handle_resize_signal() {
-  NEEDS_REDRAW=true
-}
-
 get_raw_processes() {
   run_wrapped ps axww -o pid=,args=
 }
 
 filter_processes() {
-  python3 - <<'PY'
+  python3 -c '
 import os
 import re
 import sys
@@ -162,7 +156,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip('"').strip("'")
+    return value.strip().strip("\"").strip(chr(39))
 
 def is_python(tok):
     b = base(tok)
@@ -181,10 +175,11 @@ def is_ignored(cmd):
         "python -u -m sidecar",
         "/usr/bin/python3 -sP /usr/bin/firewalld",
         "/usr/bin/python3 -Es /usr/sbin/tuned",
-        "/usr/bin/python3 -Es /usr/sbin/tuned-ppd",
         "sudo /bin/execute ecofloc",
         "/opt/ecofloc/ecofloc",
         " ecofloc ",
+        "process.sh",
+        "erctl process",
     ]
 
     return any(x in cmd for x in ignored)
@@ -208,7 +203,7 @@ def is_candidate(cmd):
                 if is_python(ts[i + 1]) and ts[i + 2].startswith("/app/"):
                     return True
 
-    if re.search(r"(^|\s)(python|python3|/opt/venv/bin/python)\s+/app/", cmd):
+    if re.search(r"(^|\\s)(python|python3|/opt/venv/bin/python)\\s+/app/", cmd):
         return True
 
     return False
@@ -230,11 +225,11 @@ def extract_script(cmd):
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
-    m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
+    m = re.search(r"(?<!\\S)/app/[^ ]+\\.py(?!\\S)", cmd)
     if m:
         return base(m.group(0))
 
-    m = re.search(r"(?<!\S)/app/[^ ]+(?!\S)", cmd)
+    m = re.search(r"(?<!\\S)/app/[^ ]+(?!\\S)", cmd)
     if m:
         return base(m.group(0))
 
@@ -250,7 +245,7 @@ def extract_function(cmd):
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
-    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
+    m = re.search(r"--function(?:=|\\s+)([^ ]+)", cmd)
     if m:
         return tok_cleanup(m.group(1))
 
@@ -262,10 +257,10 @@ def score(cmd):
     if "/opt/venv/bin/python" in cmd:
         value += 100
 
-    if re.search(r"(^|\s)python3?\s+/app/", cmd):
+    if re.search(r"(^|\\s)python3?\\s+/app/", cmd):
         value += 90
 
-    if re.search(r"(^|\s)sh\s+-c\s+", cmd):
+    if re.search(r"(^|\\s)sh\\s+-c\\s+", cmd):
         value += 50
 
     if "argoexec emissary" in cmd:
@@ -303,11 +298,11 @@ try:
 
 except KeyboardInterrupt:
     sys.exit(0)
-PY
+'
 }
 
 print_compact_table() {
-  python3 - <<'PY'
+  python3 -c '
 import os
 import re
 import sys
@@ -346,7 +341,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip('"').strip("'")
+    return value.strip().strip("\"").strip(chr(39))
 
 def is_python(tok):
     b = base(tok)
@@ -375,11 +370,11 @@ def extract_script(cmd):
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
-    m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
+    m = re.search(r"(?<!\\S)/app/[^ ]+\\.py(?!\\S)", cmd)
     if m:
         return base(m.group(0))
 
-    m = re.search(r"(?<!\S)/app/[^ ]+(?!\S)", cmd)
+    m = re.search(r"(?<!\\S)/app/[^ ]+(?!\\S)", cmd)
     if m:
         return base(m.group(0))
 
@@ -395,7 +390,7 @@ def extract_function(cmd):
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
-    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
+    m = re.search(r"--function(?:=|\\s+)([^ ]+)", cmd)
     if m:
         return tok_cleanup(m.group(1))
 
@@ -428,11 +423,11 @@ try:
 
 except KeyboardInterrupt:
     sys.exit(0)
-PY
+'
 }
 
 print_ecofloc_metrics_table() {
-  python3 - <<'PY'
+  python3 -c '
 import os
 import re
 import sys
@@ -457,7 +452,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip('"').strip("'")
+    return value.strip().strip("\"").strip(chr(39))
 
 def is_python(tok):
     b = base(tok)
@@ -486,11 +481,11 @@ def extract_script(cmd):
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
-    m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
+    m = re.search(r"(?<!\\S)/app/[^ ]+\\.py(?!\\S)", cmd)
     if m:
         return base(m.group(0))
 
-    m = re.search(r"(?<!\S)/app/[^ ]+(?!\S)", cmd)
+    m = re.search(r"(?<!\\S)/app/[^ ]+(?!\\S)", cmd)
     if m:
         return base(m.group(0))
 
@@ -506,7 +501,7 @@ def extract_function(cmd):
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
-    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
+    m = re.search(r"--function(?:=|\\s+)([^ ]+)", cmd)
     if m:
         return tok_cleanup(m.group(1))
 
@@ -549,7 +544,7 @@ for line in sys.stdin:
     ]
 
     print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(values, widths)))
-PY
+'
 }
 
 get_matching_processes() {
@@ -646,13 +641,11 @@ stop_ecofloc() {
     return 0
   fi
 
-  # Try graceful stop on the whole process group first.
   kill -INT "-${eco_pid}" 2>/dev/null || true
   kill -INT "$eco_pid" 2>/dev/null || true
 
   sleep 1
 
-  # If still alive, escalate.
   if kill -0 "$eco_pid" 2>/dev/null; then
     kill -TERM "-${eco_pid}" 2>/dev/null || true
     kill -TERM "$eco_pid" 2>/dev/null || true
@@ -677,7 +670,6 @@ parse_ecofloc_log() {
   local avg=""
   local total=""
 
-  # Use the LAST summary values, not the first.
   avg="$(
     awk -F ':' '
       /Average Power/ {
@@ -779,7 +771,6 @@ for row in rows:
         old_is_final = bool(final_re.match(old_value))
         new_is_bad = new_value in bad_values
 
-        # Never overwrite a valid finalized measurement with N/A/ERR/CMD_ERR.
         if old_is_final and new_is_bad:
             pass
         else:
@@ -924,7 +915,6 @@ render_ecofloc_frame() {
   tput ed 2>/dev/null || printf "\033[J"
 
   rm -f "$frame_file"
-  NEEDS_REDRAW=false
 }
 
 create_ecofloc_sessions_for_matches() {
@@ -1076,7 +1066,6 @@ run_ecofloc_once() {
 
   trap 'global_cleanup 0' EXIT
   trap handle_stop_signal INT TERM HUP QUIT TSTP
-  trap handle_resize_signal WINCH
 
   matches="$(get_matching_processes || true)"
 
@@ -1135,7 +1124,6 @@ run_ecofloc_watch() {
 
   trap 'global_cleanup 0' EXIT
   trap handle_stop_signal INT TERM HUP QUIT TSTP
-  trap handle_resize_signal WINCH
 
   clear
   tput smcup 2>/dev/null || true
@@ -1184,7 +1172,6 @@ run_watch() {
   }
 
   trap cleanup_process_watch EXIT INT TERM HUP QUIT TSTP
-  trap handle_resize_signal WINCH
 
   clear
   tput smcup 2>/dev/null || true
@@ -1200,7 +1187,6 @@ run_watch() {
     tput ed 2>/dev/null || printf "\033[J"
 
     rm -f "$frame_file"
-    NEEDS_REDRAW=false
 
     sleep "$WATCH_INTERVAL"
   done
