@@ -9,7 +9,6 @@ fi
 set -euo pipefail
 
 # Server mode: commands run directly on the current machine.
-# Keep this empty as requested.
 COMMAND_WRAPPER=()
 
 WATCH_INTERVAL="1"
@@ -19,6 +18,8 @@ ECOFLOC_METRICS="cpu,ram,sd,nic,gpu"
 ECOFLOC_EXPORT_PATH=""
 ECOFLOC_USE_SUDO_EXECUTE=true
 ECOFLOC_LOG_DIR="/tmp/erctl-ecofloc"
+
+SUDO_KEEPALIVE_PID=""
 
 print_help() {
   cat <<'EOF'
@@ -54,7 +55,6 @@ Examples:
 
   process.sh ecofloc
   process.sh ecofloc --metrics cpu,ram
-  process.sh ecofloc --export /tmp/ecofloc
   process.sh --watch ecofloc
 EOF
 }
@@ -63,11 +63,32 @@ run_wrapped() {
   "${COMMAND_WRAPPER[@]}" "$@"
 }
 
+start_sudo_keepalive() {
+  if [ "$ECOFLOC_USE_SUDO_EXECUTE" != true ]; then
+    return 0
+  fi
+
+  sudo -v
+
+  (
+    while true; do
+      sudo -n true 2>/dev/null || exit 0
+      sleep 60
+    done
+  ) &
+
+  SUDO_KEEPALIVE_PID="$!"
+}
+
+stop_sudo_keepalive() {
+  if [ -n "${SUDO_KEEPALIVE_PID:-}" ]; then
+    kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    wait "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    SUDO_KEEPALIVE_PID=""
+  fi
+}
+
 get_raw_processes() {
-  # Output format:
-  # PID COMMAND
-  #
-  # axww prevents command truncation.
   run_wrapped ps axww -o pid=,args=
 }
 
@@ -132,22 +153,16 @@ def is_candidate(cmd):
 
     ts = tokens(cmd)
 
-    # Normal case:
-    # /opt/venv/bin/python /app/distributions/file.py ...
     for i, tok in enumerate(ts):
         if is_python(tok) and i + 1 < len(ts) and ts[i + 1].startswith("/app/"):
             return True
 
-    # Argo emissary case:
-    # argoexec emissary ... -- /opt/venv/bin/python /app/distributions/file.py ...
     if "argoexec emissary" in cmd:
         for i, tok in enumerate(ts):
             if tok == "--" and i + 2 < len(ts):
                 if is_python(ts[i + 1]) and ts[i + 2].startswith("/app/"):
                     return True
 
-    # Shell wrapper case:
-    # sh -c /opt/venv/bin/python /app/distributions/file.py ...
     if re.search(r"(^|\s)(python|python3|/opt/venv/bin/python)\s+/app/", cmd):
         return True
 
@@ -156,14 +171,12 @@ def is_candidate(cmd):
 def extract_script(cmd):
     ts = tokens(cmd)
 
-    # Normal Python command.
     for i, tok in enumerate(ts):
         if is_python(tok) and i + 1 < len(ts):
             candidate = ts[i + 1]
             if candidate.startswith("/app/"):
                 return base(candidate)
 
-    # Argo emissary command.
     for i, tok in enumerate(ts):
         if tok == "--" and i + 2 < len(ts):
             maybe_python = ts[i + 1]
@@ -172,12 +185,10 @@ def extract_script(cmd):
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
-    # Fallback: any /app/*.py path.
     m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
     if m:
         return base(m.group(0))
 
-    # Fallback: /app/name without .py.
     m = re.search(r"(?<!\S)/app/[^ ]+(?!\S)", cmd)
     if m:
         return base(m.group(0))
@@ -203,18 +214,15 @@ def extract_function(cmd):
 def score(cmd):
     value = 0
 
-    # Prefer real worker process.
     if "/opt/venv/bin/python" in cmd:
         value += 100
 
     if re.search(r"(^|\s)python3?\s+/app/", cmd):
         value += 90
 
-    # Shell wrapper is useful but less precise.
     if re.search(r"(^|\s)sh\s+-c\s+", cmd):
         value += 50
 
-    # Emissary wrapper is useful during startup but not preferred.
     if "argoexec emissary" in cmd:
         value += 30
 
@@ -235,7 +243,6 @@ try:
         script = extract_script(cmd)
         function = extract_function(cmd)
 
-        # Avoid doubles.
         key = (script, function)
         current_score = score(cmd)
 
@@ -266,13 +273,10 @@ FUNC_W = 28
 
 def fit(value, width):
     value = str(value)
-
     if len(value) <= width:
         return value
-
     if width <= 1:
         return value[:width]
-
     return value[:width - 1] + "…"
 
 print("{:<{}} | {:<{}} | {:<{}}".format(
@@ -395,13 +399,10 @@ METRIC_W = 15
 
 def fit(value, width):
     value = str(value)
-
     if len(value) <= width:
         return value
-
     if width <= 1:
         return value[:width]
-
     return value[:width - 1] + "…"
 
 def tokens(cmd):
@@ -759,21 +760,10 @@ render_ecofloc_content() {
   local status="${2:-}"
 
   {
-    echo "EcoFloc PID-lifetime monitoring for Argo workflow processes. Press Ctrl+C to stop."
-    echo "Watch refresh interval: ${WATCH_INTERVAL}s"
-    echo "EcoFloc interval: ${ECOFLOC_INTERVAL} ms"
-    echo "EcoFloc metrics: ${ECOFLOC_METRICS}"
-    echo "EcoFloc command: sudo /bin/execute ecofloc"
-    echo "EcoFloc duration mode: -t -1, stopped when target PID exits"
-
-    if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
-      echo "EcoFloc export path: ${ECOFLOC_EXPORT_PATH}"
-    fi
+    echo "EcoFloc PID-lifetime monitoring. Press Ctrl+C to stop."
 
     if [ -n "$status" ]; then
       echo "Status: ${status}"
-    else
-      echo "Status: idle"
     fi
 
     echo
@@ -794,8 +784,6 @@ render_ecofloc_frame() {
   frame_file="$(mktemp)"
   render_ecofloc_content "$rows_file" "$status" > "$frame_file"
 
-  # Lower-flicker rendering:
-  # build full frame first, then move cursor home, print once, clear leftovers after.
   tput cup 0 0 2>/dev/null || printf "\033[H"
   cat "$frame_file"
   tput ed 2>/dev/null || printf "\033[J"
@@ -939,11 +927,14 @@ run_ecofloc_once() {
   local initial_rows
   local active_sessions
 
+  start_sudo_keepalive
+
   rows_file="$(mktemp)"
   sessions_file="$(mktemp)"
 
   cleanup_ecofloc_once() {
     stop_all_ecofloc_sessions "$sessions_file" "$rows_file" >/dev/null 2>&1 || true
+    stop_sudo_keepalive
     rm -f "$rows_file" "$sessions_file"
   }
 
@@ -961,9 +952,9 @@ run_ecofloc_once() {
 
   create_ecofloc_sessions_for_matches "$matches" "$rows_file" "$sessions_file"
 
+  clear
   echo "EcoFloc attached to detected PIDs. Waiting until they exit..."
   echo
-
   cat "$rows_file" | print_ecofloc_metrics_table
 
   while true; do
@@ -978,6 +969,7 @@ run_ecofloc_once() {
     sleep "$WATCH_INTERVAL"
   done
 
+  clear
   cat "$rows_file" | print_ecofloc_metrics_table
 }
 
@@ -988,11 +980,14 @@ run_ecofloc_watch() {
   local status="initializing"
   local active_sessions
 
+  start_sudo_keepalive
+
   rows_file="$(mktemp)"
   sessions_file="$(mktemp)"
 
   cleanup_watch() {
     stop_all_ecofloc_sessions "$sessions_file" "$rows_file" >/dev/null 2>&1 || true
+    stop_sudo_keepalive
     tput cnorm 2>/dev/null || true
     tput rmcup 2>/dev/null || true
     rm -f "$rows_file" "$sessions_file"
@@ -1002,15 +997,17 @@ run_ecofloc_watch() {
 
   trap cleanup_watch INT TERM
 
+  clear
   tput smcup 2>/dev/null || true
   tput civis 2>/dev/null || true
+  tput clear 2>/dev/null || clear
 
   while true; do
     matches="$(get_matching_processes || true)"
 
     if [ -n "$matches" ]; then
       create_ecofloc_sessions_for_matches "$matches" "$rows_file" "$sessions_file"
-      status="attached to matching processes"
+      status="monitoring"
     else
       status="waiting for matching processes"
     fi
@@ -1020,7 +1017,7 @@ run_ecofloc_watch() {
     active_sessions="$(wc -l < "$sessions_file" | xargs)"
 
     if [ "$active_sessions" != "0" ]; then
-      status="${status}; active EcoFloc sessions: ${active_sessions}"
+      status="monitoring; active EcoFloc sessions: ${active_sessions}"
     fi
 
     render_ecofloc_frame "$rows_file" "$status"
@@ -1032,7 +1029,6 @@ run_ecofloc_watch() {
 render_process_watch_content() {
   {
     echo "Watching Argo workflow processes. Press Ctrl+C to stop."
-    echo "Refresh interval: ${WATCH_INTERVAL}s"
     echo
 
     QUIET_HEADER=true run_once || true
@@ -1051,8 +1047,10 @@ run_watch() {
 
   trap cleanup_watch INT TERM
 
+  clear
   tput smcup 2>/dev/null || true
   tput civis 2>/dev/null || true
+  tput clear 2>/dev/null || clear
 
   while true; do
     frame_file="$(mktemp)"
