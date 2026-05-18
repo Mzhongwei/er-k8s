@@ -23,7 +23,8 @@ ECOFLOC_LOG_DIR="/tmp/erctl-ecofloc"
 SUDO_KEEPALIVE_PID=""
 GLOBAL_ROWS_FILE=""
 GLOBAL_WORKERS_FILE=""
-GLOBAL_PIDS_FILE=""
+GLOBAL_RESULTS_DIR=""
+GLOBAL_LOCKS_DIR=""
 CLEANUP_DONE=false
 
 print_help() {
@@ -66,15 +67,7 @@ run_wrapped() {
 }
 
 clear_screen() {
-  printf '\033[2J\033[H'
-}
-
-move_home() {
-  printf '\033[H'
-}
-
-clear_rest() {
-  printf '\033[J'
+  command clear 2>/dev/null || printf '\033[2J\033[H'
 }
 
 hide_cursor() {
@@ -154,13 +147,19 @@ global_cleanup() {
 
   [ -n "${GLOBAL_ROWS_FILE:-}" ] && rm -f "$GLOBAL_ROWS_FILE" 2>/dev/null || true
   [ -n "${GLOBAL_WORKERS_FILE:-}" ] && rm -f "$GLOBAL_WORKERS_FILE" 2>/dev/null || true
-  [ -n "${GLOBAL_PIDS_FILE:-}" ] && rm -f "$GLOBAL_PIDS_FILE" 2>/dev/null || true
+  [ -n "${GLOBAL_RESULTS_DIR:-}" ] && rm -rf "$GLOBAL_RESULTS_DIR" 2>/dev/null || true
+  [ -n "${GLOBAL_LOCKS_DIR:-}" ] && rm -rf "$GLOBAL_LOCKS_DIR" 2>/dev/null || true
 
   exit "$exit_code"
 }
 
 handle_stop_signal() {
   global_cleanup 130
+}
+
+pid_alive() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null
 }
 
 get_raw_processes() {
@@ -193,15 +192,11 @@ IGNORED_PATTERNS = [
 
 def parse_line(line):
     line = line.rstrip("\n")
-
     if not line.strip():
         return None, ""
-
     parts = line.strip().split(None, 1)
-
     if len(parts) == 1:
         return parts[0], ""
-
     return parts[0], parts[1]
 
 def base(path):
@@ -212,7 +207,6 @@ def tokens(cmd):
 
 def is_python_token(tok):
     b = base(tok)
-
     return (
         b == "python"
         or b == "python3"
@@ -226,34 +220,18 @@ def is_python_token(tok):
 
 def script_after_python(cmd):
     ts = tokens(cmd)
-
     for i, tok in enumerate(ts):
         if is_python_token(tok) and i + 1 < len(ts):
             candidate = ts[i + 1]
-
             if candidate.startswith("/app/"):
                 return candidate
-
     return ""
 
 def should_ignore(cmd):
     if any(p in cmd for p in SELF_PATTERNS):
         return True
-
     if any(p in cmd for p in IGNORED_PATTERNS):
         return True
-
-    return False
-
-def is_target(cmd):
-    if should_ignore(cmd):
-        return False
-
-    script = script_after_python(cmd)
-
-    if script:
-        return True
-
     return False
 
 seen = set()
@@ -267,7 +245,10 @@ for line in sys.stdin:
     if pid in seen:
         continue
 
-    if not is_target(cmd):
+    if should_ignore(cmd):
+        continue
+
+    if not script_after_python(cmd):
         continue
 
     seen.add(pid)
@@ -291,10 +272,8 @@ FUNC_W = 32
 
 def fit(value, width):
     value = str(value)
-
     if len(value) <= width:
         return value
-
     return value[:max(width - 1, 0)] + "…"
 
 def base(path):
@@ -308,7 +287,6 @@ def clean(value):
 
 def is_python_token(tok):
     b = base(tok)
-
     return (
         b == "python"
         or b == "python3"
@@ -322,16 +300,13 @@ def is_python_token(tok):
 
 def extract_script(cmd):
     ts = tokens(cmd)
-
     for i, tok in enumerate(ts):
         if is_python_token(tok) and i + 1 < len(ts):
             candidate = ts[i + 1]
-
             if candidate.startswith("/app/"):
                 return base(candidate)
 
     m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
-
     if m:
         return base(m.group(0))
 
@@ -339,16 +314,13 @@ def extract_script(cmd):
 
 def extract_function(cmd):
     ts = tokens(cmd)
-
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
             return clean(ts[i + 1])
-
         if tok.startswith("--function="):
             return clean(tok.split("=", 1)[1])
 
     m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
-
     if m:
         return clean(m.group(1))
 
@@ -359,7 +331,6 @@ print("{}-+-{}-+-{}".format("-" * PID_W, "-" * SCRIPT_W, "-" * FUNC_W))
 
 for line in sys.stdin:
     line = line.rstrip("\n")
-
     if not line or "\t" not in line:
         continue
 
@@ -373,122 +344,6 @@ for line in sys.stdin:
 '
 }
 
-print_ecofloc_table() {
-  python3 -c '
-import os
-import re
-import sys
-
-PID_W = 8
-SCRIPT_W = 30
-FUNC_W = 28
-METRIC_W = 15
-
-def fit(value, width):
-    value = str(value)
-
-    if len(value) <= width:
-        return value
-
-    return value[:max(width - 1, 0)] + "…"
-
-def base(path):
-    return os.path.basename(path.rstrip())
-
-def tokens(cmd):
-    return cmd.split()
-
-def clean(value):
-    return value.strip().strip("\"").strip(chr(39))
-
-def is_python_token(tok):
-    b = base(tok)
-
-    return (
-        b == "python"
-        or b == "python3"
-        or b.startswith("python3.")
-        or b.endswith("python")
-        or b.startswith("python")
-        or tok.endswith("/bin/python")
-        or tok.endswith("/bin/python3")
-        or "/python" in tok
-    )
-
-def extract_script(cmd):
-    ts = tokens(cmd)
-
-    for i, tok in enumerate(ts):
-        if is_python_token(tok) and i + 1 < len(ts):
-            candidate = ts[i + 1]
-
-            if candidate.startswith("/app/"):
-                return base(candidate)
-
-    m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
-
-    if m:
-        return base(m.group(0))
-
-    return "-"
-
-def extract_function(cmd):
-    ts = tokens(cmd)
-
-    for i, tok in enumerate(ts):
-        if tok == "--function" and i + 1 < len(ts):
-            return clean(ts[i + 1])
-
-        if tok.startswith("--function="):
-            return clean(tok.split("=", 1)[1])
-
-    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
-
-    if m:
-        return clean(m.group(1))
-
-    return "-"
-
-headers = ["PID", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU"]
-widths = [PID_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W]
-
-print(" | ".join("{:<{}}".format(h, w) for h, w in zip(headers, widths)))
-print("-+-".join("-" * w for w in widths))
-
-for line in sys.stdin:
-    line = line.rstrip("\n")
-
-    if not line:
-        continue
-
-    parts = line.split("\t")
-
-    while len(parts) < 7:
-        parts.append("-")
-
-    pid = parts[0]
-    cmd = parts[1]
-    cpu = parts[2]
-    ram = parts[3]
-    sd = parts[4]
-    nic = parts[5]
-    gpu = parts[6]
-
-    values = [
-        pid,
-        extract_script(cmd),
-        extract_function(cmd),
-        cpu,
-        ram,
-        sd,
-        nic,
-        gpu,
-    ]
-
-    print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(values, widths)))
-'
-}
-
 run_once() {
   if [ "${QUIET_HEADER:-false}" != true ]; then
     echo "Getting PID of Python processes running in the Argo workflow..."
@@ -499,11 +354,6 @@ run_once() {
   else
     get_matching_processes | print_process_table
   fi
-}
-
-pid_alive() {
-  local pid="$1"
-  kill -0 "$pid" 2>/dev/null
 }
 
 ensure_ecofloc_log_dir() {
@@ -592,84 +442,20 @@ parse_ecofloc_log() {
   echo "${avg}W/${total}J"
 }
 
-safe_update_cell() {
-  local file="$1"
-  local target_pid="$2"
-  local metric="$3"
-  local value="$4"
-
-  python3 - "$file" "$target_pid" "$metric" "$value" <<'PY'
-import re
-import sys
-
-path = sys.argv[1]
-target_pid = sys.argv[2]
-metric = sys.argv[3].lower()
-new_value = sys.argv[4]
-
-index_by_metric = {
-    "cpu": 2,
-    "ram": 3,
-    "sd": 4,
-    "nic": 5,
-    "gpu": 6,
-}
-
-idx = index_by_metric.get(metric)
-
-if idx is None:
-    sys.exit(0)
-
-bad_values = {"", "N/A", "ERR", "CMD_ERR", "NO_DATA"}
-final_re = re.compile(r"^[0-9.?]+W/[0-9.?]+J$")
-
-try:
-    with open(path, "r", encoding="utf-8") as f:
-        rows = f.read().splitlines()
-except FileNotFoundError:
-    rows = []
-
-new_rows = []
-
-for row in rows:
-    parts = row.split("\t")
-
-    while len(parts) < 7:
-        parts.append("-")
-
-    if parts[0] == target_pid:
-        old_value = parts[idx]
-        old_is_final = bool(final_re.match(old_value))
-        new_is_bad = new_value in bad_values
-
-        if old_is_final and new_is_bad:
-            pass
-        else:
-            parts[idx] = new_value
-
-    new_rows.append("\t".join(parts))
-
-with open(path, "w", encoding="utf-8") as f:
-    if new_rows:
-        f.write("\n".join(new_rows) + "\n")
-PY
-}
-
 append_row_if_missing() {
-  local file="$1"
+  local rows_file="$1"
   local pid="$2"
   local cmd="$3"
 
-  python3 - "$file" "$pid" "$cmd" "$ECOFLOC_METRICS" <<'PY'
+  python3 - "$rows_file" "$pid" "$cmd" <<'PY'
 import sys
 
-path = sys.argv[1]
+rows_file = sys.argv[1]
 pid = sys.argv[2]
 cmd = sys.argv[3]
-metrics = {m.strip().lower() for m in sys.argv[4].split(",") if m.strip()}
 
 try:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(rows_file, "r", encoding="utf-8") as f:
         rows = f.read().splitlines()
 except FileNotFoundError:
     rows = []
@@ -679,89 +465,108 @@ for row in rows:
     if parts and parts[0] == pid:
         sys.exit(0)
 
-cpu = "WAIT" if "cpu" in metrics else "-"
-ram = "WAIT" if "ram" in metrics else "-"
-sd = "WAIT" if "sd" in metrics else "-"
-nic = "WAIT" if "nic" in metrics else "-"
-gpu = "WAIT" if "gpu" in metrics else "-"
+rows.append(f"{pid}\t{cmd}")
 
-rows.append("\t".join([pid, cmd, cpu, ram, sd, nic, gpu]))
-
-with open(path, "w", encoding="utf-8") as f:
+with open(rows_file, "w", encoding="utf-8") as f:
     f.write("\n".join(rows) + "\n")
 PY
 }
 
-worker_key_exists() {
-  local pids_file="$1"
-  local pid="$2"
-  local metric="$3"
+metric_enabled() {
+  local target="$1"
+  local metric=""
 
-  grep -q "^${pid}"$'\t'"${metric}"$ "$pids_file" 2>/dev/null
+  IFS=',' read -r -a metric_list <<< "$ECOFLOC_METRICS"
+
+  for metric in "${metric_list[@]}"; do
+    metric="$(printf "%s" "$metric" | tr "[:upper:]" "[:lower:]" | xargs)"
+    if [ "$metric" = "$target" ]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
-mark_worker_key() {
-  local pids_file="$1"
+metric_lock_dir() {
+  local locks_dir="$1"
   local pid="$2"
   local metric="$3"
 
-  printf "%s\t%s\n" "$pid" "$metric" >> "$pids_file"
+  printf "%s/%s_%s.lock" "$locks_dir" "$pid" "$metric"
 }
 
-remove_worker_key() {
-  local pids_file="$1"
+metric_result_file() {
+  local results_dir="$1"
   local pid="$2"
   local metric="$3"
+
+  printf "%s/%s_%s.result" "$results_dir" "$pid" "$metric"
+}
+
+write_result_atomic() {
+  local file="$1"
+  local value="$2"
   local tmp=""
 
-  tmp="$(mktemp)"
-  grep -v "^${pid}"$'\t'"${metric}"$ "$pids_file" 2>/dev/null > "$tmp" || true
-  mv "$tmp" "$pids_file"
+  tmp="${file}.$$.$RANDOM.tmp"
+  printf "%s\n" "$value" > "$tmp"
+  mv "$tmp" "$file"
 }
 
 monitor_pid_metric_once() {
-  local rows_file="$1"
-  local pids_file="$2"
+  local results_dir="$1"
+  local locks_dir="$2"
   local pid="$3"
   local metric="$4"
+  local lock_dir=""
+  local result_file=""
   local log_file=""
   local result=""
 
+  lock_dir="$(metric_lock_dir "$locks_dir" "$pid" "$metric")"
+  result_file="$(metric_result_file "$results_dir" "$pid" "$metric")"
   log_file="${ECOFLOC_LOG_DIR}/ecofloc_${pid}_${metric}_$(date +%s%N).log"
 
-  safe_update_cell "$rows_file" "$pid" "$metric" "RUN"
-
-  if pid_alive "$pid"; then
-    run_ecofloc_window "$pid" "$metric" "$log_file"
-    result="$(parse_ecofloc_log "$log_file" | tail -n 1 | tr -d '\r')"
-
-    if [ -z "$result" ]; then
-      result="NO_DATA"
-    fi
-
-    safe_update_cell "$rows_file" "$pid" "$metric" "$result"
-  else
-    safe_update_cell "$rows_file" "$pid" "$metric" "ENDED"
-  fi
-
-  remove_worker_key "$pids_file" "$pid" "$metric"
-}
-
-start_metric_worker_if_needed() {
-  local rows_file="$1"
-  local workers_file="$2"
-  local pids_file="$3"
-  local pid="$4"
-  local metric="$5"
-
-  if worker_key_exists "$pids_file" "$pid" "$metric"; then
+  if ! pid_alive "$pid"; then
+    write_result_atomic "$result_file" "MISSED"
+    rmdir "$lock_dir" 2>/dev/null || true
     return 0
   fi
 
-  mark_worker_key "$pids_file" "$pid" "$metric"
+  run_ecofloc_window "$pid" "$metric" "$log_file"
+  result="$(parse_ecofloc_log "$log_file" | tail -n 1 | tr -d '\r')"
+
+  if [ -z "$result" ]; then
+    result="NO_DATA"
+  fi
+
+  write_result_atomic "$result_file" "$result"
+  rmdir "$lock_dir" 2>/dev/null || true
+}
+
+start_metric_worker_if_needed() {
+  local workers_file="$1"
+  local results_dir="$2"
+  local locks_dir="$3"
+  local pid="$4"
+  local metric="$5"
+  local lock_dir=""
+  local result_file=""
+
+  lock_dir="$(metric_lock_dir "$locks_dir" "$pid" "$metric")"
+  result_file="$(metric_result_file "$results_dir" "$pid" "$metric")"
+
+  if [ -f "$result_file" ]; then
+    return 0
+  fi
+
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    return 0
+  fi
 
   (
-    monitor_pid_metric_once "$rows_file" "$pids_file" "$pid" "$metric"
+    monitor_pid_metric_once "$results_dir" "$locks_dir" "$pid" "$metric"
   ) &
 
   printf "%s\n" "$!" >> "$workers_file"
@@ -771,7 +576,8 @@ create_workers_for_matches() {
   local matches="$1"
   local rows_file="$2"
   local workers_file="$3"
-  local pids_file="$4"
+  local results_dir="$4"
+  local locks_dir="$5"
   local pid=""
   local cmd=""
   local metric=""
@@ -789,7 +595,7 @@ create_workers_for_matches() {
 
       case "$metric" in
         cpu|ram|sd|nic|gpu)
-          start_metric_worker_if_needed "$rows_file" "$workers_file" "$pids_file" "$pid" "$metric"
+          start_metric_worker_if_needed "$workers_file" "$results_dir" "$locks_dir" "$pid" "$metric"
           ;;
         *)
           ;;
@@ -798,36 +604,163 @@ create_workers_for_matches() {
   done <<< "$matches"
 }
 
+render_ecofloc_table() {
+  local rows_file="$1"
+  local results_dir="$2"
+  local locks_dir="$3"
+
+  python3 - "$rows_file" "$results_dir" "$locks_dir" "$ECOFLOC_METRICS" <<'PY'
+import os
+import re
+import sys
+
+rows_file = sys.argv[1]
+results_dir = sys.argv[2]
+locks_dir = sys.argv[3]
+enabled_metrics = {m.strip().lower() for m in sys.argv[4].split(",") if m.strip()}
+
+PID_W = 8
+SCRIPT_W = 30
+FUNC_W = 28
+METRIC_W = 15
+
+def fit(value, width):
+    value = str(value)
+    if len(value) <= width:
+        return value
+    return value[:max(width - 1, 0)] + "…"
+
+def base(path):
+    return os.path.basename(path.rstrip())
+
+def tokens(cmd):
+    return cmd.split()
+
+def clean(value):
+    return value.strip().strip("\"").strip("'")
+
+def is_python_token(tok):
+    b = base(tok)
+    return (
+        b == "python"
+        or b == "python3"
+        or b.startswith("python3.")
+        or b.endswith("python")
+        or b.startswith("python")
+        or tok.endswith("/bin/python")
+        or tok.endswith("/bin/python3")
+        or "/python" in tok
+    )
+
+def extract_script(cmd):
+    ts = tokens(cmd)
+    for i, tok in enumerate(ts):
+        if is_python_token(tok) and i + 1 < len(ts):
+            candidate = ts[i + 1]
+            if candidate.startswith("/app/"):
+                return base(candidate)
+
+    m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
+    if m:
+        return base(m.group(0))
+
+    return "-"
+
+def extract_function(cmd):
+    ts = tokens(cmd)
+    for i, tok in enumerate(ts):
+        if tok == "--function" and i + 1 < len(ts):
+            return clean(ts[i + 1])
+        if tok.startswith("--function="):
+            return clean(tok.split("=", 1)[1])
+
+    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
+    if m:
+        return clean(m.group(1))
+
+    return "-"
+
+def result_for(pid, metric):
+    if metric not in enabled_metrics:
+        return "-"
+
+    result_file = os.path.join(results_dir, f"{pid}_{metric}.result")
+    lock_dir = os.path.join(locks_dir, f"{pid}_{metric}.lock")
+
+    if os.path.isfile(result_file):
+        try:
+            with open(result_file, "r", encoding="utf-8") as f:
+                value = f.read().strip()
+            return value if value else "NO_DATA"
+        except OSError:
+            return "NO_DATA"
+
+    if os.path.isdir(lock_dir):
+        return "RUN"
+
+    return "WAIT"
+
+headers = ["PID", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU"]
+widths = [PID_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W]
+
+print(" | ".join("{:<{}}".format(h, w) for h, w in zip(headers, widths)))
+print("-+-".join("-" * w for w in widths))
+
+try:
+    with open(rows_file, "r", encoding="utf-8") as f:
+        rows = f.read().splitlines()
+except FileNotFoundError:
+    rows = []
+
+for row in rows:
+    if not row.strip():
+        continue
+
+    parts = row.split("\t", 1)
+    if len(parts) != 2:
+        continue
+
+    pid, cmd = parts
+
+    values = [
+        pid,
+        extract_script(cmd),
+        extract_function(cmd),
+        result_for(pid, "cpu"),
+        result_for(pid, "ram"),
+        result_for(pid, "sd"),
+        result_for(pid, "nic"),
+        result_for(pid, "gpu"),
+    ]
+
+    print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(values, widths)))
+PY
+}
+
 render_ecofloc_frame() {
   local rows_file="$1"
-  local status="$2"
-  local frame_file=""
+  local results_dir="$2"
+  local locks_dir="$3"
+  local status="$4"
 
-  frame_file="$(mktemp)"
+  clear_screen
 
-  {
-    echo "EcoFloc PID monitoring. Press Ctrl+C to stop."
-    echo "Status: ${status}"
-    echo
+  echo "EcoFloc PID monitoring. Press Ctrl+C to stop."
+  echo "Status: ${status}"
+  echo
 
-    if [ -s "$rows_file" ]; then
-      cat "$rows_file" | print_ecofloc_table
-    else
-      echo "No matching Argo workflow process found."
-    fi
-  } > "$frame_file"
-
-  move_home
-  cat "$frame_file"
-  clear_rest
-
-  rm -f "$frame_file"
+  if [ -s "$rows_file" ]; then
+    render_ecofloc_table "$rows_file" "$results_dir" "$locks_dir"
+  else
+    echo "No matching Argo workflow process found."
+  fi
 }
 
 run_ecofloc_watch() {
   local rows_file=""
   local workers_file=""
-  local pids_file=""
+  local results_dir=""
+  local locks_dir=""
   local matches=""
   local status=""
 
@@ -835,11 +768,13 @@ run_ecofloc_watch() {
 
   rows_file="$(mktemp)"
   workers_file="$(mktemp)"
-  pids_file="$(mktemp)"
+  results_dir="$(mktemp -d)"
+  locks_dir="$(mktemp -d)"
 
   GLOBAL_ROWS_FILE="$rows_file"
   GLOBAL_WORKERS_FILE="$workers_file"
-  GLOBAL_PIDS_FILE="$pids_file"
+  GLOBAL_RESULTS_DIR="$results_dir"
+  GLOBAL_LOCKS_DIR="$locks_dir"
 
   trap 'global_cleanup 0' EXIT
   trap handle_stop_signal INT TERM HUP QUIT TSTP
@@ -851,13 +786,13 @@ run_ecofloc_watch() {
     matches="$(get_matching_processes || true)"
 
     if [ -n "$matches" ]; then
-      create_workers_for_matches "$matches" "$rows_file" "$workers_file" "$pids_file"
+      create_workers_for_matches "$matches" "$rows_file" "$workers_file" "$results_dir" "$locks_dir"
       status="monitoring"
     else
       status="waiting for matching processes"
     fi
 
-    render_ecofloc_frame "$rows_file" "$status"
+    render_ecofloc_frame "$rows_file" "$results_dir" "$locks_dir" "$status"
 
     sleep "$SCAN_INTERVAL"
   done
@@ -866,7 +801,8 @@ run_ecofloc_watch() {
 run_ecofloc_once() {
   local rows_file=""
   local workers_file=""
-  local pids_file=""
+  local results_dir=""
+  local locks_dir=""
   local matches=""
   local active="0"
 
@@ -874,11 +810,13 @@ run_ecofloc_once() {
 
   rows_file="$(mktemp)"
   workers_file="$(mktemp)"
-  pids_file="$(mktemp)"
+  results_dir="$(mktemp -d)"
+  locks_dir="$(mktemp -d)"
 
   GLOBAL_ROWS_FILE="$rows_file"
   GLOBAL_WORKERS_FILE="$workers_file"
-  GLOBAL_PIDS_FILE="$pids_file"
+  GLOBAL_RESULTS_DIR="$results_dir"
+  GLOBAL_LOCKS_DIR="$locks_dir"
 
   trap 'global_cleanup 0' EXIT
   trap handle_stop_signal INT TERM HUP QUIT TSTP
@@ -893,12 +831,12 @@ run_ecofloc_once() {
     global_cleanup 0
   fi
 
-  create_workers_for_matches "$matches" "$rows_file" "$workers_file" "$pids_file"
+  create_workers_for_matches "$matches" "$rows_file" "$workers_file" "$results_dir" "$locks_dir"
 
   while true; do
-    active="$(wc -l < "$pids_file" | xargs)"
+    active="$(find "$locks_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | xargs)"
 
-    render_ecofloc_frame "$rows_file" "monitoring; active metric workers: ${active}"
+    render_ecofloc_frame "$rows_file" "$results_dir" "$locks_dir" "monitoring; active metric workers: ${active}"
 
     if [ "$active" = "0" ]; then
       break
@@ -907,26 +845,15 @@ run_ecofloc_once() {
     sleep "$WATCH_INTERVAL"
   done
 
-  render_ecofloc_frame "$rows_file" "done"
+  render_ecofloc_frame "$rows_file" "$results_dir" "$locks_dir" "done"
   global_cleanup 0
 }
 
 render_process_watch_frame() {
-  local frame_file=""
-
-  frame_file="$(mktemp)"
-
-  {
-    echo "Watching Argo workflow Python processes. Press Ctrl+C to stop."
-    echo
-    QUIET_HEADER=true run_once || true
-  } > "$frame_file"
-
-  move_home
-  cat "$frame_file"
-  clear_rest
-
-  rm -f "$frame_file"
+  clear_screen
+  echo "Watching Argo workflow Python processes. Press Ctrl+C to stop."
+  echo
+  QUIET_HEADER=true run_once || true
 }
 
 run_process_watch() {
@@ -967,7 +894,6 @@ while [ $# -gt 0 ]; do
         echo "Missing value for --interval"
         exit 1
       fi
-
       WATCH_INTERVAL="$2"
       shift 2
       ;;
@@ -977,7 +903,6 @@ while [ $# -gt 0 ]; do
         echo "Missing value for --scan-interval"
         exit 1
       fi
-
       SCAN_INTERVAL="$2"
       shift 2
       ;;
@@ -987,7 +912,6 @@ while [ $# -gt 0 ]; do
         echo "Missing value for --ecofloc-interval"
         exit 1
       fi
-
       ECOFLOC_INTERVAL="$2"
       shift 2
       ;;
@@ -997,7 +921,6 @@ while [ $# -gt 0 ]; do
         echo "Missing value for --ecofloc-window"
         exit 1
       fi
-
       ECOFLOC_WINDOW="$2"
       shift 2
       ;;
@@ -1007,7 +930,6 @@ while [ $# -gt 0 ]; do
         echo "Missing value for --metrics"
         exit 1
       fi
-
       ECOFLOC_METRICS="$2"
       shift 2
       ;;
@@ -1017,7 +939,6 @@ while [ $# -gt 0 ]; do
         echo "Missing value for --export"
         exit 1
       fi
-
       ECOFLOC_EXPORT_PATH="$2"
       shift 2
       ;;
