@@ -20,6 +20,10 @@ ECOFLOC_USE_SUDO_EXECUTE=true
 ECOFLOC_LOG_DIR="/tmp/erctl-ecofloc"
 
 SUDO_KEEPALIVE_PID=""
+GLOBAL_SESSIONS_FILE=""
+GLOBAL_ROWS_FILE=""
+CLEANUP_DONE=false
+NEEDS_REDRAW=false
 
 print_help() {
   cat <<'EOF'
@@ -88,6 +92,47 @@ stop_sudo_keepalive() {
   fi
 }
 
+restore_terminal() {
+  tput cnorm 2>/dev/null || true
+  tput rmcup 2>/dev/null || true
+  stty sane 2>/dev/null || true
+}
+
+global_cleanup() {
+  local exit_code="${1:-0}"
+
+  if [ "$CLEANUP_DONE" = true ]; then
+    exit "$exit_code"
+  fi
+
+  CLEANUP_DONE=true
+
+  if [ -n "${GLOBAL_SESSIONS_FILE:-}" ] && [ -f "$GLOBAL_SESSIONS_FILE" ]; then
+    stop_all_ecofloc_sessions "$GLOBAL_SESSIONS_FILE" "${GLOBAL_ROWS_FILE:-}" >/dev/null 2>&1 || true
+  fi
+
+  stop_sudo_keepalive >/dev/null 2>&1 || true
+  restore_terminal
+
+  if [ -n "${GLOBAL_ROWS_FILE:-}" ] && [ -f "$GLOBAL_ROWS_FILE" ]; then
+    rm -f "$GLOBAL_ROWS_FILE" >/dev/null 2>&1 || true
+  fi
+
+  if [ -n "${GLOBAL_SESSIONS_FILE:-}" ] && [ -f "$GLOBAL_SESSIONS_FILE" ]; then
+    rm -f "$GLOBAL_SESSIONS_FILE" >/dev/null 2>&1 || true
+  fi
+
+  exit "$exit_code"
+}
+
+handle_stop_signal() {
+  global_cleanup 130
+}
+
+handle_resize_signal() {
+  NEEDS_REDRAW=true
+}
+
 get_raw_processes() {
   run_wrapped ps axww -o pid=,args=
 }
@@ -102,9 +147,12 @@ def parse_line(line):
     line = line.rstrip("\n")
     if not line.strip():
         return None, ""
+
     parts = line.strip().split(None, 1)
+
     if len(parts) == 1:
         return parts[0], ""
+
     return parts[0], parts[1]
 
 def tokens(cmd):
@@ -138,6 +186,7 @@ def is_ignored(cmd):
         "/opt/ecofloc/ecofloc",
         " ecofloc ",
     ]
+
     return any(x in cmd for x in ignored)
 
 def is_candidate(cmd):
@@ -177,6 +226,7 @@ def extract_script(cmd):
         if tok == "--" and i + 2 < len(ts):
             maybe_python = ts[i + 1]
             maybe_script = ts[i + 2]
+
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
@@ -196,6 +246,7 @@ def extract_function(cmd):
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
             return tok_cleanup(ts[i + 1])
+
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
@@ -207,14 +258,19 @@ def extract_function(cmd):
 
 def score(cmd):
     value = 0
+
     if "/opt/venv/bin/python" in cmd:
         value += 100
+
     if re.search(r"(^|\s)python3?\s+/app/", cmd):
         value += 90
+
     if re.search(r"(^|\s)sh\s+-c\s+", cmd):
         value += 50
+
     if "argoexec emissary" in cmd:
         value += 30
+
     return value
 
 selected = {}
@@ -231,6 +287,7 @@ try:
 
         script = extract_script(cmd)
         function = extract_function(cmd)
+
         key = (script, function)
         current_score = score(cmd)
 
@@ -278,6 +335,7 @@ def parse_line(line):
     line = line.rstrip("\n")
     if "\t" not in line:
         return None, ""
+
     pid, cmd = line.split("\t", 1)
     return pid.strip(), cmd.strip()
 
@@ -313,6 +371,7 @@ def extract_script(cmd):
         if tok == "--" and i + 2 < len(ts):
             maybe_python = ts[i + 1]
             maybe_script = ts[i + 2]
+
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
@@ -332,6 +391,7 @@ def extract_function(cmd):
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
             return tok_cleanup(ts[i + 1])
+
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
@@ -352,6 +412,7 @@ try:
 
         script = extract_script(cmd)
         function = extract_function(cmd)
+
         key = (script, function)
 
         if key in seen:
@@ -421,6 +482,7 @@ def extract_script(cmd):
         if tok == "--" and i + 2 < len(ts):
             maybe_python = ts[i + 1]
             maybe_script = ts[i + 2]
+
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
@@ -440,6 +502,7 @@ def extract_function(cmd):
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
             return tok_cleanup(ts[i + 1])
+
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
@@ -457,10 +520,12 @@ print("-+-".join("-" * w for w in widths))
 
 for line in sys.stdin:
     line = line.rstrip("\n")
+
     if not line:
         continue
 
     parts = line.split("\t")
+
     if len(parts) < 7:
         continue
 
@@ -511,6 +576,7 @@ metric_enabled() {
 
   for metric in "${metric_list[@]}"; do
     metric="$(printf "%s" "$metric" | tr "[:upper:]" "[:lower:]" | xargs)"
+
     if [ "$metric" = "$target" ]; then
       return 0
     fi
@@ -540,18 +606,34 @@ start_ecofloc_for_pid_metric() {
 
   mkdir -p "$ECOFLOC_LOG_DIR"
 
-  if [ "$ECOFLOC_USE_SUDO_EXECUTE" = true ]; then
-    nohup sudo /bin/execute ecofloc "--${metric}" \
-      -p "$pid" \
-      -i "$ECOFLOC_INTERVAL" \
-      -t -1 \
-      "${export_arg[@]}" > "$log_file" 2>&1 &
+  if command -v setsid >/dev/null 2>&1; then
+    if [ "$ECOFLOC_USE_SUDO_EXECUTE" = true ]; then
+      setsid sudo /bin/execute ecofloc "--${metric}" \
+        -p "$pid" \
+        -i "$ECOFLOC_INTERVAL" \
+        -t -1 \
+        "${export_arg[@]}" > "$log_file" 2>&1 &
+    else
+      setsid ecofloc "--${metric}" \
+        -p "$pid" \
+        -i "$ECOFLOC_INTERVAL" \
+        -t -1 \
+        "${export_arg[@]}" > "$log_file" 2>&1 &
+    fi
   else
-    nohup ecofloc "--${metric}" \
-      -p "$pid" \
-      -i "$ECOFLOC_INTERVAL" \
-      -t -1 \
-      "${export_arg[@]}" > "$log_file" 2>&1 &
+    if [ "$ECOFLOC_USE_SUDO_EXECUTE" = true ]; then
+      sudo /bin/execute ecofloc "--${metric}" \
+        -p "$pid" \
+        -i "$ECOFLOC_INTERVAL" \
+        -t -1 \
+        "${export_arg[@]}" > "$log_file" 2>&1 &
+    else
+      ecofloc "--${metric}" \
+        -p "$pid" \
+        -i "$ECOFLOC_INTERVAL" \
+        -t -1 \
+        "${export_arg[@]}" > "$log_file" 2>&1 &
+    fi
   fi
 
   echo $!
@@ -564,7 +646,24 @@ stop_ecofloc() {
     return 0
   fi
 
+  # Try graceful stop on the whole process group first.
+  kill -INT "-${eco_pid}" 2>/dev/null || true
   kill -INT "$eco_pid" 2>/dev/null || true
+
+  sleep 1
+
+  # If still alive, escalate.
+  if kill -0 "$eco_pid" 2>/dev/null; then
+    kill -TERM "-${eco_pid}" 2>/dev/null || true
+    kill -TERM "$eco_pid" 2>/dev/null || true
+  fi
+
+  sleep 1
+
+  if kill -0 "$eco_pid" 2>/dev/null; then
+    kill -KILL "-${eco_pid}" 2>/dev/null || true
+    kill -KILL "$eco_pid" 2>/dev/null || true
+  fi
 }
 
 parse_ecofloc_log() {
@@ -579,7 +678,6 @@ parse_ecofloc_log() {
   local total=""
 
   # Use the LAST summary values, not the first.
-  # This prevents total energy from appearing to go backward when EcoFloc writes multiple summaries.
   avg="$(
     awk -F ':' '
       /Average Power/ {
@@ -826,6 +924,7 @@ render_ecofloc_frame() {
   tput ed 2>/dev/null || printf "\033[J"
 
   rm -f "$frame_file"
+  NEEDS_REDRAW=false
 }
 
 create_ecofloc_sessions_for_matches() {
@@ -972,20 +1071,18 @@ run_ecofloc_once() {
 
   rows_file="$(mktemp)"
   sessions_file="$(mktemp)"
+  GLOBAL_ROWS_FILE="$rows_file"
+  GLOBAL_SESSIONS_FILE="$sessions_file"
 
-  cleanup_ecofloc_once() {
-    stop_all_ecofloc_sessions "$sessions_file" "$rows_file" >/dev/null 2>&1 || true
-    stop_sudo_keepalive
-    rm -f "$rows_file" "$sessions_file"
-  }
-
-  trap cleanup_ecofloc_once RETURN
+  trap 'global_cleanup 0' EXIT
+  trap handle_stop_signal INT TERM HUP QUIT TSTP
+  trap handle_resize_signal WINCH
 
   matches="$(get_matching_processes || true)"
 
   if [ -z "$matches" ]; then
     echo "No matching Argo workflow process found."
-    return 0
+    global_cleanup 0
   fi
 
   initial_rows="$(build_initial_ecofloc_rows "$matches")"
@@ -1018,6 +1115,8 @@ run_ecofloc_once() {
 
   clear
   cat "$rows_file" | print_ecofloc_metrics_table
+
+  global_cleanup 0
 }
 
 run_ecofloc_watch() {
@@ -1031,18 +1130,12 @@ run_ecofloc_watch() {
 
   rows_file="$(mktemp)"
   sessions_file="$(mktemp)"
+  GLOBAL_ROWS_FILE="$rows_file"
+  GLOBAL_SESSIONS_FILE="$sessions_file"
 
-  cleanup_watch() {
-    stop_all_ecofloc_sessions "$sessions_file" "$rows_file" >/dev/null 2>&1 || true
-    stop_sudo_keepalive
-    tput cnorm 2>/dev/null || true
-    tput rmcup 2>/dev/null || true
-    rm -f "$rows_file" "$sessions_file"
-    printf "\nStopped EcoFloc watch.\n"
-    exit 0
-  }
-
-  trap cleanup_watch INT TERM
+  trap 'global_cleanup 0' EXIT
+  trap handle_stop_signal INT TERM HUP QUIT TSTP
+  trap handle_resize_signal WINCH
 
   clear
   tput smcup 2>/dev/null || true
@@ -1085,14 +1178,13 @@ render_process_watch_content() {
 run_watch() {
   local frame_file
 
-  cleanup_watch() {
-    tput cnorm 2>/dev/null || true
-    tput rmcup 2>/dev/null || true
-    printf "\nStopped watching.\n"
+  cleanup_process_watch() {
+    restore_terminal
     exit 0
   }
 
-  trap cleanup_watch INT TERM
+  trap cleanup_process_watch EXIT INT TERM HUP QUIT TSTP
+  trap handle_resize_signal WINCH
 
   clear
   tput smcup 2>/dev/null || true
@@ -1108,6 +1200,7 @@ run_watch() {
     tput ed 2>/dev/null || printf "\033[J"
 
     rm -f "$frame_file"
+    NEEDS_REDRAW=false
 
     sleep "$WATCH_INTERVAL"
   done
