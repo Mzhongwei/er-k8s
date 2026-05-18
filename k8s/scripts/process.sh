@@ -2,17 +2,13 @@
 
 # process.sh
 # Monitor Python /app/... processes and attach EcoFloc using:
-#   sudo /bin/execute ecofloc ...
+#   sudo -n /bin/execute ecofloc ...
 #
-# Main ideas:
-# - Detect only real Python worker processes, not Argo wrappers.
-# - Start EcoFloc collectors as soon as a PID appears.
-# - Keep collectors alive with -t -1.
-# - Stop collectors with SIGINT when the target PID disappears.
-# - Only the main script writes state files.
-# - No background worker writes to the table.
-# - No kill -0 for target PID existence checks, because root-owned container PIDs
-#   can make kill -0 fail for permission reasons.
+# Important:
+# - No setsid: sudo auth cache can be TTY/session-dependent.
+# - PID existence uses /proc and ps, not kill -0.
+# - EcoFloc runs with -t -1, then receives SIGINT when the target process ends.
+# - Only the main process writes state files.
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
@@ -65,7 +61,7 @@ Examples:
   process.sh ecofloc
   process.sh --watch ecofloc
   process.sh --watch ecofloc --metrics cpu,ram
-  process.sh --watch ecofloc --metrics cpu,ram --scan-interval 0.05 --interval 0.25
+  process.sh --watch ecofloc --metrics cpu,ram --scan-interval 0.05 --interval 0.5
 EOF
 }
 
@@ -100,7 +96,24 @@ render_file_in_place() {
 }
 
 start_sudo_keepalive() {
+  echo "[INFO] Checking sudo access for EcoFloc PID mode..."
   sudo -v
+
+  local test_pid=""
+  local test_log="/tmp/erctl-ecofloc-sudo-test.log"
+
+  sleep 10 &
+  test_pid="$!"
+
+  if ! sudo -n /bin/execute ecofloc --cpu -p "$test_pid" -i 1000 -t 1 > "$test_log" 2>&1; then
+    kill "$test_pid" 2>/dev/null || true
+    echo "[ERROR] Cannot run EcoFloc PID mode through sudo /bin/execute."
+    echo "[ERROR] Last output:"
+    tail -n 20 "$test_log"
+    exit 1
+  fi
+
+  kill "$test_pid" 2>/dev/null || true
 
   (
     while true; do
@@ -120,9 +133,6 @@ stop_sudo_keepalive() {
   fi
 }
 
-# Important:
-# Do not use kill -0 here.
-# Container processes are often root-owned, and kill -0 may return EPERM.
 pid_exists() {
   local pid="$1"
 
@@ -137,28 +147,57 @@ ensure_ecofloc_log_dir() {
   mkdir -p "$ECOFLOC_LOG_DIR"
 }
 
-stop_ecofloc_pid() {
-  local eco_pid="$1"
+children_of() {
+  local parent="$1"
+  pgrep -P "$parent" 2>/dev/null || true
+}
 
-  [ -n "${eco_pid:-}" ] || return 0
+all_descendants() {
+  local parent="$1"
+  local child=""
 
-  # EcoFloc prints its summary on SIGINT.
-  # We start it with setsid, so try the process group first.
-  kill -INT "-${eco_pid}" 2>/dev/null || true
-  kill -INT "$eco_pid" 2>/dev/null || true
+  for child in $(children_of "$parent"); do
+    echo "$child"
+    all_descendants "$child"
+  done
+}
+
+stop_process_tree_with_int() {
+  local root_pid="$1"
+  local descendants=""
+
+  [ -n "${root_pid:-}" ] || return 0
+
+  descendants="$(all_descendants "$root_pid" | tac 2>/dev/null || all_descendants "$root_pid")"
+
+  for p in $descendants; do
+    kill -INT "$p" 2>/dev/null || true
+  done
+
+  kill -INT "$root_pid" 2>/dev/null || true
 
   sleep 1
 
-  if ps -p "$eco_pid" >/dev/null 2>&1; then
-    kill -TERM "-${eco_pid}" 2>/dev/null || true
-    kill -TERM "$eco_pid" 2>/dev/null || true
+  for p in $descendants; do
+    if ps -p "$p" >/dev/null 2>&1; then
+      kill -TERM "$p" 2>/dev/null || true
+    fi
+  done
+
+  if ps -p "$root_pid" >/dev/null 2>&1; then
+    kill -TERM "$root_pid" 2>/dev/null || true
   fi
 
   sleep 0.5
 
-  if ps -p "$eco_pid" >/dev/null 2>&1; then
-    kill -KILL "-${eco_pid}" 2>/dev/null || true
-    kill -KILL "$eco_pid" 2>/dev/null || true
+  for p in $descendants; do
+    if ps -p "$p" >/dev/null 2>&1; then
+      kill -KILL "$p" 2>/dev/null || true
+    fi
+  done
+
+  if ps -p "$root_pid" >/dev/null 2>&1; then
+    kill -KILL "$root_pid" 2>/dev/null || true
   fi
 }
 
@@ -174,7 +213,7 @@ stop_all_ecofloc_sessions() {
 
   while IFS=$'\t' read -r pid metric eco_pid log_file start_ts; do
     [ -n "${eco_pid:-}" ] || continue
-    stop_ecofloc_pid "$eco_pid"
+    stop_process_tree_with_int "$eco_pid"
   done < "$SESSIONS_FILE"
 }
 
@@ -212,6 +251,7 @@ import os
 import sys
 
 SELF_PATTERNS = [
+    "sudo -n /bin/execute ecofloc",
     "sudo /bin/execute ecofloc",
     "/bin/execute ecofloc",
     "/opt/ecofloc/ecofloc",
@@ -270,10 +310,6 @@ def is_target_python_process(cmd):
     if len(ts) < 2:
         return False
 
-    # Important:
-    # Only accept actual Python worker processes where argv[0] is Python
-    # and argv[1] is an /app/... script.
-    # This avoids sh -c wrappers and Argo executor wrappers.
     return is_python_token(ts[0]) and ts[1].startswith("/app/")
 
 seen = set()
@@ -306,8 +342,8 @@ import re
 import sys
 
 PID_W = 8
-SCRIPT_W = 40
-FUNC_W = 32
+SCRIPT_W = 20
+FUNC_W = 20
 
 def fit(value, width):
     value = str(value)
@@ -447,19 +483,11 @@ start_ecofloc_session() {
     export_args=(-f "$ECOFLOC_EXPORT_PATH")
   fi
 
-  if command -v setsid >/dev/null 2>&1; then
-    setsid sudo /bin/execute ecofloc "--${metric}" \
-      -p "$pid" \
-      -i "$ECOFLOC_INTERVAL" \
-      -t -1 \
-      "${export_args[@]}" > "$log_file" 2>&1 &
-  else
-    sudo /bin/execute ecofloc "--${metric}" \
-      -p "$pid" \
-      -i "$ECOFLOC_INTERVAL" \
-      -t -1 \
-      "${export_args[@]}" > "$log_file" 2>&1 &
-  fi
+  sudo -n /bin/execute ecofloc "--${metric}" \
+    -p "$pid" \
+    -i "$ECOFLOC_INTERVAL" \
+    -t -1 \
+    "${export_args[@]}" > "$log_file" 2>&1 &
 
   echo "$!"
 }
@@ -468,7 +496,7 @@ parse_ecofloc_log() {
   local log_file="$1"
 
   if [ ! -f "$log_file" ]; then
-    echo "NO_DATA"
+    echo "NO_LOG"
     return 0
   fi
 
@@ -477,7 +505,8 @@ parse_ecofloc_log() {
 
   avg="$(
     awk -F ':' '
-      /Average Power/ {
+      BEGIN { IGNORECASE = 1 }
+      /Average[[:space:]]+Power/ {
         gsub(/^[ \t]+|[ \t]+$/, "", $2)
         last = $2
       }
@@ -489,6 +518,7 @@ parse_ecofloc_log() {
 
   total="$(
     awk -F ':' '
+      BEGIN { IGNORECASE = 1 }
       /Total.*Energy/ {
         gsub(/^[ \t]+|[ \t]+$/, "", $2)
         last = $2
@@ -499,24 +529,41 @@ parse_ecofloc_log() {
     ' "$log_file" | awk '{ print $1 }'
   )"
 
-  if [ -z "$avg" ] && [ -z "$total" ]; then
-    if grep -q "Usage:" "$log_file" 2>/dev/null; then
-      echo "CMD_ERR"
-    else
-      echo "NO_DATA"
-    fi
+  if [ -n "$avg" ] || [ -n "$total" ]; then
+    [ -z "$avg" ] && avg="?"
+    [ -z "$total" ] && total="?"
+    echo "${avg}W/${total}J"
     return 0
   fi
 
-  if [ -z "$avg" ]; then
-    avg="?"
+  if grep -qi "a password is required\|a terminal is required\|no tty\|sudo:" "$log_file"; then
+    echo "SUDO_AUTH"
+    return 0
   fi
 
-  if [ -z "$total" ]; then
-    total="?"
+  if grep -qi "invalid option\|usage:" "$log_file"; then
+    echo "BAD_ARGS"
+    return 0
   fi
 
-  echo "${avg}W/${total}J"
+  if grep -qi "not allowed\|not permitted\|permission denied" "$log_file"; then
+    echo "DENIED"
+    return 0
+  fi
+
+  if grep -qi "no such process\|invalid pid\|process.*not.*found" "$log_file"; then
+    echo "BAD_PID"
+    return 0
+  fi
+
+  local last_line=""
+  last_line="$(grep -v '^[[:space:]]*$' "$log_file" | tail -n 1 | tr -d '\r' | cut -c 1-14)"
+
+  if [ -n "$last_line" ]; then
+    echo "LOG:${last_line}"
+  else
+    echo "EMPTY_LOG"
+  fi
 }
 
 create_sessions_for_matches() {
@@ -554,11 +601,18 @@ create_sessions_for_matches() {
             continue
           fi
 
+          if ! sudo -n true 2>/dev/null; then
+            write_result "$pid" "$metric" "SUDO_AUTH"
+            continue
+          fi
+
           start_ts="$(date +%s)"
           log_file="${ECOFLOC_LOG_DIR}/ecofloc_${pid}_${metric}_${start_ts}.log"
           eco_pid="$(start_ecofloc_session "$pid" "$metric" "$log_file")"
 
           printf "%s\t%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" "$start_ts" >> "$SESSIONS_FILE"
+
+          sleep 0.03
           ;;
         *)
           ;;
@@ -597,11 +651,11 @@ finalize_finished_sessions() {
 
     elapsed="$((now - start_ts))"
 
-    stop_ecofloc_pid "$eco_pid"
+    stop_process_tree_with_int "$eco_pid"
 
     value="$(parse_ecofloc_log "$log_file" | tail -n 1 | tr -d '\r')"
 
-    if [ -z "$value" ] || [ "$value" = "NO_DATA" ]; then
+    if [ -z "$value" ] || [ "$value" = "NO_LOG" ] || [ "$value" = "EMPTY_LOG" ]; then
       if [ "$elapsed" -lt 1 ]; then
         value="TOO_SHORT"
       else
@@ -628,9 +682,13 @@ results_file = sys.argv[3]
 enabled_metrics = {m.strip().lower() for m in sys.argv[4].split(",") if m.strip()}
 
 PID_W = 8
-SCRIPT_W = 30
-FUNC_W = 28
-METRIC_W = 15
+SCRIPT_W = 20
+FUNC_W = 20
+METRIC_W = 16
+TOTAL_W = 12
+
+METRICS = ["cpu", "ram", "sd", "nic", "gpu"]
+VALUE_RE = re.compile(r"^\s*([0-9.]+|\?)W/([0-9.]+|\?)J\s*$")
 
 def fit(value, width):
     value = str(value)
@@ -669,6 +727,27 @@ def extract_function(cmd):
 
     return "-"
 
+def parse_metric_value(value):
+    m = VALUE_RE.match(str(value))
+    if not m:
+        return 0.0, 0.0, False
+
+    power_raw, energy_raw = m.groups()
+    power = 0.0 if power_raw == "?" else float(power_raw)
+    energy = 0.0 if energy_raw == "?" else float(energy_raw)
+
+    return power, energy, True
+
+def format_metric(power, energy, valid_count):
+    if valid_count <= 0:
+        return "-"
+    return f"{power:.2f}W/{energy:.2f}J"
+
+def format_energy(energy, valid_count):
+    if valid_count <= 0:
+        return "-"
+    return f"{energy:.2f}J"
+
 results = {}
 sessions = {}
 now = int(time.time())
@@ -691,11 +770,9 @@ try:
             parts = line.split("\t")
             if len(parts) >= 5:
                 pid, metric, eco_pid, log_file, start_ts = parts[:5]
-                try:
-                    elapsed = max(0, now - int(start_ts))
-                except ValueError:
-                    elapsed = 0
-                sessions[(pid, metric)] = f"RUN {elapsed}s"
+                spinner_frames = ["|", "/", "-", "\\"]
+                spinner = spinner_frames[int(time.time() * 4) % len(spinner_frames)]
+                sessions[(pid, metric)] = f"{spinner} measuring..."
 except FileNotFoundError:
     pass
 
@@ -711,8 +788,8 @@ def value_for(pid, metric):
 
     return "WAIT"
 
-headers = ["PID", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU"]
-widths = [PID_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W]
+headers = ["PID", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU", "TOTAL"]
+widths = [PID_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, TOTAL_W]
 
 print(" | ".join("{:<{}}".format(h, w) for h, w in zip(headers, widths)))
 print("-+-".join("-" * w for w in widths))
@@ -722,6 +799,14 @@ try:
         rows = f.read().splitlines()
 except FileNotFoundError:
     rows = []
+
+column_power_totals = {metric: 0.0 for metric in METRICS}
+column_energy_totals = {metric: 0.0 for metric in METRICS}
+column_valid_counts = {metric: 0 for metric in METRICS}
+
+grand_power_total = 0.0
+grand_energy_total = 0.0
+grand_valid_count = 0
 
 for row in rows:
     if not row.strip():
@@ -733,18 +818,60 @@ for row in rows:
 
     pid, cmd = parts
 
+    metric_values = {}
+    row_power_total = 0.0
+    row_energy_total = 0.0
+    row_valid_count = 0
+
+    for metric in METRICS:
+        value = value_for(pid, metric)
+        metric_values[metric] = value
+
+        power, energy, valid = parse_metric_value(value)
+        if valid:
+            row_power_total += power
+            row_energy_total += energy
+            row_valid_count += 1
+
+            column_power_totals[metric] += power
+            column_energy_totals[metric] += energy
+            column_valid_counts[metric] += 1
+
+            grand_power_total += power
+            grand_energy_total += energy
+            grand_valid_count += 1
+
+    row_total = format_energy(row_energy_total, row_valid_count)
+
     values = [
         pid,
         extract_script(cmd),
         extract_function(cmd),
-        value_for(pid, "cpu"),
-        value_for(pid, "ram"),
-        value_for(pid, "sd"),
-        value_for(pid, "nic"),
-        value_for(pid, "gpu"),
+        metric_values["cpu"],
+        metric_values["ram"],
+        metric_values["sd"],
+        metric_values["nic"],
+        metric_values["gpu"],
+        row_total,
     ]
 
     print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(values, widths)))
+
+print("-+-".join("-" * w for w in widths))
+
+total_values = [
+    "TOTAL",
+    "-",
+    "-",
+    format_metric(column_power_totals["cpu"], column_energy_totals["cpu"], column_valid_counts["cpu"]),
+    format_metric(column_power_totals["ram"], column_energy_totals["ram"], column_valid_counts["ram"]),
+    format_metric(column_power_totals["sd"], column_energy_totals["sd"], column_valid_counts["sd"]),
+    format_metric(column_power_totals["nic"], column_energy_totals["nic"], column_valid_counts["nic"]),
+    format_metric(column_power_totals["gpu"], column_energy_totals["gpu"], column_valid_counts["gpu"]),
+    format_energy(grand_energy_total, grand_valid_count),
+]
+
+print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(total_values, widths)))
 PY
 }
 
