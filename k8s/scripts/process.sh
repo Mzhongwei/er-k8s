@@ -9,7 +9,7 @@ fi
 set -euo pipefail
 
 PROFILE="domolandes"
-COMMAND_WRAPPER=(minikube ssh -p "${PROFILE}" --)
+COMMAND_WRAPPER=()
 WATCH_INTERVAL="1"
 
 print_help() {
@@ -33,10 +33,6 @@ EOF
 }
 
 get_raw_processes() {
-  # Output format:
-  # PID COMMAND
-  #
-  # axww prevents command truncation.
   "${COMMAND_WRAPPER[@]}" ps axww -o pid=,args=
 }
 
@@ -63,6 +59,9 @@ def tokens(cmd):
 
 def base(path):
     return os.path.basename(path.rstrip())
+
+def tok_cleanup(value):
+    return value.strip().strip("\"'\''")
 
 def is_python(tok):
     b = base(tok)
@@ -95,22 +94,16 @@ def is_candidate(cmd):
 
     ts = tokens(cmd)
 
-    # Normal case:
-    # /opt/venv/bin/python /app/distributions/file.py ...
     for i, tok in enumerate(ts):
         if is_python(tok) and i + 1 < len(ts) and ts[i + 1].startswith("/app/"):
             return True
 
-    # Argo emissary case:
-    # argoexec emissary ... -- /opt/venv/bin/python /app/distributions/file.py ...
     if "argoexec emissary" in cmd:
         for i, tok in enumerate(ts):
             if tok == "--" and i + 2 < len(ts):
                 if is_python(ts[i + 1]) and ts[i + 2].startswith("/app/"):
                     return True
 
-    # Shell wrapper case:
-    # sh -c /opt/venv/bin/python /app/distributions/file.py ...
     if re.search(r"(^|\s)(python|python3|/opt/venv/bin/python)\s+/app/", cmd):
         return True
 
@@ -119,14 +112,12 @@ def is_candidate(cmd):
 def extract_script(cmd):
     ts = tokens(cmd)
 
-    # Normal Python command.
     for i, tok in enumerate(ts):
         if is_python(tok) and i + 1 < len(ts):
             candidate = ts[i + 1]
             if candidate.startswith("/app/"):
                 return base(candidate)
 
-    # Argo emissary command.
     for i, tok in enumerate(ts):
         if tok == "--" and i + 2 < len(ts):
             maybe_python = ts[i + 1]
@@ -135,12 +126,10 @@ def extract_script(cmd):
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
-    # Fallback: any /app/*.py path.
     m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
     if m:
         return base(m.group(0))
 
-    # Fallback: /app/name without .py.
     m = re.search(r"(?<!\S)/app/[^ ]+(?!\S)", cmd)
     if m:
         return base(m.group(0))
@@ -163,24 +152,18 @@ def extract_function(cmd):
 
     return "-"
 
-def tok_cleanup(value):
-    return value.strip().strip("\"'\''")
-
 def score(cmd):
     value = 0
 
-    # Prefer real worker process.
     if "/opt/venv/bin/python" in cmd:
         value += 100
 
     if re.search(r"(^|\s)python3?\s+/app/", cmd):
         value += 90
 
-    # Shell wrapper is useful but less precise.
     if re.search(r"(^|\s)sh\s+-c\s+", cmd):
         value += 50
 
-    # Emissary wrapper is useful during startup but not preferred.
     if "argoexec emissary" in cmd:
         value += 30
 
@@ -201,7 +184,6 @@ try:
         script = extract_script(cmd)
         function = extract_function(cmd)
 
-        # Avoid doubles.
         key = (script, function)
         current_score = score(cmd)
 
@@ -241,8 +223,12 @@ def fit(value, width):
 
     return value[:width - 1] + "…"
 
-print(f"{fit(\"PID\", PID_W):<{PID_W}} | {fit(\"SCRIPT\", SCRIPT_W):<{SCRIPT_W}} | {fit(\"FUNCTION\", FUNC_W):<{FUNC_W}}")
-print(f"{\"-\" * PID_W}-+-{\"-\" * SCRIPT_W}-+-{\"-\" * FUNC_W}")
+print("{:<{}} | {:<{}} | {:<{}}".format(
+    fit("PID", PID_W), PID_W,
+    fit("SCRIPT", SCRIPT_W), SCRIPT_W,
+    fit("FUNCTION", FUNC_W), FUNC_W
+))
+print("{}-+-{}-+-{}".format("-" * PID_W, "-" * SCRIPT_W, "-" * FUNC_W))
 
 def parse_line(line):
     line = line.rstrip("\n")
@@ -257,6 +243,9 @@ def tokens(cmd):
 
 def base(path):
     return os.path.basename(path.rstrip())
+
+def tok_cleanup(value):
+    return value.strip().strip("\"'\''")
 
 def is_python(tok):
     b = base(tok)
@@ -295,9 +284,6 @@ def extract_script(cmd):
 
     return "-"
 
-def tok_cleanup(value):
-    return value.strip().strip("\"'\''")
-
 def extract_function(cmd):
     ts = tokens(cmd)
 
@@ -333,11 +319,11 @@ try:
 
         seen.add(key)
 
-        print(
-            f"{fit(pid, PID_W):<{PID_W}} | "
-            f"{fit(script, SCRIPT_W):<{SCRIPT_W}} | "
-            f"{fit(function, FUNC_W):<{FUNC_W}}"
-        )
+        print("{:<{}} | {:<{}} | {:<{}}".format(
+            fit(pid, PID_W), PID_W,
+            fit(script, SCRIPT_W), SCRIPT_W,
+            fit(function, FUNC_W), FUNC_W
+        ))
 
 except KeyboardInterrupt:
     sys.exit(0)
@@ -370,16 +356,12 @@ run_watch() {
 
   trap cleanup_watch INT TERM
 
-  # Alternate screen + hidden cursor = less flickering.
   tput smcup 2>/dev/null || true
   tput civis 2>/dev/null || true
 
   while true; do
-    # Move to top-left.
-    tput cup 0 0 2>/dev/null || printf '\033[H'
-
-    # Clear frame before drawing to avoid leftover characters.
-    tput ed 2>/dev/null || printf '\033[J'
+    tput cup 0 0 2>/dev/null || printf "\033[H"
+    tput ed 2>/dev/null || printf "\033[J"
 
     echo "Watching Argo workflow processes. Press Ctrl+C to stop."
     echo "Refresh interval: ${WATCH_INTERVAL}s"
