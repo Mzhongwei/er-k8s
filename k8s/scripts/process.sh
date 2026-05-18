@@ -14,10 +14,10 @@ COMMAND_WRAPPER=()
 WATCH_INTERVAL="1"
 
 ECOFLOC_INTERVAL="1000"
-ECOFLOC_DURATION="10"
 ECOFLOC_METRICS="cpu,ram,sd,nic,gpu"
 ECOFLOC_EXPORT_PATH=""
 ECOFLOC_USE_SUDO=true
+ECOFLOC_REMOTE_LOG_DIR="/tmp/erctl-ecofloc"
 
 print_help() {
   cat <<'EOF'
@@ -26,19 +26,21 @@ Usage: process.sh [options] [command]
 Commands:
   get                       Get the PID of the processes running in the Argo workflow.
   ecofloc                   Run EcoFloc on detected Argo workflow PIDs and show metrics as table columns.
+                            EcoFloc follows each PID until it exits.
 
 Options:
   --full                    Show full command output for matching processes.
-  --watch                   Refresh the output continuously.
+  --watch                   Refresh continuously.
+                            With get: refresh the process table.
+                            With ecofloc: keep scanning for new PIDs and attach EcoFloc to them.
   --interval SECONDS        Refresh interval for --watch. Default: 1.
 
 EcoFloc options:
   --ecofloc-interval MS     EcoFloc measurement interval in milliseconds. Default: 1000.
-  --ecofloc-duration SEC    EcoFloc measurement duration in seconds. Default: 10.
   --metrics LIST            Comma-separated metrics. Default: cpu,ram,sd,nic,gpu.
                             Example: --metrics cpu,ram
   --export PATH             Pass -f PATH to EcoFloc for CSV export.
-  --no-sudo                 Run ecofloc without sudo inside Minikube.
+  --no-sudo                 Run ecofloc without sudo.
 
 Other:
   --help                    Show this help.
@@ -50,10 +52,9 @@ Examples:
   process.sh --watch --interval 0.5 get
 
   process.sh ecofloc
-  process.sh ecofloc --ecofloc-duration 5
   process.sh ecofloc --metrics cpu,ram
   process.sh ecofloc --export /tmp/ecofloc
-  process.sh --watch ecofloc --ecofloc-duration 1
+  process.sh --watch ecofloc
 EOF
 }
 
@@ -513,86 +514,201 @@ run_once() {
   fi
 }
 
-run_ecofloc_for_pid_metric() {
+metric_enabled() {
+  local target="$1"
+  local metric=""
+
+  IFS=',' read -r -a metric_list <<< "$ECOFLOC_METRICS"
+
+  for metric in "${metric_list[@]}"; do
+    metric="$(printf "%s" "$metric" | tr "[:upper:]" "[:lower:]" | xargs)"
+
+    if [ "$metric" = "$target" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+pid_alive_remote() {
+  local pid="$1"
+
+  "${COMMAND_WRAPPER[@]}" sh -c "kill -0 '$pid' 2>/dev/null"
+}
+
+ensure_ecofloc_remote_dir() {
+  "${COMMAND_WRAPPER[@]}" mkdir -p "$ECOFLOC_REMOTE_LOG_DIR"
+}
+
+start_ecofloc_for_pid_metric() {
   local pid="$1"
   local metric="$2"
-
-  local component="--${metric}"
-  local output=""
-  local avg_power=""
-  local total_energy=""
-  local cmd_prefix=()
+  local log_file="$3"
+  local export_arg=""
+  local sudo_prefix=""
 
   if [ "$ECOFLOC_USE_SUDO" = true ]; then
-    cmd_prefix=(sudo execute)
+    sudo_prefix="sudo execute"
   fi
 
   if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
-    output="$(
-      "${COMMAND_WRAPPER[@]}" "${cmd_prefix[@]}" ecofloc "$component" \
-        -p "$pid" \
-        -i "$ECOFLOC_INTERVAL" \
-        -t "$ECOFLOC_DURATION" \
-        -f "$ECOFLOC_EXPORT_PATH" 2>&1
-    )" || {
-      printf "ERR"
-      return 0
-    }
-  else
-    output="$(
-      "${COMMAND_WRAPPER[@]}" "${cmd_prefix[@]}" ecofloc "$component" \
-        -p "$pid" \
-        -i "$ECOFLOC_INTERVAL" \
-        -t "$ECOFLOC_DURATION" 2>&1
-    )" || {
-      printf "ERR"
-      return 0
-    }
+    export_arg="-f '$ECOFLOC_EXPORT_PATH'"
   fi
 
-  avg_power="$(
-    printf "%s\n" "$output" |
-      awk -F ":" "/Average Power/ { gsub(/^[ \t]+|[ \t]+$/, \"\", \$2); print \$2; exit }" |
-      awk "{ print \$1 }"
-  )"
+  "${COMMAND_WRAPPER[@]}" sh -c "
+    mkdir -p '$ECOFLOC_REMOTE_LOG_DIR'
+    nohup $sudo_prefix ecofloc --$metric -p '$pid' -i '$ECOFLOC_INTERVAL' -t -1 $export_arg > '$log_file' 2>&1 &
+    echo \$!
+  "
+}
 
-  total_energy="$(
-    printf "%s\n" "$output" |
-      awk -F ":" "/Total Energy/ { gsub(/^[ \t]+|[ \t]+$/, \"\", \$2); print \$2; exit }" |
-      awk "{ print \$1 }"
-  )"
+stop_ecofloc_remote() {
+  local eco_pid="$1"
 
-  if [ -z "$avg_power" ] && [ -z "$total_energy" ]; then
-    printf "N/A"
+  if [ -z "$eco_pid" ]; then
     return 0
   fi
 
-  if [ -z "$avg_power" ]; then
-    avg_power="?"
+  if [ "$ECOFLOC_USE_SUDO" = true ]; then
+    "${COMMAND_WRAPPER[@]}" sh -c "sudo execute kill -INT '$eco_pid' 2>/dev/null || kill -INT '$eco_pid' 2>/dev/null || true"
+  else
+    "${COMMAND_WRAPPER[@]}" sh -c "kill -INT '$eco_pid' 2>/dev/null || true"
   fi
-
-  if [ -z "$total_energy" ]; then
-    total_energy="?"
-  fi
-
-  printf "%sW/%sJ" "$avg_power" "$total_energy"
 }
 
-run_ecofloc_once() {
-  local matches
+parse_ecofloc_log_remote() {
+  local log_file="$1"
+
+  "${COMMAND_WRAPPER[@]}" sh -c "
+    if [ ! -f '$log_file' ]; then
+      echo 'N/A'
+      exit 0
+    fi
+
+    avg=\$(awk -F ':' '/Average Power/ { gsub(/^[ \t]+|[ \t]+$/, \"\", \$2); print \$2; exit }' '$log_file' | awk '{ print \$1 }')
+    total=\$(awk -F ':' '/Total Energy/ { gsub(/^[ \t]+|[ \t]+$/, \"\", \$2); print \$2; exit }' '$log_file' | awk '{ print \$1 }')
+
+    if [ -z \"\$avg\" ] && [ -z \"\$total\" ]; then
+      echo 'N/A'
+      exit 0
+    fi
+
+    if [ -z \"\$avg\" ]; then
+      avg='?'
+    fi
+
+    if [ -z \"\$total\" ]; then
+      total='?'
+    fi
+
+    echo \"\${avg}W/\${total}J\"
+  "
+}
+
+write_ecofloc_rows_file() {
+  local file="$1"
+  local rows="$2"
+
+  printf "%s" "$rows" > "$file"
+}
+
+update_ecofloc_cell() {
+  local file="$1"
+  local target_pid="$2"
+  local metric="$3"
+  local value="$4"
+
+  python3 - "$file" "$target_pid" "$metric" "$value" <<'PY'
+import sys
+
+path = sys.argv[1]
+target_pid = sys.argv[2]
+metric = sys.argv[3].lower()
+value = sys.argv[4]
+
+index_by_metric = {
+    "cpu": 2,
+    "ram": 3,
+    "sd": 4,
+    "nic": 5,
+    "gpu": 6,
+}
+
+idx = index_by_metric.get(metric)
+if idx is None:
+    sys.exit(0)
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        rows = f.read().splitlines()
+except FileNotFoundError:
+    rows = []
+
+new_rows = []
+
+for row in rows:
+    parts = row.split("\t")
+
+    while len(parts) < 7:
+        parts.append("N/A")
+
+    if parts[0] == target_pid:
+        parts[idx] = value
+
+    new_rows.append("\t".join(parts))
+
+with open(path, "w", encoding="utf-8") as f:
+    if new_rows:
+        f.write("\n".join(new_rows) + "\n")
+PY
+}
+
+append_ecofloc_row_if_missing() {
+  local file="$1"
+  local pid="$2"
+  local cmd="$3"
+
+  python3 - "$file" "$pid" "$cmd" "$ECOFLOC_METRICS" <<'PY'
+import sys
+
+path = sys.argv[1]
+pid = sys.argv[2]
+cmd = sys.argv[3]
+metrics = {m.strip().lower() for m in sys.argv[4].split(",") if m.strip()}
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        rows = f.read().splitlines()
+except FileNotFoundError:
+    rows = []
+
+for row in rows:
+    parts = row.split("\t")
+    if parts and parts[0] == pid:
+        sys.exit(0)
+
+cpu = "WAIT" if "cpu" in metrics else "N/A"
+ram = "WAIT" if "ram" in metrics else "N/A"
+sd = "WAIT" if "sd" in metrics else "N/A"
+nic = "WAIT" if "nic" in metrics else "N/A"
+gpu = "WAIT" if "gpu" in metrics else "N/A"
+
+rows.append("\t".join([pid, cmd, cpu, ram, sd, nic, gpu]))
+
+with open(path, "w", encoding="utf-8") as f:
+    f.write("\n".join(rows) + "\n")
+PY
+}
+
+build_initial_ecofloc_rows() {
+  local matches="$1"
   local rows=""
   local cpu="N/A"
   local ram="N/A"
   local sd="N/A"
   local nic="N/A"
   local gpu="N/A"
-
-  matches="$(get_matching_processes || true)"
-
-  if [ -z "$matches" ]; then
-    echo "No matching Argo workflow process found."
-    return 0
-  fi
 
   while IFS=$'\t' read -r pid cmd; do
     [ -n "${pid:-}" ] || continue
@@ -604,36 +720,274 @@ run_ecofloc_once() {
     nic="N/A"
     gpu="N/A"
 
-    IFS=',' read -r -a metrics <<< "$ECOFLOC_METRICS"
+    if metric_enabled "cpu"; then cpu="WAIT"; fi
+    if metric_enabled "ram"; then ram="WAIT"; fi
+    if metric_enabled "sd"; then sd="WAIT"; fi
+    if metric_enabled "nic"; then nic="WAIT"; fi
+    if metric_enabled "gpu"; then gpu="WAIT"; fi
 
-    for metric in "${metrics[@]}"; do
+    rows+="${pid}"$'\t'"${cmd}"$'\t'"${cpu}"$'\t'"${ram}"$'\t'"${sd}"$'\t'"${nic}"$'\t'"${gpu}"$'\n'
+  done <<< "$matches"
+
+  printf "%s" "$rows"
+}
+
+render_ecofloc_frame() {
+  local rows_file="$1"
+  local status="${2:-}"
+
+  tput cup 0 0 2>/dev/null || printf "\033[H"
+  tput ed 2>/dev/null || printf "\033[J"
+
+  echo "EcoFloc PID-lifetime monitoring for Argo workflow processes. Press Ctrl+C to stop."
+  echo "Watch refresh interval: ${WATCH_INTERVAL}s"
+  echo "EcoFloc interval: ${ECOFLOC_INTERVAL} ms"
+  echo "EcoFloc metrics: ${ECOFLOC_METRICS}"
+  echo "EcoFloc duration mode: -t -1, stopped when target PID exits"
+
+  if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
+    echo "EcoFloc export path: ${ECOFLOC_EXPORT_PATH}"
+  fi
+
+  if [ -n "$status" ]; then
+    echo "Status: ${status}"
+  else
+    echo "Status: idle"
+  fi
+
+  echo
+
+  if [ -s "$rows_file" ]; then
+    cat "$rows_file" | print_ecofloc_metrics_table
+  else
+    echo "No matching Argo workflow process found."
+  fi
+}
+
+create_ecofloc_sessions_for_matches() {
+  local matches="$1"
+  local rows_file="$2"
+  local sessions_file="$3"
+  local session_id
+  local metric
+  local log_file
+  local eco_pid
+
+  session_id="$(date +%s%N)"
+
+  ensure_ecofloc_remote_dir
+
+  while IFS=$'\t' read -r pid cmd; do
+    [ -n "${pid:-}" ] || continue
+    [ -n "${cmd:-}" ] || continue
+
+    append_ecofloc_row_if_missing "$rows_file" "$pid" "$cmd"
+
+    IFS=',' read -r -a metric_list <<< "$ECOFLOC_METRICS"
+
+    for metric in "${metric_list[@]}"; do
       metric="$(printf "%s" "$metric" | tr "[:upper:]" "[:lower:]" | xargs)"
 
       case "$metric" in
-        cpu)
-          cpu="$(run_ecofloc_for_pid_metric "$pid" "cpu")"
-          ;;
-        ram)
-          ram="$(run_ecofloc_for_pid_metric "$pid" "ram")"
-          ;;
-        sd)
-          sd="$(run_ecofloc_for_pid_metric "$pid" "sd")"
-          ;;
-        nic)
-          nic="$(run_ecofloc_for_pid_metric "$pid" "nic")"
-          ;;
-        gpu)
-          gpu="$(run_ecofloc_for_pid_metric "$pid" "gpu")"
+        cpu|ram|sd|nic|gpu)
+          if grep -q "^${pid}"$'\t'"${metric}"$'\t' "$sessions_file" 2>/dev/null; then
+            continue
+          fi
+
+          update_ecofloc_cell "$rows_file" "$pid" "$metric" "RUN"
+
+          log_file="${ECOFLOC_REMOTE_LOG_DIR}/ecofloc_${session_id}_${pid}_${metric}.log"
+          eco_pid="$(start_ecofloc_for_pid_metric "$pid" "$metric" "$log_file" | tail -n 1 | tr -d '\r' | xargs)"
+
+          if [ -z "$eco_pid" ]; then
+            update_ecofloc_cell "$rows_file" "$pid" "$metric" "ERR"
+            continue
+          fi
+
+          printf "%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" >> "$sessions_file"
           ;;
         *)
           ;;
       esac
     done
-
-    rows+="${pid}"$'\t'"${cmd}"$'\t'"${cpu}"$'\t'"${ram}"$'\t'"${sd}"$'\t'"${nic}"$'\t'"${gpu}"$'\n'
   done <<< "$matches"
+}
 
-  printf "%s" "$rows" | print_ecofloc_metrics_table
+finalize_finished_sessions() {
+  local rows_file="$1"
+  local sessions_file="$2"
+  local remaining_file
+  local pid
+  local metric
+  local eco_pid
+  local log_file
+  local result
+
+  remaining_file="$(mktemp)"
+
+  if [ ! -s "$sessions_file" ]; then
+    : > "$remaining_file"
+    mv "$remaining_file" "$sessions_file"
+    return 0
+  fi
+
+  while IFS=$'\t' read -r pid metric eco_pid log_file; do
+    [ -n "${pid:-}" ] || continue
+    [ -n "${metric:-}" ] || continue
+    [ -n "${eco_pid:-}" ] || continue
+    [ -n "${log_file:-}" ] || continue
+
+    if pid_alive_remote "$pid"; then
+      printf "%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" >> "$remaining_file"
+      continue
+    fi
+
+    stop_ecofloc_remote "$eco_pid"
+    sleep 1
+
+    result="$(parse_ecofloc_log_remote "$log_file" | tail -n 1 | tr -d '\r')"
+
+    if [ -z "$result" ]; then
+      result="N/A"
+    fi
+
+    update_ecofloc_cell "$rows_file" "$pid" "$metric" "$result"
+  done < "$sessions_file"
+
+  mv "$remaining_file" "$sessions_file"
+}
+
+stop_all_ecofloc_sessions() {
+  local sessions_file="$1"
+  local rows_file="${2:-}"
+  local pid
+  local metric
+  local eco_pid
+  local log_file
+  local result
+
+  if [ ! -s "$sessions_file" ]; then
+    return 0
+  fi
+
+  while IFS=$'\t' read -r pid metric eco_pid log_file; do
+    [ -n "${pid:-}" ] || continue
+    [ -n "${metric:-}" ] || continue
+    [ -n "${eco_pid:-}" ] || continue
+    [ -n "${log_file:-}" ] || continue
+
+    stop_ecofloc_remote "$eco_pid"
+    sleep 1
+
+    if [ -n "$rows_file" ] && [ -f "$rows_file" ]; then
+      result="$(parse_ecofloc_log_remote "$log_file" | tail -n 1 | tr -d '\r')"
+
+      if [ -z "$result" ]; then
+        result="N/A"
+      fi
+
+      update_ecofloc_cell "$rows_file" "$pid" "$metric" "$result"
+    fi
+  done < "$sessions_file"
+
+  : > "$sessions_file"
+}
+
+run_ecofloc_once() {
+  local matches
+  local rows_file
+  local sessions_file
+  local initial_rows
+  local active_sessions
+
+  rows_file="$(mktemp)"
+  sessions_file="$(mktemp)"
+
+  cleanup_ecofloc_once() {
+    stop_all_ecofloc_sessions "$sessions_file" "$rows_file" >/dev/null 2>&1 || true
+    rm -f "$rows_file" "$sessions_file"
+  }
+
+  trap cleanup_ecofloc_once RETURN
+
+  matches="$(get_matching_processes || true)"
+
+  if [ -z "$matches" ]; then
+    echo "No matching Argo workflow process found."
+    return 0
+  fi
+
+  initial_rows="$(build_initial_ecofloc_rows "$matches")"
+  write_ecofloc_rows_file "$rows_file" "$initial_rows"
+
+  create_ecofloc_sessions_for_matches "$matches" "$rows_file" "$sessions_file"
+
+  echo "EcoFloc attached to detected PIDs. Waiting until they exit..."
+  echo
+
+  cat "$rows_file" | print_ecofloc_metrics_table
+
+  while true; do
+    finalize_finished_sessions "$rows_file" "$sessions_file"
+
+    active_sessions="$(wc -l < "$sessions_file" | xargs)"
+
+    if [ "$active_sessions" = "0" ]; then
+      break
+    fi
+
+    sleep "$WATCH_INTERVAL"
+  done
+
+  cat "$rows_file" | print_ecofloc_metrics_table
+}
+
+run_ecofloc_watch() {
+  local rows_file
+  local sessions_file
+  local matches
+  local status="initializing"
+  local active_sessions
+
+  rows_file="$(mktemp)"
+  sessions_file="$(mktemp)"
+
+  cleanup_watch() {
+    stop_all_ecofloc_sessions "$sessions_file" "$rows_file" >/dev/null 2>&1 || true
+    tput cnorm 2>/dev/null || true
+    tput rmcup 2>/dev/null || true
+    rm -f "$rows_file" "$sessions_file"
+    printf "\nStopped EcoFloc watch.\n"
+    exit 0
+  }
+
+  trap cleanup_watch INT TERM
+
+  tput smcup 2>/dev/null || true
+  tput civis 2>/dev/null || true
+
+  while true; do
+    matches="$(get_matching_processes || true)"
+
+    if [ -n "$matches" ]; then
+      create_ecofloc_sessions_for_matches "$matches" "$rows_file" "$sessions_file"
+      status="attached to matching processes"
+    else
+      status="waiting for matching processes"
+    fi
+
+    finalize_finished_sessions "$rows_file" "$sessions_file"
+
+    active_sessions="$(wc -l < "$sessions_file" | xargs)"
+
+    if [ "$active_sessions" != "0" ]; then
+      status="${status}; active EcoFloc sessions: ${active_sessions}"
+    fi
+
+    render_ecofloc_frame "$rows_file" "$status"
+
+    sleep "$WATCH_INTERVAL"
+  done
 }
 
 run_watch() {
@@ -658,41 +1012,6 @@ run_watch() {
     echo
 
     QUIET_HEADER=true run_once || true
-
-    sleep "$WATCH_INTERVAL"
-  done
-}
-
-run_ecofloc_watch() {
-  cleanup_watch() {
-    tput cnorm 2>/dev/null || true
-    tput rmcup 2>/dev/null || true
-    printf "\nStopped EcoFloc watch.\n"
-    exit 0
-  }
-
-  trap cleanup_watch INT TERM
-
-  tput smcup 2>/dev/null || true
-  tput civis 2>/dev/null || true
-
-  while true; do
-    tput cup 0 0 2>/dev/null || printf "\033[H"
-    tput ed 2>/dev/null || printf "\033[J"
-
-    echo "Watching EcoFloc measurements for Argo workflow processes. Press Ctrl+C to stop."
-    echo "Watch refresh interval: ${WATCH_INTERVAL}s"
-    echo "EcoFloc interval: ${ECOFLOC_INTERVAL} ms"
-    echo "EcoFloc duration: ${ECOFLOC_DURATION} s"
-    echo "EcoFloc metrics: ${ECOFLOC_METRICS}"
-
-    if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
-      echo "EcoFloc export path: ${ECOFLOC_EXPORT_PATH}"
-    fi
-
-    echo
-
-    run_ecofloc_once || true
 
     sleep "$WATCH_INTERVAL"
   done
@@ -740,13 +1059,11 @@ while [ $# -gt 0 ]; do
       ;;
 
     --ecofloc-duration)
-      if [ $# -lt 2 ]; then
-        echo "Missing value for --ecofloc-duration"
-        exit 1
+      echo "--ecofloc-duration is ignored in PID-lifetime mode. EcoFloc uses -t -1 and stops when the target PID exits."
+      shift
+      if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+        shift
       fi
-
-      ECOFLOC_DURATION="$2"
-      shift 2
       ;;
 
     --metrics)
