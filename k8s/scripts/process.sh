@@ -8,7 +8,6 @@ fi
 
 set -euo pipefail
 
-# Server mode: commands run directly on the current machine.
 COMMAND_WRAPPER=()
 
 WATCH_INTERVAL="0.5"
@@ -171,7 +170,6 @@ get_raw_processes() {
 filter_processes() {
   python3 -c '
 import os
-import re
 import sys
 
 SELF_PATTERNS = [
@@ -186,6 +184,7 @@ SELF_PATTERNS = [
 IGNORED_PATTERNS = [
     "argoexec init",
     "argoexec wait",
+    "argoexec emissary",
     "python -u -m sidecar",
     "/usr/bin/python3 -sP /usr/bin/firewalld",
     "/usr/bin/python3 -Es /usr/sbin/tuned",
@@ -193,15 +192,15 @@ IGNORED_PATTERNS = [
 ]
 
 def parse_line(line):
-    line = line.rstrip(\"\\n\")
+    line = line.rstrip("\n")
 
     if not line.strip():
-        return None, \"\"
+        return None, ""
 
     parts = line.strip().split(None, 1)
 
     if len(parts) == 1:
-        return parts[0], \"\"
+        return parts[0], ""
 
     return parts[0], parts[1]
 
@@ -215,14 +214,14 @@ def is_python_token(tok):
     b = base(tok)
 
     return (
-        b == \"python\"
-        or b == \"python3\"
-        or b.startswith(\"python3.\")
-        or b.endswith(\"python\")
-        or b.startswith(\"python\")
-        or tok.endswith(\"/bin/python\")
-        or tok.endswith(\"/bin/python3\")
-        or \"/python\" in tok
+        b == "python"
+        or b == "python3"
+        or b.startswith("python3.")
+        or b.endswith("python")
+        or b.startswith("python")
+        or tok.endswith("/bin/python")
+        or tok.endswith("/bin/python3")
+        or "/python" in tok
     )
 
 def script_after_python(cmd):
@@ -232,10 +231,10 @@ def script_after_python(cmd):
         if is_python_token(tok) and i + 1 < len(ts):
             candidate = ts[i + 1]
 
-            if candidate.startswith(\"/app/\"):
+            if candidate.startswith("/app/"):
                 return candidate
 
-    return \"\"
+    return ""
 
 def should_ignore(cmd):
     if any(p in cmd for p in SELF_PATTERNS):
@@ -272,7 +271,7 @@ for line in sys.stdin:
         continue
 
     seen.add(pid)
-    print(f\"{pid}\\t{cmd}\")
+    print(f"{pid}\t{cmd}")
 '
 }
 
@@ -296,7 +295,7 @@ def fit(value, width):
     if len(value) <= width:
         return value
 
-    return value[:max(width - 1, 0)] + \"…\"
+    return value[:max(width - 1, 0)] + "…"
 
 def base(path):
     return os.path.basename(path.rstrip())
@@ -305,20 +304,20 @@ def tokens(cmd):
     return cmd.split()
 
 def clean(value):
-    return value.strip().strip(\"\\\"\").strip(chr(39))
+    return value.strip().strip("\"").strip(chr(39))
 
 def is_python_token(tok):
     b = base(tok)
 
     return (
-        b == \"python\"
-        or b == \"python3\"
-        or b.startswith(\"python3.\")
-        or b.endswith(\"python\")
-        or b.startswith(\"python\")
-        or tok.endswith(\"/bin/python\")
-        or tok.endswith(\"/bin/python3\")
-        or \"/python\" in tok
+        b == "python"
+        or b == "python3"
+        or b.startswith("python3.")
+        or b.endswith("python")
+        or b.startswith("python")
+        or tok.endswith("/bin/python")
+        or tok.endswith("/bin/python3")
+        or "/python" in tok
     )
 
 def extract_script(cmd):
@@ -328,45 +327,45 @@ def extract_script(cmd):
         if is_python_token(tok) and i + 1 < len(ts):
             candidate = ts[i + 1]
 
-            if candidate.startswith(\"/app/\"):
+            if candidate.startswith("/app/"):
                 return base(candidate)
 
-    m = re.search(r\"(?<!\\\\S)/app/[^ ]+\\\\.py(?!\\\\S)\", cmd)
+    m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
 
     if m:
         return base(m.group(0))
 
-    return \"-\"
+    return "-"
 
 def extract_function(cmd):
     ts = tokens(cmd)
 
     for i, tok in enumerate(ts):
-        if tok == \"--function\" and i + 1 < len(ts):
+        if tok == "--function" and i + 1 < len(ts):
             return clean(ts[i + 1])
 
-        if tok.startswith(\"--function=\"):
-            return clean(tok.split(\"=\", 1)[1])
+        if tok.startswith("--function="):
+            return clean(tok.split("=", 1)[1])
 
-    m = re.search(r\"--function(?:=|\\\\s+)([^ ]+)\", cmd)
+    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
 
     if m:
         return clean(m.group(1))
 
-    return \"-\"
+    return "-"
 
-print(\"{:<{}} | {:<{}} | {:<{}}\".format(\"PID\", PID_W, \"SCRIPT\", SCRIPT_W, \"FUNCTION\", FUNC_W))
-print(\"{}-+-{}-+-{}\".format(\"-\" * PID_W, \"-\" * SCRIPT_W, \"-\" * FUNC_W))
+print("{:<{}} | {:<{}} | {:<{}}".format("PID", PID_W, "SCRIPT", SCRIPT_W, "FUNCTION", FUNC_W))
+print("{}-+-{}-+-{}".format("-" * PID_W, "-" * SCRIPT_W, "-" * FUNC_W))
 
 for line in sys.stdin:
-    line = line.rstrip(\"\\n\")
+    line = line.rstrip("\n")
 
-    if not line or \"\\t\" not in line:
+    if not line or "\t" not in line:
         continue
 
-    pid, cmd = line.split(\"\\t\", 1)
+    pid, cmd = line.split("\t", 1)
 
-    print(\"{:<{}} | {:<{}} | {:<{}}\".format(
+    print("{:<{}} | {:<{}} | {:<{}}".format(
         fit(pid, PID_W), PID_W,
         fit(extract_script(cmd), SCRIPT_W), SCRIPT_W,
         fit(extract_function(cmd), FUNC_W), FUNC_W
@@ -391,7 +390,7 @@ def fit(value, width):
     if len(value) <= width:
         return value
 
-    return value[:max(width - 1, 0)] + \"…\"
+    return value[:max(width - 1, 0)] + "…"
 
 def base(path):
     return os.path.basename(path.rstrip())
@@ -400,20 +399,20 @@ def tokens(cmd):
     return cmd.split()
 
 def clean(value):
-    return value.strip().strip(\"\\\"\").strip(chr(39))
+    return value.strip().strip("\"").strip(chr(39))
 
 def is_python_token(tok):
     b = base(tok)
 
     return (
-        b == \"python\"
-        or b == \"python3\"
-        or b.startswith(\"python3.\")
-        or b.endswith(\"python\")
-        or b.startswith(\"python\")
-        or tok.endswith(\"/bin/python\")
-        or tok.endswith(\"/bin/python3\")
-        or \"/python\" in tok
+        b == "python"
+        or b == "python3"
+        or b.startswith("python3.")
+        or b.endswith("python")
+        or b.startswith("python")
+        or tok.endswith("/bin/python")
+        or tok.endswith("/bin/python3")
+        or "/python" in tok
     )
 
 def extract_script(cmd):
@@ -423,49 +422,49 @@ def extract_script(cmd):
         if is_python_token(tok) and i + 1 < len(ts):
             candidate = ts[i + 1]
 
-            if candidate.startswith(\"/app/\"):
+            if candidate.startswith("/app/"):
                 return base(candidate)
 
-    m = re.search(r\"(?<!\\\\S)/app/[^ ]+\\\\.py(?!\\\\S)\", cmd)
+    m = re.search(r"(?<!\S)/app/[^ ]+\.py(?!\S)", cmd)
 
     if m:
         return base(m.group(0))
 
-    return \"-\"
+    return "-"
 
 def extract_function(cmd):
     ts = tokens(cmd)
 
     for i, tok in enumerate(ts):
-        if tok == \"--function\" and i + 1 < len(ts):
+        if tok == "--function" and i + 1 < len(ts):
             return clean(ts[i + 1])
 
-        if tok.startswith(\"--function=\"):
-            return clean(tok.split(\"=\", 1)[1])
+        if tok.startswith("--function="):
+            return clean(tok.split("=", 1)[1])
 
-    m = re.search(r\"--function(?:=|\\\\s+)([^ ]+)\", cmd)
+    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
 
     if m:
         return clean(m.group(1))
 
-    return \"-\"
+    return "-"
 
-headers = [\"PID\", \"SCRIPT\", \"FUNCTION\", \"CPU\", \"RAM\", \"SD\", \"NIC\", \"GPU\"]
+headers = ["PID", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU"]
 widths = [PID_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W]
 
-print(\" | \".join(\"{:<{}}\".format(h, w) for h, w in zip(headers, widths)))
-print(\"-+-\".join(\"-\" * w for w in widths))
+print(" | ".join("{:<{}}".format(h, w) for h, w in zip(headers, widths)))
+print("-+-".join("-" * w for w in widths))
 
 for line in sys.stdin:
-    line = line.rstrip(\"\\n\")
+    line = line.rstrip("\n")
 
     if not line:
         continue
 
-    parts = line.split(\"\\t\")
+    parts = line.split("\t")
 
     while len(parts) < 7:
-        parts.append(\"-\")
+        parts.append("-")
 
     pid = parts[0]
     cmd = parts[1]
@@ -486,7 +485,7 @@ for line in sys.stdin:
         gpu,
     ]
 
-    print(\" | \".join(\"{:<{}}\".format(fit(v, w), w) for v, w in zip(values, widths)))
+    print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(values, widths)))
 '
 }
 
@@ -502,23 +501,6 @@ run_once() {
   fi
 }
 
-metric_enabled() {
-  local target="$1"
-  local metric=""
-
-  IFS=',' read -r -a metric_list <<< "$ECOFLOC_METRICS"
-
-  for metric in "${metric_list[@]}"; do
-    metric="$(printf "%s" "$metric" | tr "[:upper:]" "[:lower:]" | xargs)"
-
-    if [ "$metric" = "$target" ]; then
-      return 0
-    fi
-  done
-
-  return 1
-}
-
 pid_alive() {
   local pid="$1"
   kill -0 "$pid" 2>/dev/null
@@ -526,14 +508,6 @@ pid_alive() {
 
 ensure_ecofloc_log_dir() {
   mkdir -p "$ECOFLOC_LOG_DIR"
-}
-
-ecofloc_command_prefix() {
-  if [ "$ECOFLOC_USE_SUDO_EXECUTE" = true ]; then
-    printf '%s\n' "sudo /bin/execute ecofloc"
-  else
-    printf '%s\n' "ecofloc"
-  fi
 }
 
 run_ecofloc_window() {
@@ -856,8 +830,6 @@ run_ecofloc_watch() {
   local pids_file=""
   local matches=""
   local status=""
-  local last_render="0"
-  local now="0"
 
   start_sudo_keepalive
 
@@ -885,27 +857,7 @@ run_ecofloc_watch() {
       status="waiting for matching processes"
     fi
 
-    now="$(date +%s%N)"
-
-    if [ "$last_render" = "0" ]; then
-      render_ecofloc_frame "$rows_file" "$status"
-      last_render="$now"
-    else
-      python3 - "$last_render" "$now" "$WATCH_INTERVAL" <<'PY'
-import sys
-
-last = int(sys.argv[1])
-now = int(sys.argv[2])
-interval = float(sys.argv[3])
-
-elapsed = (now - last) / 1_000_000_000
-sys.exit(0 if elapsed >= interval else 1)
-PY
-      if [ "$?" = "0" ]; then
-        render_ecofloc_frame "$rows_file" "$status"
-        last_render="$now"
-      fi
-    fi
+    render_ecofloc_frame "$rows_file" "$status"
 
     sleep "$SCAN_INTERVAL"
   done
