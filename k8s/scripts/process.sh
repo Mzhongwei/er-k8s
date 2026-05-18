@@ -687,6 +687,35 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
+refresh_running_ecofloc_cells() {
+  local rows_file="$1"
+  local sessions_file="$2"
+  local now
+  local pid
+  local metric
+  local eco_pid
+  local log_file
+  local start_ts
+  local elapsed
+
+  now="$(date +%s)"
+
+  if [ ! -s "$sessions_file" ]; then
+    return 0
+  fi
+
+  while IFS=$'\t' read -r pid metric eco_pid log_file start_ts; do
+    [ -n "${pid:-}" ] || continue
+    [ -n "${metric:-}" ] || continue
+    [ -n "${start_ts:-}" ] || continue
+
+    if pid_alive "$pid"; then
+      elapsed="$((now - start_ts))"
+      update_ecofloc_cell "$rows_file" "$pid" "$metric" "RUN ${elapsed}s"
+    fi
+  done < "$sessions_file"
+}
+
 append_ecofloc_row_if_missing() {
   local file="$1"
   local pid="$2"
@@ -799,6 +828,7 @@ create_ecofloc_sessions_for_matches() {
   local metric
   local log_file
   local eco_pid
+  local start_ts
 
   session_id="$(date +%s%N)"
 
@@ -821,7 +851,8 @@ create_ecofloc_sessions_for_matches() {
             continue
           fi
 
-          update_ecofloc_cell "$rows_file" "$pid" "$metric" "RUN"
+          start_ts="$(date +%s)"
+          update_ecofloc_cell "$rows_file" "$pid" "$metric" "RUN 0s"
 
           log_file="${ECOFLOC_LOG_DIR}/ecofloc_${session_id}_${pid}_${metric}.log"
           eco_pid="$(start_ecofloc_for_pid_metric "$pid" "$metric" "$log_file" | tail -n 1 | tr -d '\r' | xargs)"
@@ -831,7 +862,7 @@ create_ecofloc_sessions_for_matches() {
             continue
           fi
 
-          printf "%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" >> "$sessions_file"
+          printf "%s\t%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" "$start_ts" >> "$sessions_file"
           ;;
         *)
           ;;
@@ -848,6 +879,7 @@ finalize_finished_sessions() {
   local metric
   local eco_pid
   local log_file
+  local start_ts
   local result
 
   remaining_file="$(mktemp)"
@@ -858,14 +890,14 @@ finalize_finished_sessions() {
     return 0
   fi
 
-  while IFS=$'\t' read -r pid metric eco_pid log_file; do
+  while IFS=$'\t' read -r pid metric eco_pid log_file start_ts; do
     [ -n "${pid:-}" ] || continue
     [ -n "${metric:-}" ] || continue
     [ -n "${eco_pid:-}" ] || continue
     [ -n "${log_file:-}" ] || continue
 
     if pid_alive "$pid"; then
-      printf "%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" >> "$remaining_file"
+      printf "%s\t%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" "$start_ts" >> "$remaining_file"
       continue
     fi
 
@@ -891,13 +923,14 @@ stop_all_ecofloc_sessions() {
   local metric
   local eco_pid
   local log_file
+  local start_ts
   local result
 
   if [ ! -s "$sessions_file" ]; then
     return 0
   fi
 
-  while IFS=$'\t' read -r pid metric eco_pid log_file; do
+  while IFS=$'\t' read -r pid metric eco_pid log_file start_ts; do
     [ -n "${pid:-}" ] || continue
     [ -n "${metric:-}" ] || continue
     [ -n "${eco_pid:-}" ] || continue
@@ -958,7 +991,13 @@ run_ecofloc_once() {
   cat "$rows_file" | print_ecofloc_metrics_table
 
   while true; do
+    refresh_running_ecofloc_cells "$rows_file" "$sessions_file"
     finalize_finished_sessions "$rows_file" "$sessions_file"
+
+    clear
+    echo "EcoFloc attached to detected PIDs. Waiting until they exit..."
+    echo
+    cat "$rows_file" | print_ecofloc_metrics_table
 
     active_sessions="$(wc -l < "$sessions_file" | xargs)"
 
@@ -1012,6 +1051,7 @@ run_ecofloc_watch() {
       status="waiting for matching processes"
     fi
 
+    refresh_running_ecofloc_cells "$rows_file" "$sessions_file"
     finalize_finished_sessions "$rows_file" "$sessions_file"
 
     active_sessions="$(wc -l < "$sessions_file" | xargs)"
