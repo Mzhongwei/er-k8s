@@ -93,7 +93,7 @@ get_raw_processes() {
 }
 
 filter_processes() {
-  python3 -c '
+  python3 - <<'PY'
 import os
 import re
 import sys
@@ -102,12 +102,9 @@ def parse_line(line):
     line = line.rstrip("\n")
     if not line.strip():
         return None, ""
-
     parts = line.strip().split(None, 1)
-
     if len(parts) == 1:
         return parts[0], ""
-
     return parts[0], parts[1]
 
 def tokens(cmd):
@@ -117,7 +114,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip("\"").strip(chr(39))
+    return value.strip().strip('"').strip("'")
 
 def is_python(tok):
     b = base(tok)
@@ -141,7 +138,6 @@ def is_ignored(cmd):
         "/opt/ecofloc/ecofloc",
         " ecofloc ",
     ]
-
     return any(x in cmd for x in ignored)
 
 def is_candidate(cmd):
@@ -181,7 +177,6 @@ def extract_script(cmd):
         if tok == "--" and i + 2 < len(ts):
             maybe_python = ts[i + 1]
             maybe_script = ts[i + 2]
-
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
@@ -201,7 +196,6 @@ def extract_function(cmd):
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
             return tok_cleanup(ts[i + 1])
-
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
@@ -213,19 +207,14 @@ def extract_function(cmd):
 
 def score(cmd):
     value = 0
-
     if "/opt/venv/bin/python" in cmd:
         value += 100
-
     if re.search(r"(^|\s)python3?\s+/app/", cmd):
         value += 90
-
     if re.search(r"(^|\s)sh\s+-c\s+", cmd):
         value += 50
-
     if "argoexec emissary" in cmd:
         value += 30
-
     return value
 
 selected = {}
@@ -242,7 +231,6 @@ try:
 
         script = extract_script(cmd)
         function = extract_function(cmd)
-
         key = (script, function)
         current_score = score(cmd)
 
@@ -258,11 +246,11 @@ try:
 
 except KeyboardInterrupt:
     sys.exit(0)
-'
+PY
 }
 
 print_compact_table() {
-  python3 -c '
+  python3 - <<'PY'
 import os
 import re
 import sys
@@ -290,7 +278,6 @@ def parse_line(line):
     line = line.rstrip("\n")
     if "\t" not in line:
         return None, ""
-
     pid, cmd = line.split("\t", 1)
     return pid.strip(), cmd.strip()
 
@@ -301,7 +288,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip("\"").strip(chr(39))
+    return value.strip().strip('"').strip("'")
 
 def is_python(tok):
     b = base(tok)
@@ -326,7 +313,6 @@ def extract_script(cmd):
         if tok == "--" and i + 2 < len(ts):
             maybe_python = ts[i + 1]
             maybe_script = ts[i + 2]
-
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
@@ -346,7 +332,6 @@ def extract_function(cmd):
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
             return tok_cleanup(ts[i + 1])
-
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
@@ -367,7 +352,6 @@ try:
 
         script = extract_script(cmd)
         function = extract_function(cmd)
-
         key = (script, function)
 
         if key in seen:
@@ -383,11 +367,11 @@ try:
 
 except KeyboardInterrupt:
     sys.exit(0)
-'
+PY
 }
 
 print_ecofloc_metrics_table() {
-  python3 -c '
+  python3 - <<'PY'
 import os
 import re
 import sys
@@ -412,7 +396,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip("\"").strip(chr(39))
+    return value.strip().strip('"').strip("'")
 
 def is_python(tok):
     b = base(tok)
@@ -437,7 +421,6 @@ def extract_script(cmd):
         if tok == "--" and i + 2 < len(ts):
             maybe_python = ts[i + 1]
             maybe_script = ts[i + 2]
-
             if is_python(maybe_python) and maybe_script.startswith("/app/"):
                 return base(maybe_script)
 
@@ -457,7 +440,6 @@ def extract_function(cmd):
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
             return tok_cleanup(ts[i + 1])
-
         if tok.startswith("--function="):
             return tok_cleanup(tok.split("=", 1)[1])
 
@@ -475,12 +457,10 @@ print("-+-".join("-" * w for w in widths))
 
 for line in sys.stdin:
     line = line.rstrip("\n")
-
     if not line:
         continue
 
     parts = line.split("\t")
-
     if len(parts) < 7:
         continue
 
@@ -504,7 +484,7 @@ for line in sys.stdin:
     ]
 
     print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(values, widths)))
-'
+PY
 }
 
 get_matching_processes() {
@@ -531,7 +511,6 @@ metric_enabled() {
 
   for metric in "${metric_list[@]}"; do
     metric="$(printf "%s" "$metric" | tr "[:upper:]" "[:lower:]" | xargs)"
-
     if [ "$metric" = "$target" ]; then
       return 0
     fi
@@ -599,14 +578,30 @@ parse_ecofloc_log() {
   local avg=""
   local total=""
 
+  # Use the LAST summary values, not the first.
+  # This prevents total energy from appearing to go backward when EcoFloc writes multiple summaries.
   avg="$(
-    awk -F ':' '/Average Power/ { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' "$log_file" |
-      awk '{ print $1 }'
+    awk -F ':' '
+      /Average Power/ {
+        gsub(/^[ \t]+|[ \t]+$/, "", $2)
+        last = $2
+      }
+      END {
+        if (last != "") print last
+      }
+    ' "$log_file" | awk '{ print $1 }'
   )"
 
   total="$(
-    awk -F ':' '/Total Energy/ { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' "$log_file" |
-      awk '{ print $1 }'
+    awk -F ':' '
+      /Total Energy/ {
+        gsub(/^[ \t]+|[ \t]+$/, "", $2)
+        last = $2
+      }
+      END {
+        if (last != "") print last
+      }
+    ' "$log_file" | awk '{ print $1 }'
   )"
 
   if [ -z "$avg" ] && [ -z "$total" ]; then
@@ -643,12 +638,13 @@ update_ecofloc_cell() {
   local value="$4"
 
   python3 - "$file" "$target_pid" "$metric" "$value" <<'PY'
+import re
 import sys
 
 path = sys.argv[1]
 target_pid = sys.argv[2]
 metric = sys.argv[3].lower()
-value = sys.argv[4]
+new_value = sys.argv[4]
 
 index_by_metric = {
     "cpu": 2,
@@ -661,6 +657,9 @@ index_by_metric = {
 idx = index_by_metric.get(metric)
 if idx is None:
     sys.exit(0)
+
+bad_values = {"N/A", "ERR", "CMD_ERR", ""}
+final_re = re.compile(r"^[0-9.?]+W/[0-9.?]+J$")
 
 try:
     with open(path, "r", encoding="utf-8") as f:
@@ -677,7 +676,16 @@ for row in rows:
         parts.append("N/A")
 
     if parts[0] == target_pid:
-        parts[idx] = value
+        old_value = parts[idx]
+
+        old_is_final = bool(final_re.match(old_value))
+        new_is_bad = new_value in bad_values
+
+        # Never overwrite a valid finalized measurement with N/A/ERR/CMD_ERR.
+        if old_is_final and new_is_bad:
+            pass
+        else:
+            parts[idx] = new_value
 
     new_rows.append("\t".join(parts))
 
@@ -1070,7 +1078,6 @@ render_process_watch_content() {
   {
     echo "Watching Argo workflow processes. Press Ctrl+C to stop."
     echo
-
     QUIET_HEADER=true run_once || true
   }
 }
