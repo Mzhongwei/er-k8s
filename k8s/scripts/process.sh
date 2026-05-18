@@ -8,7 +8,8 @@ fi
 
 set -euo pipefail
 
-PROFILE="domolandes"
+# Server mode: commands run directly on the current machine.
+# Keep this empty as requested.
 COMMAND_WRAPPER=()
 
 WATCH_INTERVAL="1"
@@ -16,8 +17,8 @@ WATCH_INTERVAL="1"
 ECOFLOC_INTERVAL="1000"
 ECOFLOC_METRICS="cpu,ram,sd,nic,gpu"
 ECOFLOC_EXPORT_PATH=""
-ECOFLOC_USE_SUDO=true
-ECOFLOC_REMOTE_LOG_DIR="/tmp/erctl-ecofloc"
+ECOFLOC_USE_SUDO_EXECUTE=true
+ECOFLOC_LOG_DIR="/tmp/erctl-ecofloc"
 
 print_help() {
   cat <<'EOF'
@@ -40,7 +41,7 @@ EcoFloc options:
   --metrics LIST            Comma-separated metrics. Default: cpu,ram,sd,nic,gpu.
                             Example: --metrics cpu,ram
   --export PATH             Pass -f PATH to EcoFloc for CSV export.
-  --no-sudo                 Run ecofloc without sudo.
+  --no-sudo-execute         Run ecofloc directly instead of sudo /bin/execute ecofloc.
 
 Other:
   --help                    Show this help.
@@ -58,12 +59,16 @@ Examples:
 EOF
 }
 
+run_wrapped() {
+  "${COMMAND_WRAPPER[@]}" "$@"
+}
+
 get_raw_processes() {
   # Output format:
   # PID COMMAND
   #
   # axww prevents command truncation.
-  "${COMMAND_WRAPPER[@]}" ps axww -o pid=,args=
+  run_wrapped ps axww -o pid=,args=
 }
 
 filter_processes() {
@@ -111,6 +116,9 @@ def is_ignored(cmd):
         "/usr/bin/python3 -sP /usr/bin/firewalld",
         "/usr/bin/python3 -Es /usr/sbin/tuned",
         "/usr/bin/python3 -Es /usr/sbin/tuned-ppd",
+        "sudo /bin/execute ecofloc",
+        "/opt/ecofloc/ecofloc",
+        " ecofloc ",
     ]
 
     return any(x in cmd for x in ignored)
@@ -531,79 +539,93 @@ metric_enabled() {
   return 1
 }
 
-pid_alive_remote() {
+pid_alive() {
   local pid="$1"
-
-  "${COMMAND_WRAPPER[@]}" sh -c "kill -0 '$pid' 2>/dev/null"
+  kill -0 "$pid" 2>/dev/null
 }
 
-ensure_ecofloc_remote_dir() {
-  "${COMMAND_WRAPPER[@]}" mkdir -p "$ECOFLOC_REMOTE_LOG_DIR"
+ensure_ecofloc_log_dir() {
+  mkdir -p "$ECOFLOC_LOG_DIR"
 }
 
 start_ecofloc_for_pid_metric() {
   local pid="$1"
   local metric="$2"
   local log_file="$3"
-  local export_arg=""
-  local sudo_prefix=""
-
-  if [ "$ECOFLOC_USE_SUDO" = true ]; then
-    sudo_prefix="sudo execute"
-  fi
+  local export_arg=()
 
   if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
-    export_arg="-f '$ECOFLOC_EXPORT_PATH'"
+    export_arg=(-f "$ECOFLOC_EXPORT_PATH")
   fi
 
-  "${COMMAND_WRAPPER[@]}" sh -c "
-    mkdir -p '$ECOFLOC_REMOTE_LOG_DIR'
-    nohup $sudo_prefix ecofloc --$metric -p '$pid' -i '$ECOFLOC_INTERVAL' -t -1 $export_arg > '$log_file' 2>&1 &
-    echo \$!
-  "
+  mkdir -p "$ECOFLOC_LOG_DIR"
+
+  if [ "$ECOFLOC_USE_SUDO_EXECUTE" = true ]; then
+    nohup sudo /bin/execute ecofloc "--${metric}" \
+      -p "$pid" \
+      -i "$ECOFLOC_INTERVAL" \
+      -t -1 \
+      "${export_arg[@]}" > "$log_file" 2>&1 &
+  else
+    nohup ecofloc "--${metric}" \
+      -p "$pid" \
+      -i "$ECOFLOC_INTERVAL" \
+      -t -1 \
+      "${export_arg[@]}" > "$log_file" 2>&1 &
+  fi
+
+  echo $!
 }
 
-stop_ecofloc_remote() {
+stop_ecofloc() {
   local eco_pid="$1"
 
   if [ -z "$eco_pid" ]; then
     return 0
   fi
 
-  if [ "$ECOFLOC_USE_SUDO" = true ]; then
-    "${COMMAND_WRAPPER[@]}" sh -c "sudo execute kill -INT '$eco_pid' 2>/dev/null || kill -INT '$eco_pid' 2>/dev/null || true"
-  else
-    "${COMMAND_WRAPPER[@]}" sh -c "kill -INT '$eco_pid' 2>/dev/null || true"
-  fi
+  kill -INT "$eco_pid" 2>/dev/null || true
 }
 
-parse_ecofloc_log_remote() {
+parse_ecofloc_log() {
   local log_file="$1"
 
-  "${COMMAND_WRAPPER[@]}" sh -c "
-    if [ ! -f '$log_file' ]; then
-      echo 'N/A'
-      exit 0
+  if [ ! -f "$log_file" ]; then
+    echo "N/A"
+    return 0
+  fi
+
+  local avg=""
+  local total=""
+
+  avg="$(
+    awk -F ':' '/Average Power/ { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' "$log_file" |
+      awk '{ print $1 }'
+  )"
+
+  total="$(
+    awk -F ':' '/Total Energy/ { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' "$log_file" |
+      awk '{ print $1 }'
+  )"
+
+  if [ -z "$avg" ] && [ -z "$total" ]; then
+    if grep -q "Usage:" "$log_file" 2>/dev/null; then
+      echo "CMD_ERR"
+    else
+      echo "N/A"
     fi
+    return 0
+  fi
 
-    avg=\$(awk -F ':' '/Average Power/ { gsub(/^[ \t]+|[ \t]+$/, \"\", \$2); print \$2; exit }' '$log_file' | awk '{ print \$1 }')
-    total=\$(awk -F ':' '/Total Energy/ { gsub(/^[ \t]+|[ \t]+$/, \"\", \$2); print \$2; exit }' '$log_file' | awk '{ print \$1 }')
+  if [ -z "$avg" ]; then
+    avg="?"
+  fi
 
-    if [ -z \"\$avg\" ] && [ -z \"\$total\" ]; then
-      echo 'N/A'
-      exit 0
-    fi
+  if [ -z "$total" ]; then
+    total="?"
+  fi
 
-    if [ -z \"\$avg\" ]; then
-      avg='?'
-    fi
-
-    if [ -z \"\$total\" ]; then
-      total='?'
-    fi
-
-    echo \"\${avg}W/\${total}J\"
-  "
+  echo "${avg}W/${total}J"
 }
 
 write_ecofloc_rows_file() {
@@ -732,36 +754,53 @@ build_initial_ecofloc_rows() {
   printf "%s" "$rows"
 }
 
-render_ecofloc_frame() {
+render_ecofloc_content() {
   local rows_file="$1"
   local status="${2:-}"
 
+  {
+    echo "EcoFloc PID-lifetime monitoring for Argo workflow processes. Press Ctrl+C to stop."
+    echo "Watch refresh interval: ${WATCH_INTERVAL}s"
+    echo "EcoFloc interval: ${ECOFLOC_INTERVAL} ms"
+    echo "EcoFloc metrics: ${ECOFLOC_METRICS}"
+    echo "EcoFloc command: sudo /bin/execute ecofloc"
+    echo "EcoFloc duration mode: -t -1, stopped when target PID exits"
+
+    if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
+      echo "EcoFloc export path: ${ECOFLOC_EXPORT_PATH}"
+    fi
+
+    if [ -n "$status" ]; then
+      echo "Status: ${status}"
+    else
+      echo "Status: idle"
+    fi
+
+    echo
+
+    if [ -s "$rows_file" ]; then
+      cat "$rows_file" | print_ecofloc_metrics_table
+    else
+      echo "No matching Argo workflow process found."
+    fi
+  }
+}
+
+render_ecofloc_frame() {
+  local rows_file="$1"
+  local status="${2:-}"
+  local frame_file
+
+  frame_file="$(mktemp)"
+  render_ecofloc_content "$rows_file" "$status" > "$frame_file"
+
+  # Lower-flicker rendering:
+  # build full frame first, then move cursor home, print once, clear leftovers after.
   tput cup 0 0 2>/dev/null || printf "\033[H"
+  cat "$frame_file"
   tput ed 2>/dev/null || printf "\033[J"
 
-  echo "EcoFloc PID-lifetime monitoring for Argo workflow processes. Press Ctrl+C to stop."
-  echo "Watch refresh interval: ${WATCH_INTERVAL}s"
-  echo "EcoFloc interval: ${ECOFLOC_INTERVAL} ms"
-  echo "EcoFloc metrics: ${ECOFLOC_METRICS}"
-  echo "EcoFloc duration mode: -t -1, stopped when target PID exits"
-
-  if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
-    echo "EcoFloc export path: ${ECOFLOC_EXPORT_PATH}"
-  fi
-
-  if [ -n "$status" ]; then
-    echo "Status: ${status}"
-  else
-    echo "Status: idle"
-  fi
-
-  echo
-
-  if [ -s "$rows_file" ]; then
-    cat "$rows_file" | print_ecofloc_metrics_table
-  else
-    echo "No matching Argo workflow process found."
-  fi
+  rm -f "$frame_file"
 }
 
 create_ecofloc_sessions_for_matches() {
@@ -775,7 +814,7 @@ create_ecofloc_sessions_for_matches() {
 
   session_id="$(date +%s%N)"
 
-  ensure_ecofloc_remote_dir
+  ensure_ecofloc_log_dir
 
   while IFS=$'\t' read -r pid cmd; do
     [ -n "${pid:-}" ] || continue
@@ -796,7 +835,7 @@ create_ecofloc_sessions_for_matches() {
 
           update_ecofloc_cell "$rows_file" "$pid" "$metric" "RUN"
 
-          log_file="${ECOFLOC_REMOTE_LOG_DIR}/ecofloc_${session_id}_${pid}_${metric}.log"
+          log_file="${ECOFLOC_LOG_DIR}/ecofloc_${session_id}_${pid}_${metric}.log"
           eco_pid="$(start_ecofloc_for_pid_metric "$pid" "$metric" "$log_file" | tail -n 1 | tr -d '\r' | xargs)"
 
           if [ -z "$eco_pid" ]; then
@@ -837,15 +876,15 @@ finalize_finished_sessions() {
     [ -n "${eco_pid:-}" ] || continue
     [ -n "${log_file:-}" ] || continue
 
-    if pid_alive_remote "$pid"; then
+    if pid_alive "$pid"; then
       printf "%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" >> "$remaining_file"
       continue
     fi
 
-    stop_ecofloc_remote "$eco_pid"
+    stop_ecofloc "$eco_pid"
     sleep 1
 
-    result="$(parse_ecofloc_log_remote "$log_file" | tail -n 1 | tr -d '\r')"
+    result="$(parse_ecofloc_log "$log_file" | tail -n 1 | tr -d '\r')"
 
     if [ -z "$result" ]; then
       result="N/A"
@@ -876,11 +915,11 @@ stop_all_ecofloc_sessions() {
     [ -n "${eco_pid:-}" ] || continue
     [ -n "${log_file:-}" ] || continue
 
-    stop_ecofloc_remote "$eco_pid"
+    stop_ecofloc "$eco_pid"
     sleep 1
 
     if [ -n "$rows_file" ] && [ -f "$rows_file" ]; then
-      result="$(parse_ecofloc_log_remote "$log_file" | tail -n 1 | tr -d '\r')"
+      result="$(parse_ecofloc_log "$log_file" | tail -n 1 | tr -d '\r')"
 
       if [ -z "$result" ]; then
         result="N/A"
@@ -990,7 +1029,19 @@ run_ecofloc_watch() {
   done
 }
 
+render_process_watch_content() {
+  {
+    echo "Watching Argo workflow processes. Press Ctrl+C to stop."
+    echo "Refresh interval: ${WATCH_INTERVAL}s"
+    echo
+
+    QUIET_HEADER=true run_once || true
+  }
+}
+
 run_watch() {
+  local frame_file
+
   cleanup_watch() {
     tput cnorm 2>/dev/null || true
     tput rmcup 2>/dev/null || true
@@ -1004,14 +1055,14 @@ run_watch() {
   tput civis 2>/dev/null || true
 
   while true; do
+    frame_file="$(mktemp)"
+    render_process_watch_content > "$frame_file"
+
     tput cup 0 0 2>/dev/null || printf "\033[H"
+    cat "$frame_file"
     tput ed 2>/dev/null || printf "\033[J"
 
-    echo "Watching Argo workflow processes. Press Ctrl+C to stop."
-    echo "Refresh interval: ${WATCH_INTERVAL}s"
-    echo
-
-    QUIET_HEADER=true run_once || true
+    rm -f "$frame_file"
 
     sleep "$WATCH_INTERVAL"
   done
@@ -1086,8 +1137,8 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
 
-    --no-sudo)
-      ECOFLOC_USE_SUDO=false
+    --no-sudo-execute|--no-sudo)
+      ECOFLOC_USE_SUDO_EXECUTE=false
       shift
       ;;
 
