@@ -25,7 +25,7 @@ Usage: process.sh [options] [command]
 
 Commands:
   get                       Get the PID of the processes running in the Argo workflow.
-  ecofloc                   Run EcoFloc on detected Argo workflow PIDs for all metrics.
+  ecofloc                   Run EcoFloc on detected Argo workflow PIDs and show metrics as table columns.
 
 Options:
   --full                    Show full command output for matching processes.
@@ -53,7 +53,7 @@ Examples:
   process.sh ecofloc --ecofloc-duration 5
   process.sh ecofloc --metrics cpu,ram
   process.sh ecofloc --export /tmp/ecofloc
-  process.sh --watch ecofloc --ecofloc-duration 2
+  process.sh --watch ecofloc --ecofloc-duration 1
 EOF
 }
 
@@ -90,7 +90,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip("\"")
+    return value.strip().strip("\"").strip(chr(39))
 
 def is_python(tok):
     b = base(tok)
@@ -288,7 +288,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip("\"")
+    return value.strip().strip("\"").strip(chr(39))
 
 def is_python(tok):
     b = base(tok)
@@ -373,15 +373,16 @@ except KeyboardInterrupt:
 '
 }
 
-print_ecofloc_target_table() {
+print_ecofloc_metrics_table() {
   python3 -c '
 import os
 import re
 import sys
 
 PID_W = 8
-SCRIPT_W = 40
-FUNC_W = 28
+SCRIPT_W = 30
+FUNC_W = 24
+METRIC_W = 15
 
 def fit(value, width):
     value = str(value)
@@ -394,14 +395,6 @@ def fit(value, width):
 
     return value[:width - 1] + "…"
 
-def parse_line(line):
-    line = line.rstrip("\n")
-    if "\t" not in line:
-        return None, ""
-
-    pid, cmd = line.split("\t", 1)
-    return pid.strip(), cmd.strip()
-
 def tokens(cmd):
     return cmd.split()
 
@@ -409,7 +402,7 @@ def base(path):
     return os.path.basename(path.rstrip())
 
 def tok_cleanup(value):
-    return value.strip().strip("\"")
+    return value.strip().strip("\"").strip(chr(39))
 
 def is_python(tok):
     b = base(tok)
@@ -464,24 +457,43 @@ def extract_function(cmd):
 
     return "-"
 
-print("{:<{}} | {:<{}} | {:<{}}".format(
-    fit("PID", PID_W), PID_W,
-    fit("SCRIPT", SCRIPT_W), SCRIPT_W,
-    fit("FUNCTION", FUNC_W), FUNC_W
-))
-print("{}-+-{}-+-{}".format("-" * PID_W, "-" * SCRIPT_W, "-" * FUNC_W))
+headers = ["PID", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU"]
+widths = [PID_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W]
+
+print(" | ".join("{:<{}}".format(fit(h, w), w) for h, w in zip(headers, widths)))
+print("-+-".join("-" * w for w in widths))
 
 for line in sys.stdin:
-    pid, cmd = parse_line(line)
+    line = line.rstrip("\n")
 
-    if not pid or not cmd:
+    if not line:
         continue
 
-    print("{:<{}} | {:<{}} | {:<{}}".format(
-        fit(pid, PID_W), PID_W,
-        fit(extract_script(cmd), SCRIPT_W), SCRIPT_W,
-        fit(extract_function(cmd), FUNC_W), FUNC_W
-    ))
+    parts = line.split("\t")
+
+    if len(parts) < 7:
+        continue
+
+    pid = parts[0]
+    cmd = parts[1]
+    cpu = parts[2]
+    ram = parts[3]
+    sd = parts[4]
+    nic = parts[5]
+    gpu = parts[6]
+
+    values = [
+        pid,
+        extract_script(cmd),
+        extract_function(cmd),
+        cpu,
+        ram,
+        sd,
+        nic,
+        gpu,
+    ]
+
+    print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(values, widths)))
 '
 }
 
@@ -506,35 +518,75 @@ run_ecofloc_for_pid_metric() {
   local metric="$2"
 
   local component="--${metric}"
+  local output=""
+  local avg_power=""
+  local total_energy=""
   local cmd_prefix=()
 
   if [ "$ECOFLOC_USE_SUDO" = true ]; then
     cmd_prefix=(sudo execute)
   fi
 
-  echo
-  echo "================================================================"
-  echo "EcoFloc metric: ${metric}"
-  echo "PID: ${pid}"
-  echo "Interval: ${ECOFLOC_INTERVAL} ms"
-  echo "Duration: ${ECOFLOC_DURATION} s"
-  echo "================================================================"
-
   if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
-    "${COMMAND_WRAPPER[@]}" "${cmd_prefix[@]}" ecofloc "$component" -p "$pid" -i "$ECOFLOC_INTERVAL" -t "$ECOFLOC_DURATION" -f "$ECOFLOC_EXPORT_PATH" || {
-      echo "EcoFloc failed for PID=${pid}, metric=${metric}"
+    output="$(
+      "${COMMAND_WRAPPER[@]}" "${cmd_prefix[@]}" ecofloc "$component" \
+        -p "$pid" \
+        -i "$ECOFLOC_INTERVAL" \
+        -t "$ECOFLOC_DURATION" \
+        -f "$ECOFLOC_EXPORT_PATH" 2>&1
+    )" || {
+      printf "ERR"
       return 0
     }
   else
-    "${COMMAND_WRAPPER[@]}" "${cmd_prefix[@]}" ecofloc "$component" -p "$pid" -i "$ECOFLOC_INTERVAL" -t "$ECOFLOC_DURATION" || {
-      echo "EcoFloc failed for PID=${pid}, metric=${metric}"
+    output="$(
+      "${COMMAND_WRAPPER[@]}" "${cmd_prefix[@]}" ecofloc "$component" \
+        -p "$pid" \
+        -i "$ECOFLOC_INTERVAL" \
+        -t "$ECOFLOC_DURATION" 2>&1
+    )" || {
+      printf "ERR"
       return 0
     }
   fi
+
+  avg_power="$(
+    printf "%s\n" "$output" |
+      awk -F ":" "/Average Power/ { gsub(/^[ \t]+|[ \t]+$/, \"\", \$2); print \$2; exit }" |
+      awk "{ print \$1 }"
+  )"
+
+  total_energy="$(
+    printf "%s\n" "$output" |
+      awk -F ":" "/Total Energy/ { gsub(/^[ \t]+|[ \t]+$/, \"\", \$2); print \$2; exit }" |
+      awk "{ print \$1 }"
+  )"
+
+  if [ -z "$avg_power" ] && [ -z "$total_energy" ]; then
+    printf "N/A"
+    return 0
+  fi
+
+  if [ -z "$avg_power" ]; then
+    avg_power="?"
+  fi
+
+  if [ -z "$total_energy" ]; then
+    total_energy="?"
+  fi
+
+  printf "%sW/%sJ" "$avg_power" "$total_energy"
 }
 
 run_ecofloc_once() {
   local matches
+  local rows=""
+  local cpu="N/A"
+  local ram="N/A"
+  local sd="N/A"
+  local nic="N/A"
+  local gpu="N/A"
+
   matches="$(get_matching_processes || true)"
 
   if [ -z "$matches" ]; then
@@ -542,28 +594,46 @@ run_ecofloc_once() {
     return 0
   fi
 
-  echo "Detected Argo workflow processes:"
-  printf '%s\n' "$matches" | print_ecofloc_target_table
-  echo
-
-  IFS=',' read -r -a metrics <<< "$ECOFLOC_METRICS"
-
   while IFS=$'\t' read -r pid cmd; do
     [ -n "${pid:-}" ] || continue
+    [ -n "${cmd:-}" ] || continue
+
+    cpu="N/A"
+    ram="N/A"
+    sd="N/A"
+    nic="N/A"
+    gpu="N/A"
+
+    IFS=',' read -r -a metrics <<< "$ECOFLOC_METRICS"
 
     for metric in "${metrics[@]}"; do
-      metric="$(printf '%s' "$metric" | tr '[:upper:]' '[:lower:]' | xargs)"
+      metric="$(printf "%s" "$metric" | tr "[:upper:]" "[:lower:]" | xargs)"
 
       case "$metric" in
-        cpu|ram|sd|nic|gpu)
-          run_ecofloc_for_pid_metric "$pid" "$metric"
+        cpu)
+          cpu="$(run_ecofloc_for_pid_metric "$pid" "cpu")"
+          ;;
+        ram)
+          ram="$(run_ecofloc_for_pid_metric "$pid" "ram")"
+          ;;
+        sd)
+          sd="$(run_ecofloc_for_pid_metric "$pid" "sd")"
+          ;;
+        nic)
+          nic="$(run_ecofloc_for_pid_metric "$pid" "nic")"
+          ;;
+        gpu)
+          gpu="$(run_ecofloc_for_pid_metric "$pid" "gpu")"
           ;;
         *)
-          echo "Skipping unknown EcoFloc metric: $metric"
           ;;
       esac
     done
+
+    rows+="${pid}"$'\t'"${cmd}"$'\t'"${cpu}"$'\t'"${ram}"$'\t'"${sd}"$'\t'"${nic}"$'\t'"${gpu}"$'\n'
   done <<< "$matches"
+
+  printf "%s" "$rows" | print_ecofloc_metrics_table
 }
 
 run_watch() {
@@ -615,9 +685,11 @@ run_ecofloc_watch() {
     echo "EcoFloc interval: ${ECOFLOC_INTERVAL} ms"
     echo "EcoFloc duration: ${ECOFLOC_DURATION} s"
     echo "EcoFloc metrics: ${ECOFLOC_METRICS}"
+
     if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
       echo "EcoFloc export path: ${ECOFLOC_EXPORT_PATH}"
     fi
+
     echo
 
     run_ecofloc_once || true
