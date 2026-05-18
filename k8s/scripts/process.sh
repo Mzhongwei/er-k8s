@@ -152,16 +152,19 @@ def extract_function(cmd):
 
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
-            return ts[i + 1]
+            return tok_cleanup(ts[i + 1])
 
         if tok.startswith("--function="):
-            return tok.split("=", 1)[1]
+            return tok_cleanup(tok.split("=", 1)[1])
 
     m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
     if m:
-        return m.group(1)
+        return tok_cleanup(m.group(1))
 
     return "-"
+
+def tok_cleanup(value):
+    return value.strip().strip("\"'\''")
 
 def score(cmd):
     value = 0
@@ -223,8 +226,23 @@ import os
 import re
 import sys
 
-print("{:<8} | {:<40} | {:<20}".format("PID", "SCRIPT", "FUNCTION"))
-print("{:<8}-+-{:<40}-+-{:<20}".format("--------", "----------------------------------------", "--------------------"))
+PID_W = 8
+SCRIPT_W = 40
+FUNC_W = 28
+
+def fit(value, width):
+    value = str(value)
+
+    if len(value) <= width:
+        return value
+
+    if width <= 1:
+        return value[:width]
+
+    return value[:width - 1] + "…"
+
+print(f"{fit(\"PID\", PID_W):<{PID_W}} | {fit(\"SCRIPT\", SCRIPT_W):<{SCRIPT_W}} | {fit(\"FUNCTION\", FUNC_W):<{FUNC_W}}")
+print(f"{\"-\" * PID_W}-+-{\"-\" * SCRIPT_W}-+-{\"-\" * FUNC_W}")
 
 def parse_line(line):
     line = line.rstrip("\n")
@@ -277,19 +295,22 @@ def extract_script(cmd):
 
     return "-"
 
+def tok_cleanup(value):
+    return value.strip().strip("\"'\''")
+
 def extract_function(cmd):
     ts = tokens(cmd)
 
     for i, tok in enumerate(ts):
         if tok == "--function" and i + 1 < len(ts):
-            return ts[i + 1]
+            return tok_cleanup(ts[i + 1])
 
         if tok.startswith("--function="):
-            return tok.split("=", 1)[1]
+            return tok_cleanup(tok.split("=", 1)[1])
 
     m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
     if m:
-        return m.group(1)
+        return tok_cleanup(m.group(1))
 
     return "-"
 
@@ -312,7 +333,11 @@ try:
 
         seen.add(key)
 
-        print("{:<8} | {:<40} | {:<20}".format(pid, script, function))
+        print(
+            f"{fit(pid, PID_W):<{PID_W}} | "
+            f"{fit(script, SCRIPT_W):<{SCRIPT_W}} | "
+            f"{fit(function, FUNC_W):<{FUNC_W}}"
+        )
 
 except KeyboardInterrupt:
     sys.exit(0)
@@ -339,6 +364,7 @@ run_watch() {
   cleanup_watch() {
     tput cnorm 2>/dev/null || true
     tput rmcup 2>/dev/null || true
+    printf "\nStopped watching.\n"
     exit 0
   }
 
@@ -349,19 +375,17 @@ run_watch() {
   tput civis 2>/dev/null || true
 
   while true; do
-    # Move cursor to top-left instead of clearing the whole terminal.
+    # Move to top-left.
     tput cup 0 0 2>/dev/null || printf '\033[H'
 
-    {
-      echo "Watching Argo workflow processes. Press Ctrl+C to stop."
-      echo "Refresh interval: ${WATCH_INTERVAL}s"
-      echo
+    # Clear frame before drawing to avoid leftover characters.
+    tput ed 2>/dev/null || printf '\033[J'
 
-      QUIET_HEADER=true run_once || true
+    echo "Watching Argo workflow processes. Press Ctrl+C to stop."
+    echo "Refresh interval: ${WATCH_INTERVAL}s"
+    echo
 
-      # Clear leftover lines from the previous frame.
-      tput ed 2>/dev/null || printf '\033[J'
-    }
+    QUIET_HEADER=true run_once || true
 
     sleep "$WATCH_INTERVAL"
   done
