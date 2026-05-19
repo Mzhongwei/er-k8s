@@ -9,6 +9,7 @@
 # - PID existence uses /proc and ps, not kill -0.
 # - EcoFloc runs with -t -1, then receives SIGINT when the target process ends.
 # - Only the main process writes state files.
+# - EcoFloc display groups rows by script + function, not by PID.
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
@@ -675,13 +676,14 @@ import os
 import re
 import sys
 import time
+from collections import OrderedDict
 
 rows_file = sys.argv[1]
 sessions_file = sys.argv[2]
 results_file = sys.argv[3]
 enabled_metrics = {m.strip().lower() for m in sys.argv[4].split(",") if m.strip()}
 
-PID_W = 8
+PIDS_W = 16
 SCRIPT_W = 20
 FUNC_W = 20
 METRIC_W = 16
@@ -748,6 +750,10 @@ def format_energy(energy, valid_count):
         return "-"
     return f"{energy:.2f}J"
 
+def spinner_value():
+    frames = ["|", "/", "-", "\\"]
+    return f"{frames[int(time.time() * 4) % len(frames)]} measuring"
+
 results = {}
 sessions = {}
 now = int(time.time())
@@ -770,29 +776,9 @@ try:
             parts = line.split("\t")
             if len(parts) >= 5:
                 pid, metric, eco_pid, log_file, start_ts = parts[:5]
-                spinner_frames = ["|", "/", "-", "\\"]
-                spinner = spinner_frames[int(time.time() * 4) % len(spinner_frames)]
-                sessions[(pid, metric)] = f"{spinner} measuring..."
+                sessions[(pid, metric)] = True
 except FileNotFoundError:
     pass
-
-def value_for(pid, metric):
-    if metric not in enabled_metrics:
-        return "-"
-
-    if (pid, metric) in results:
-        return results[(pid, metric)]
-
-    if (pid, metric) in sessions:
-        return sessions[(pid, metric)]
-
-    return "WAIT"
-
-headers = ["PID", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU", "TOTAL"]
-widths = [PID_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, TOTAL_W]
-
-print(" | ".join("{:<{}}".format(h, w) for h, w in zip(headers, widths)))
-print("-+-".join("-" * w for w in widths))
 
 try:
     with open(rows_file, "r", encoding="utf-8") as f:
@@ -800,13 +786,7 @@ try:
 except FileNotFoundError:
     rows = []
 
-column_power_totals = {metric: 0.0 for metric in METRICS}
-column_energy_totals = {metric: 0.0 for metric in METRICS}
-column_valid_counts = {metric: 0 for metric in METRICS}
-
-grand_power_total = 0.0
-grand_energy_total = 0.0
-grand_valid_count = 0
+groups = OrderedDict()
 
 for row in rows:
     if not row.strip():
@@ -817,36 +797,118 @@ for row in rows:
         continue
 
     pid, cmd = parts
+    script = extract_script(cmd)
+    function = extract_function(cmd)
+    key = (script, function)
 
-    metric_values = {}
-    row_power_total = 0.0
-    row_energy_total = 0.0
-    row_valid_count = 0
+    if key not in groups:
+        groups[key] = {
+            "pids": [],
+            "script": script,
+            "function": function,
+        }
 
-    for metric in METRICS:
-        value = value_for(pid, metric)
-        metric_values[metric] = value
+    if pid not in groups[key]["pids"]:
+        groups[key]["pids"].append(pid)
 
+def pid_metric_values(pids, metric):
+    values = []
+    active = False
+
+    for pid in pids:
+        if metric not in enabled_metrics:
+            continue
+
+        if (pid, metric) in sessions:
+            active = True
+
+        if (pid, metric) in results:
+            values.append(results[(pid, metric)])
+
+    return values, active
+
+def aggregate_metric_for_group(pids, metric):
+    if metric not in enabled_metrics:
+        return "-", 0.0, 0.0, 0, False
+
+    values, active = pid_metric_values(pids, metric)
+
+    total_power = 0.0
+    total_energy = 0.0
+    valid_count = 0
+    statuses = []
+
+    for value in values:
         power, energy, valid = parse_metric_value(value)
         if valid:
-            row_power_total += power
+            total_power += power
+            total_energy += energy
+            valid_count += 1
+        else:
+            statuses.append(value)
+
+    if active:
+        display = spinner_value()
+    elif valid_count > 0:
+        display = format_metric(total_power, total_energy, valid_count)
+    elif statuses:
+        unique = sorted(set(statuses))
+        display = unique[0] if len(unique) == 1 else "PARTIAL"
+    else:
+        display = "WAIT"
+
+    return display, total_power, total_energy, valid_count, active
+
+headers = ["PIDS", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU", "TOTAL"]
+widths = [PIDS_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, TOTAL_W]
+
+print(" | ".join("{:<{}}".format(h, w) for h, w in zip(headers, widths)))
+print("-+-".join("-" * w for w in widths))
+
+column_power_totals = {metric: 0.0 for metric in METRICS}
+column_energy_totals = {metric: 0.0 for metric in METRICS}
+column_valid_counts = {metric: 0 for metric in METRICS}
+column_active = {metric: False for metric in METRICS}
+
+grand_energy_total = 0.0
+grand_valid_count = 0
+grand_active = False
+
+for group in groups.values():
+    pids = group["pids"]
+    pids_text = ",".join(pids)
+
+    metric_values = {}
+    row_energy_total = 0.0
+    row_valid_count = 0
+    row_active = False
+
+    for metric in METRICS:
+        display, power, energy, valid_count, active = aggregate_metric_for_group(pids, metric)
+        metric_values[metric] = display
+
+        if valid_count > 0:
             row_energy_total += energy
-            row_valid_count += 1
+            row_valid_count += valid_count
 
             column_power_totals[metric] += power
             column_energy_totals[metric] += energy
-            column_valid_counts[metric] += 1
+            column_valid_counts[metric] += valid_count
 
-            grand_power_total += power
             grand_energy_total += energy
-            grand_valid_count += 1
+            grand_valid_count += valid_count
 
-    row_total = format_energy(row_energy_total, row_valid_count)
+        if active:
+            row_active = True
+            column_active[metric] = True
+            grand_active = True
+
+    row_total = spinner_value() if row_active else format_energy(row_energy_total, row_valid_count)
 
     values = [
-        pid,
-        extract_script(cmd),
-        extract_function(cmd),
+        pids_text,
+        group["script"],
+        group["function"],
         metric_values["cpu"],
         metric_values["ram"],
         metric_values["sd"],
@@ -859,16 +921,26 @@ for row in rows:
 
 print("-+-".join("-" * w for w in widths))
 
+def column_total(metric):
+    if column_active[metric]:
+        return spinner_value()
+
+    return format_metric(
+        column_power_totals[metric],
+        column_energy_totals[metric],
+        column_valid_counts[metric],
+    )
+
 total_values = [
     "TOTAL",
     "-",
     "-",
-    format_metric(column_power_totals["cpu"], column_energy_totals["cpu"], column_valid_counts["cpu"]),
-    format_metric(column_power_totals["ram"], column_energy_totals["ram"], column_valid_counts["ram"]),
-    format_metric(column_power_totals["sd"], column_energy_totals["sd"], column_valid_counts["sd"]),
-    format_metric(column_power_totals["nic"], column_energy_totals["nic"], column_valid_counts["nic"]),
-    format_metric(column_power_totals["gpu"], column_energy_totals["gpu"], column_valid_counts["gpu"]),
-    format_energy(grand_energy_total, grand_valid_count),
+    column_total("cpu"),
+    column_total("ram"),
+    column_total("sd"),
+    column_total("nic"),
+    column_total("gpu"),
+    spinner_value() if grand_active else format_energy(grand_energy_total, grand_valid_count),
 ]
 
 print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(total_values, widths)))
