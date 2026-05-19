@@ -101,6 +101,7 @@ delete_pipeline_configmaps() {
 delete_pipeline_storage() {
     local pvc=""
     local pv=""
+    local claimed_pv=""
     local pod=""
     local pod_pvc=""
     local pods_to_delete=()
@@ -133,6 +134,17 @@ delete_pipeline_storage() {
             pv_names+=("$pv")
         fi
     done
+
+    while IFS= read -r claimed_pv; do
+        [ -n "$claimed_pv" ] || continue
+        pv_names+=("$claimed_pv")
+    done < <(
+        kubectl get pv -o jsonpath="{range .items[?(@.spec.claimRef.namespace=='${NAMESPACE}')]}{.metadata.name}{'\n'}{end}" 2>/dev/null || true
+    )
+
+    if [ "${#pv_names[@]}" -gt 0 ]; then
+        mapfile -t pv_names < <(printf '%s\n' "${pv_names[@]}" | awk '!seen[$0]++')
+    fi
 
     kubectl delete pvc -n "$NAMESPACE" "${PVC_NAMES[@]}" --ignore-not-found=true
 
