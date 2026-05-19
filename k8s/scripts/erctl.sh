@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "help")
+ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "pipeline" "help")
 
 print_help() {
     cat << 'EOF'
@@ -22,6 +22,7 @@ COMMANDS:
     configmaps  Create or update the distribution ConfigMaps
     dataset     Sync Data_example/bert files into the Argo PVC
     process     Get the PID of processes running in the Argo workflow
+    pipeline    Manage the Argo pipeline workflow and its storage
     help        Display this help message
 
 OPTIONS:
@@ -42,13 +43,14 @@ EXAMPLES:
   # Show command-specific help
   erctl configmaps --help
   erctl dataset --help
+    erctl pipeline --help
 EOF
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [images|configmaps|dataset|process|help] [options]"
+    echo "Usage: $0 [images|configmaps|dataset|fetch-report|process|pipeline|help] [options]"
     exit 1
 fi
 
@@ -156,6 +158,10 @@ EOF
 
     process)
         run_script "process.sh" "$@"
+        ;;
+
+    pipeline)
+        run_script "pipeline.sh" "$@"
         ;;
 
     *)
