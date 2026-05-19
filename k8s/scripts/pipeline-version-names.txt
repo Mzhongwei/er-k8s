@@ -14,11 +14,9 @@ harbor-glow
 ion-summit
 jade-current
 kelp-mirror
-lunar-ember
 maple-storm
 meridian-peak
 nova-drift
-opal-curve
 orbit-spring
 quartz-harbor
 raindrop-vertex
@@ -102,7 +100,6 @@ turquoise
 lapis-lazuli
 malachite
 aquamarine
-garnet
 peridot
 zircon
 tanzanite
@@ -110,7 +107,6 @@ alexandrite
 moonstone
 sunstone
 kaleidoscope
-prism
 spectrum
 horizon
 zenith

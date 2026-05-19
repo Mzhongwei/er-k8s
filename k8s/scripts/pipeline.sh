@@ -50,6 +50,18 @@ require_cmd() {
     fi
 }
 
+log_step() {
+    printf '[pipeline] %s\n' "$1"
+}
+
+wait_for_pvc_bound() {
+    local pvc_name="$1"
+    local timeout_seconds="${2:-120}"
+
+    log_step "Waiting for PVC $pvc_name to become Bound"
+    kubectl wait -n "$NAMESPACE" --for=jsonpath='{.status.phase}'=Bound "pvc/$pvc_name" --timeout="${timeout_seconds}s"
+}
+
 choose_random_version_name() {
     local names_file="$1"
     local available_count=""
@@ -101,7 +113,6 @@ delete_pipeline_configmaps() {
 delete_pipeline_storage() {
     local pvc=""
     local pv=""
-    local claimed_pv=""
     local pod=""
     local pod_pvc=""
     local pods_to_delete=()
@@ -135,12 +146,14 @@ delete_pipeline_storage() {
         fi
     done
 
-    while IFS= read -r claimed_pv; do
-        [ -n "$claimed_pv" ] || continue
-        pv_names+=("$claimed_pv")
-    done < <(
-        kubectl get pv -o jsonpath="{range .items[?(@.spec.claimRef.namespace=='${NAMESPACE}')]}{.metadata.name}{'\n'}{end}" 2>/dev/null || true
-    )
+    for pvc in "${PVC_NAMES[@]}"; do
+        while IFS= read -r pv; do
+            [ -n "$pv" ] || continue
+            pv_names+=("$pv")
+        done < <(
+            kubectl get pv -o jsonpath="{range .items[?(@.spec.claimRef.namespace=='${NAMESPACE}' && @.spec.claimRef.name=='${pvc}')]}{.metadata.name}{'\n'}{end}" 2>/dev/null || true
+        )
+    done
 
     if [ "${#pv_names[@]}" -gt 0 ]; then
         mapfile -t pv_names < <(printf '%s\n' "${pv_names[@]}" | awk '!seen[$0]++')
@@ -170,6 +183,7 @@ start_pipeline() {
         echo "Using pipeline version name: $version_name"
     fi
 
+    log_step "Cleaning up previous pipeline configmaps and storage"
     delete_pipeline_configmaps
     delete_pipeline_storage
 
@@ -178,9 +192,18 @@ start_pipeline() {
         exit 1
     fi
 
+    log_step "Applying PVC manifests from $PVC_MANIFEST_DIR"
     kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFEST_DIR"
+
+    wait_for_pvc_bound "pipeline-data-claim" 180
+
+    log_step "Syncing dataset into PVC"
     bash "${SCRIPT_DIR}/erctl" dataset
+
+    log_step "Creating ConfigMaps in $PIPELINE_MODE mode"
     bash "${SCRIPT_DIR}/erctl" configmaps "$PIPELINE_MODE"
+
+    log_step "Submitting Argo workflow"
     argo submit -n "$NAMESPACE" "$PIPELINE_MANIFEST"
 }
 
