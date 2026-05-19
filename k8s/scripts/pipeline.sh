@@ -54,12 +54,16 @@ log_step() {
     printf '[pipeline] %s\n' "$1"
 }
 
-wait_for_pvc_bound() {
-    local pvc_name="$1"
-    local timeout_seconds="${2:-120}"
+warn_pending_pvcs() {
+    local pvc=""
+    local pvc_status=""
 
-    log_step "Waiting for PVC $pvc_name to become Bound"
-    kubectl wait -n "$NAMESPACE" --for=jsonpath='{.status.phase}'=Bound "pvc/$pvc_name" --timeout="${timeout_seconds}s"
+    for pvc in "${PVC_NAMES[@]}"; do
+        pvc_status="$(kubectl get pvc -n "$NAMESPACE" "$pvc" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+        if [ -n "$pvc_status" ] && [ "$pvc_status" != "Bound" ]; then
+            log_step "PVC $pvc is $pvc_status; continuing without waiting"
+        fi
+    done
 }
 
 choose_random_version_name() {
@@ -195,7 +199,7 @@ start_pipeline() {
     log_step "Applying PVC manifests from $PVC_MANIFEST_DIR"
     kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFEST_DIR"
 
-    wait_for_pvc_bound "pipeline-data-claim" 180
+    warn_pending_pvcs
 
     log_step "Syncing dataset into PVC"
     bash "${SCRIPT_DIR}/erctl" dataset
