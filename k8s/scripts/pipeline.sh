@@ -14,6 +14,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 NAMESPACE="${EAER_PIPELINE_NAMESPACE:-argo}"
 PIPELINE_MANIFEST="${ROOT_DIR}/k8s/argo/pipeline.yaml"
 PVC_MANIFEST_DIR="${ROOT_DIR}/k8s/argo/pvc-manifests"
+PV_MANIFEST_DIR="${ROOT_DIR}/k8s/argo/pv-manifests"
 PIPELINE_CONFIGMAP="er-pipeline-config"
 VERSION_NAMES_FILE="${SCRIPT_DIR}/pipeline-version-names.txt"
 
@@ -194,6 +195,12 @@ start_pipeline() {
     if [ ! -d "$PVC_MANIFEST_DIR" ]; then
         echo "PVC manifest directory not found: $PVC_MANIFEST_DIR"
         exit 1
+    fi
+
+    # If PV manifests exist, apply them first (PV objects are cluster-scoped)
+    if [ -d "$PV_MANIFEST_DIR" ]; then
+        log_step "Applying PV manifests from $PV_MANIFEST_DIR"
+        kubectl apply -f "$PV_MANIFEST_DIR" || true
     fi
 
     log_step "Applying PVC manifests from $PVC_MANIFEST_DIR"
