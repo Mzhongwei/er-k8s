@@ -104,7 +104,6 @@ seed
 fruit
 berry
 cherry
-melon
 grape
 lemon
 lime
@@ -244,7 +243,6 @@ azure
 cyan
 magenta
 beige
-umber
 sable
 ivory
 rose

@@ -171,12 +171,22 @@ delete_pipeline_configmaps() {
 }
 
 delete_pipeline_storage() {
+    local include_dataset_pvc="${1:-false}"
     local pvc=""
     local pv=""
     local pod=""
     local pod_pvc=""
     local pods_to_delete=()
     local pv_names=()
+    local target_pvcs=()
+
+    for pvc in "${PVC_NAMES[@]}"; do
+        if [ "$pvc" = "pipeline-data-claim" ] && [ "$include_dataset_pvc" != true ]; then
+            continue
+        fi
+
+        target_pvcs+=("$pvc")
+    done
 
     # Delete any pod that still references one of the target PVCs.
     # This avoids PVCs getting stuck in Terminating due to lingering Completed pods.
@@ -185,7 +195,7 @@ delete_pipeline_storage() {
 
         while IFS= read -r pod_pvc; do
             [ -n "$pod_pvc" ] || continue
-            for pvc in "${PVC_NAMES[@]}"; do
+            for pvc in "${target_pvcs[@]}"; do
                 if [ "$pod_pvc" = "$pvc" ]; then
                     pods_to_delete+=("$pod")
                     break
@@ -199,14 +209,14 @@ delete_pipeline_storage() {
         kubectl delete pod -n "$NAMESPACE" "${pods_to_delete[@]}" --ignore-not-found=true --wait=false
     fi
 
-    for pvc in "${PVC_NAMES[@]}"; do
+    for pvc in "${target_pvcs[@]}"; do
         pv="$(kubectl get pvc -n "$NAMESPACE" "$pvc" -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)"
         if [ -n "$pv" ]; then
             pv_names+=("$pv")
         fi
     done
 
-    for pvc in "${PVC_NAMES[@]}"; do
+    for pvc in "${target_pvcs[@]}"; do
         while IFS= read -r pv; do
             [ -n "$pv" ] || continue
             pv_names+=("$pv")
@@ -219,7 +229,7 @@ delete_pipeline_storage() {
         mapfile -t pv_names < <(printf '%s\n' "${pv_names[@]}" | awk '!seen[$0]++')
     fi
 
-    kubectl delete pvc -n "$NAMESPACE" "${PVC_NAMES[@]}" --ignore-not-found=true
+    kubectl delete pvc -n "$NAMESPACE" "${target_pvcs[@]}" --ignore-not-found=true
 
     if [ "${#pv_names[@]}" -gt 0 ]; then
         kubectl delete pv "${pv_names[@]}" --ignore-not-found=true
@@ -243,9 +253,8 @@ start_pipeline() {
         echo "Using pipeline version name: $version_name"
     fi
 
-    log_step "Cleaning up previous pipeline configmaps and storage"
-    delete_pipeline_configmaps
-    delete_pipeline_storage
+    log_step "Cleaning up previous pipeline storage"
+    delete_pipeline_storage "$SYNC_DATASET"
 
     if [ ! -d "$PVC_MANIFEST_DIR" ]; then
         echo "PVC manifest directory not found: $PVC_MANIFEST_DIR"
@@ -269,6 +278,7 @@ start_pipeline() {
     fi
 
     if [ "$CREATE_CONFIGMAPS" = true ]; then
+        delete_pipeline_configmaps
         log_step "Creating ConfigMaps in $PIPELINE_MODE mode"
         bash "${SCRIPT_DIR}/erctl" configmaps "$PIPELINE_MODE"
     elif [ "$RANDOM_VERSION_NAME" = true ]; then
@@ -303,7 +313,7 @@ terminate_pipeline() {
     fi
 
     delete_pipeline_configmaps
-    delete_pipeline_storage
+    delete_pipeline_storage true
 }
 
 ACTION="start"
