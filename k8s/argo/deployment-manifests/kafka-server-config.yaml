@@ -39,4 +39,4 @@ data:
       tune_swappiness: false
       enable_memory_locking: false
       tune_coredump: false
-      coredump_dir: "/var/lib/redpanda/coredump"
+      coredump_dir: "/var/lib/redpanda/data/coredump"
