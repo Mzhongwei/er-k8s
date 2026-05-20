@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kafka-server
+  namespace: argo
   labels:
     app.kubernetes.io/name: kafka-server
 spec:
@@ -43,6 +44,10 @@ spec:
           - redpanda
           - --redpanda-cfg
           - /etc/redpanda/redpanda.yaml
+          - --overprovisioned
+          - --smp=1
+          - --memory=256M
+          - --reserve-memory=0M
         ports:
           - containerPort: 9092
         resources:

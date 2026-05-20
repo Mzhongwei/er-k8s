@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: kafka-server-redpanda-config
+  namespace: argo
   labels:
     app.kubernetes.io/name: kafka-server
 data:
