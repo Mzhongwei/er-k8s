@@ -173,12 +173,14 @@ delete_pipeline_configmaps() {
 delete_pipeline_storage() {
     local include_dataset_pvc="${1:-false}"
     local pvc=""
-    local pv=""
     local pod=""
     local pod_pvc=""
     local pods_to_delete=()
-    local pv_names=()
     local target_pvcs=()
+    local pv_path=""
+    local pv_node=""
+    local pv_manifest=""
+    local cleanup_pod_name=""
 
     for pvc in "${PVC_NAMES[@]}"; do
         if [ "$pvc" = "pipeline-data-claim" ] && [ "$include_dataset_pvc" != true ]; then
@@ -210,30 +212,92 @@ delete_pipeline_storage() {
     fi
 
     for pvc in "${target_pvcs[@]}"; do
-        pv="$(kubectl get pvc -n "$NAMESPACE" "$pvc" -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)"
-        if [ -n "$pv" ]; then
-            pv_names+=("$pv")
+        case "$pvc" in
+            pipeline-bert-model-claim)
+                pv_path="/var/lib/eaer/pv/pipeline-bert-model-claim"
+                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-bert-model-claim.yaml"
+                ;;
+            pipeline-buffer-data-claim)
+                pv_path="/var/lib/eaer/pv/pipeline-buffer-data-claim"
+                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-buffer-data-claim.yaml"
+                ;;
+            pipeline-data-claim)
+                pv_path="/tmp/eaer/pv/pipeline-data-claim"
+                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-data-claim.yaml"
+                ;;
+            pipeline-decision-evaluation-cache-claim)
+                pv_path="/var/lib/eaer/pv/pipeline-decision-evaluation-cache-claim"
+                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-decision-evaluation-cache-claim.yaml"
+                ;;
+            pipeline-embedding-model-cache-claim)
+                pv_path="/var/lib/eaer/pv/pipeline-embedding-model-cache-claim"
+                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-embedding-model-cache-claim.yaml"
+                ;;
+            pipeline-feature-index-cache-claim)
+                pv_path="/var/lib/eaer/pv/pipeline-feature-index-cache-claim"
+                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-feature-index-cache-claim.yaml"
+                ;;
+            pipeline-graph-cache-claim)
+                pv_path="/var/lib/eaer/pv/pipeline-graph-cache-claim"
+                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-graph-cache-claim.yaml"
+                ;;
+            pipeline-reports-claim)
+                pv_path="/var/lib/eaer/pv/pipeline-reports-claim"
+                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-reports-claim.yaml"
+                ;;
+            *)
+                pv_path=""
+                pv_manifest=""
+                ;;
+        esac
+
+        if [ -n "$pv_path" ] && [ -n "$pv_manifest" ] && [ -f "$pv_manifest" ]; then
+            pv_node="$(awk '
+                $1 == "values:" { getline; gsub(/^[[:space:]]*-[[:space:]]*/, ""); print; exit }
+            ' "$pv_manifest")"
+
+            if [ -z "$pv_node" ]; then
+                echo "Could not determine node selector from PV manifest: $pv_manifest"
+                exit 1
+            fi
+
+            cleanup_pod_name="eaer-pv-cleanup-${pvc}"
+            log_step "Clearing host path $pv_path"
+            kubectl apply -n "$NAMESPACE" -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${cleanup_pod_name}
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: ${pv_node}
+  containers:
+    - name: cleaner
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - rm -rf /mnt/*
+      volumeMounts:
+        - name: target
+          mountPath: /mnt
+  volumes:
+    - name: target
+      hostPath:
+        path: ${pv_path}
+        type: DirectoryOrCreate
+EOF
+
+            if ! kubectl wait -n "$NAMESPACE" --for=jsonpath='{.status.phase}'=Succeeded "pod/${cleanup_pod_name}" --timeout=120s; then
+                kubectl logs -n "$NAMESPACE" "pod/${cleanup_pod_name}" || true
+                kubectl delete pod -n "$NAMESPACE" "${cleanup_pod_name}" --ignore-not-found=true --wait=false
+                exit 1
+            fi
+
+            kubectl delete pod -n "$NAMESPACE" "${cleanup_pod_name}" --ignore-not-found=true --wait=false
         fi
     done
-
-    for pvc in "${target_pvcs[@]}"; do
-        while IFS= read -r pv; do
-            [ -n "$pv" ] || continue
-            pv_names+=("$pv")
-        done < <(
-            kubectl get pv -o jsonpath="{range .items[?(@.spec.claimRef.namespace=='${NAMESPACE}' && @.spec.claimRef.name=='${pvc}')]}{.metadata.name}{'\n'}{end}" 2>/dev/null || true
-        )
-    done
-
-    if [ "${#pv_names[@]}" -gt 0 ]; then
-        mapfile -t pv_names < <(printf '%s\n' "${pv_names[@]}" | awk '!seen[$0]++')
-    fi
-
-    kubectl delete pvc -n "$NAMESPACE" "${target_pvcs[@]}" --ignore-not-found=true
-
-    if [ "${#pv_names[@]}" -gt 0 ]; then
-        kubectl delete pv "${pv_names[@]}" --ignore-not-found=true
-    fi
 }
 
 latest_pipeline_workflow() {
