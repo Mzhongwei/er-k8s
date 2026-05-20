@@ -38,6 +38,8 @@ Options:
     stop                     Stop the latest pipeline
     terminate                Terminate the latest pipeline and clean up resources
     -m, --mode MODE          ConfigMap mode for pipeline config (`embedding` or `bert`) default: `embedding`
+    -c, --configmaps         Create the pipeline configmaps before submitting
+    -d, --dataset            Sync the dataset into the pipeline PVC before submitting
     -r, --random-version-name    Pick a random version name from the local pool
     -h, --help, -help, help  Show this help
 EOF
@@ -97,6 +99,59 @@ choose_random_version_name() {
 
     mv "$temp_file" "$names_file"
     printf '%s\n' "$chosen_name"
+}
+
+prepare_pipeline_config_file() {
+    local source_file="$1"
+    local version_name="$2"
+    local temp_file=""
+
+    temp_file="$(mktemp)"
+
+    if grep -qE '^[[:space:]]*(version_name|versionName)[[:space:]]*:' "$source_file"; then
+        awk -v version_name="$version_name" '
+            BEGIN { replaced = 0 }
+            /^[[:space:]]*(version_name|versionName)[[:space:]]*:/ && !replaced {
+                sub(/:.*/, ": \"" version_name "\"")
+                replaced = 1
+            }
+            { print }
+            END {
+                if (!replaced) {
+                    print "version_name: \"" version_name "\""
+                }
+            }
+        ' "$source_file" > "$temp_file"
+    elif grep -qF '__VERSION_NAME__' "$source_file"; then
+        sed "s/__VERSION_NAME__/${version_name//\/\\}/g" "$source_file" > "$temp_file"
+    else
+        cat "$source_file" > "$temp_file"
+        printf '\nversion_name: "%s"\n' "$version_name" >> "$temp_file"
+    fi
+
+    printf '%s\n' "$temp_file"
+}
+
+create_pipeline_configmap() {
+    local config_type="$1"
+    local version_name="${EAER_PIPELINE_VERSION_NAME:-}"
+    local config_file="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-${config_type}.yaml"
+    local config_file_to_use="$config_file"
+    local temp_file=""
+
+    if [ -n "$version_name" ]; then
+        config_file_to_use="$(prepare_pipeline_config_file "$config_file" "$version_name")"
+        temp_file="$config_file_to_use"
+    fi
+
+    kubectl create configmap "$PIPELINE_CONFIGMAP" \
+        --from-file="config.yaml=${config_file_to_use}" \
+        --dry-run=client -o yaml | \
+        kubectl apply -n "$NAMESPACE" -f -
+
+    if [ -n "$temp_file" ]; then
+        rm -f "$temp_file"
+    fi
 }
 
 delete_pipeline_configmaps() {
@@ -208,11 +263,18 @@ start_pipeline() {
 
     warn_pending_pvcs
 
-    log_step "Syncing dataset into PVC"
-    bash "${SCRIPT_DIR}/erctl" dataset
+    if [ "$SYNC_DATASET" = true ]; then
+        log_step "Syncing dataset into PVC"
+        bash "${SCRIPT_DIR}/erctl" dataset
+    fi
 
-    log_step "Creating ConfigMaps in $PIPELINE_MODE mode"
-    bash "${SCRIPT_DIR}/erctl" configmaps "$PIPELINE_MODE"
+    if [ "$CREATE_CONFIGMAPS" = true ]; then
+        log_step "Creating ConfigMaps in $PIPELINE_MODE mode"
+        bash "${SCRIPT_DIR}/erctl" configmaps "$PIPELINE_MODE"
+    elif [ "$RANDOM_VERSION_NAME" = true ]; then
+        log_step "Creating pipeline ConfigMap in $PIPELINE_MODE mode"
+        create_pipeline_configmap "$PIPELINE_MODE"
+    fi
 
     log_step "Submitting Argo workflow"
     argo submit -n "$NAMESPACE" "$PIPELINE_MANIFEST"
@@ -246,6 +308,8 @@ terminate_pipeline() {
 
 ACTION="start"
 RANDOM_VERSION_NAME=false
+CREATE_CONFIGMAPS=false
+SYNC_DATASET=false
 PIPELINE_MODE="embedding"
 
 if [ $# -gt 0 ]; then
@@ -263,16 +327,61 @@ fi
 
 if [ "$ACTION" = "start" ]; then
     while [ $# -gt 0 ]; do
-        case "$1" in
+        current_arg="$1"
+        shift
+
+        case "$current_arg" in
+            -[!-]* )
+                short_flags="${current_arg#-}"
+                while [ -n "$short_flags" ]; do
+                    short_flag="${short_flags%${short_flags#?}}"
+                    short_flags="${short_flags#?}"
+
+                    case "$short_flag" in
+                        r)
+                            RANDOM_VERSION_NAME=true
+                            ;;
+                        c)
+                            CREATE_CONFIGMAPS=true
+                            ;;
+                        d)
+                            SYNC_DATASET=true
+                            ;;
+                        m)
+                            if [ -n "$short_flags" ]; then
+                                echo "-m cannot be bundled with other short options. Use '-m MODE'."
+                                exit 1
+                            fi
+                            if [ $# -lt 1 ]; then
+                                echo "Missing value for -m. Expected 'embedding' or 'bert'."
+                                exit 1
+                            fi
+                            PIPELINE_MODE="$1"
+                            shift
+                            ;;
+                        *)
+                            echo "Unknown option for pipeline start: -$short_flag"
+                            echo "Use 'erctl pipeline --help' for usage information."
+                            exit 1
+                            ;;
+                    esac
+                done
+                ;;
             -r|--random-version-name|--random-name)
                 RANDOM_VERSION_NAME=true
                 ;;
+            -c|--configmaps)
+                CREATE_CONFIGMAPS=true
+                ;;
+            -d|--dataset)
+                SYNC_DATASET=true
+                ;;
             -m|--mode)
-                if [ $# -lt 2 ]; then
+                if [ $# -lt 1 ]; then
                     echo "Missing value for $1. Expected 'embedding' or 'bert'."
                     exit 1
                 fi
-                PIPELINE_MODE="$2"
+                PIPELINE_MODE="$1"
                 shift
                 ;;
             --mode=*)
@@ -283,12 +392,11 @@ if [ "$ACTION" = "start" ]; then
                 exit 0
                 ;;
             *)
-                echo "Unknown option for pipeline start: $1"
+                echo "Unknown option for pipeline start: $current_arg"
                 echo "Use 'erctl pipeline --help' for usage information."
                 exit 1
                 ;;
         esac
-        shift
     done
 
     if [[ "$PIPELINE_MODE" != "embedding" && "$PIPELINE_MODE" != "bert" ]]; then

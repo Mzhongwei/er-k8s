@@ -56,7 +56,6 @@ supernova
 flare
 eclipse
 flashlight
-firefly
 vortex
 cyclone
 tornado
