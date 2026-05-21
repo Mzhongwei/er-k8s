@@ -14,7 +14,6 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 NAMESPACE="${EAER_PIPELINE_NAMESPACE:-argo}"
 PIPELINE_MANIFEST="${ROOT_DIR}/k8s/argo/pipeline.yaml"
 PVC_MANIFEST_DIR="${ROOT_DIR}/k8s/argo/pvc-manifests"
-PV_MANIFEST_DIR="${ROOT_DIR}/k8s/argo/pv-manifests"
 PIPELINE_CONFIGMAP="er-pipeline-config"
 VERSION_NAMES_FILE="${SCRIPT_DIR}/pipeline-version-names.txt"
 
@@ -23,6 +22,7 @@ PVC_NAMES=(
     pipeline-buffer-data-claim
     pipeline-data-claim
     pipeline-decision-evaluation-cache-claim
+    pipeline-kafka-data-claim
     pipeline-embedding-model-cache-claim
     pipeline-feature-index-cache-claim
     pipeline-graph-cache-claim
@@ -40,6 +40,7 @@ Options:
     -m, --mode MODE          ConfigMap mode for pipeline config (`embedding` or `bert`) default: `embedding`
     -c, --configmaps         Create the pipeline configmaps before submitting
     -d, --dataset            Sync the dataset into the pipeline PVC before submitting
+    -k, --kafka              Delete the Kafka PVC before submitting for a fresh Redpanda start
     -r, --random-version-name    Pick a random version name from the local pool
     -h, --help, -help, help  Show this help
 EOF
@@ -172,18 +173,19 @@ delete_pipeline_configmaps() {
 
 delete_pipeline_storage() {
     local include_dataset_pvc="${1:-false}"
+    local include_kafka_pvc="${2:-false}"
     local pvc=""
     local pod=""
     local pod_pvc=""
     local pods_to_delete=()
     local target_pvcs=()
-    local pv_path=""
-    local pv_node=""
-    local pv_manifest=""
-    local cleanup_pod_name=""
 
     for pvc in "${PVC_NAMES[@]}"; do
         if [ "$pvc" = "pipeline-data-claim" ] && [ "$include_dataset_pvc" != true ]; then
+            continue
+        fi
+
+        if [ "$pvc" = "pipeline-kafka-data-claim" ] && [ "$include_kafka_pvc" != true ]; then
             continue
         fi
 
@@ -211,93 +213,12 @@ delete_pipeline_storage() {
         kubectl delete pod -n "$NAMESPACE" "${pods_to_delete[@]}" --ignore-not-found=true --wait=false
     fi
 
-    for pvc in "${target_pvcs[@]}"; do
-        case "$pvc" in
-            pipeline-bert-model-claim)
-                pv_path="/var/lib/eaer/pv/pipeline-bert-model-claim"
-                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-bert-model-claim.yaml"
-                ;;
-            pipeline-buffer-data-claim)
-                pv_path="/var/lib/eaer/pv/pipeline-buffer-data-claim"
-                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-buffer-data-claim.yaml"
-                ;;
-            pipeline-data-claim)
-                pv_path="/tmp/eaer/pv/pipeline-data-claim"
-                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-data-claim.yaml"
-                ;;
-            pipeline-decision-evaluation-cache-claim)
-                pv_path="/var/lib/eaer/pv/pipeline-decision-evaluation-cache-claim"
-                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-decision-evaluation-cache-claim.yaml"
-                ;;
-            pipeline-embedding-model-cache-claim)
-                pv_path="/var/lib/eaer/pv/pipeline-embedding-model-cache-claim"
-                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-embedding-model-cache-claim.yaml"
-                ;;
-            pipeline-feature-index-cache-claim)
-                pv_path="/var/lib/eaer/pv/pipeline-feature-index-cache-claim"
-                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-feature-index-cache-claim.yaml"
-                ;;
-            pipeline-graph-cache-claim)
-                pv_path="/var/lib/eaer/pv/pipeline-graph-cache-claim"
-                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-graph-cache-claim.yaml"
-                ;;
-            pipeline-reports-claim)
-                pv_path="/var/lib/eaer/pv/pipeline-reports-claim"
-                pv_manifest="${PV_MANIFEST_DIR}/pv-pipeline-reports-claim.yaml"
-                ;;
-            *)
-                pv_path=""
-                pv_manifest=""
-                ;;
-        esac
+    if [ "${#target_pvcs[@]}" -eq 0 ]; then
+        return 0
+    fi
 
-        if [ -n "$pv_path" ] && [ -n "$pv_manifest" ] && [ -f "$pv_manifest" ]; then
-            pv_node="$(awk '
-                $1 == "values:" { getline; gsub(/^[[:space:]]*-[[:space:]]*/, ""); print; exit }
-            ' "$pv_manifest")"
-
-            if [ -z "$pv_node" ]; then
-                echo "Could not determine node selector from PV manifest: $pv_manifest"
-                exit 1
-            fi
-
-            cleanup_pod_name="eaer-pv-cleanup-${pvc}"
-            log_step "Clearing host path $pv_path"
-            kubectl apply -n "$NAMESPACE" -f - <<EOF
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ${cleanup_pod_name}
-spec:
-  restartPolicy: Never
-  nodeSelector:
-    kubernetes.io/hostname: ${pv_node}
-  containers:
-    - name: cleaner
-      image: busybox:1.36
-      command:
-        - sh
-        - -c
-        - rm -rf /mnt/*
-      volumeMounts:
-        - name: target
-          mountPath: /mnt
-  volumes:
-    - name: target
-      hostPath:
-        path: ${pv_path}
-        type: DirectoryOrCreate
-EOF
-
-            if ! kubectl wait -n "$NAMESPACE" --for=jsonpath='{.status.phase}'=Succeeded "pod/${cleanup_pod_name}" --timeout=120s; then
-                kubectl logs -n "$NAMESPACE" "pod/${cleanup_pod_name}" || true
-                kubectl delete pod -n "$NAMESPACE" "${cleanup_pod_name}" --ignore-not-found=true --wait=false
-                exit 1
-            fi
-
-            kubectl delete pod -n "$NAMESPACE" "${cleanup_pod_name}" --ignore-not-found=true --wait=false
-        fi
-    done
+    log_step "Deleting pipeline PVCs"
+    kubectl delete pvc -n "$NAMESPACE" "${target_pvcs[@]}" --ignore-not-found=true --wait=true
 }
 
 latest_pipeline_workflow() {
@@ -318,17 +239,11 @@ start_pipeline() {
     fi
 
     log_step "Cleaning up previous pipeline storage"
-    delete_pipeline_storage "$SYNC_DATASET"
+    delete_pipeline_storage "$SYNC_DATASET" "$CLEAR_KAFKA_STORAGE"
 
     if [ ! -d "$PVC_MANIFEST_DIR" ]; then
         echo "PVC manifest directory not found: $PVC_MANIFEST_DIR"
         exit 1
-    fi
-
-    # If PV manifests exist, apply them first (PV objects are cluster-scoped)
-    if [ -d "$PV_MANIFEST_DIR" ]; then
-        log_step "Applying PV manifests from $PV_MANIFEST_DIR"
-        kubectl apply -f "$PV_MANIFEST_DIR" || true
     fi
 
     log_step "Applying PVC manifests from $PVC_MANIFEST_DIR"
@@ -384,6 +299,7 @@ ACTION="start"
 RANDOM_VERSION_NAME=false
 CREATE_CONFIGMAPS=false
 SYNC_DATASET=false
+CLEAR_KAFKA_STORAGE=false
 PIPELINE_MODE="embedding"
 
 if [ $# -gt 0 ]; then
@@ -421,6 +337,9 @@ if [ "$ACTION" = "start" ]; then
                         d)
                             SYNC_DATASET=true
                             ;;
+                        k)
+                            CLEAR_KAFKA_STORAGE=true
+                            ;;
                         m)
                             if [ -n "$short_flags" ]; then
                                 echo "-m cannot be bundled with other short options. Use '-m MODE'."
@@ -449,6 +368,9 @@ if [ "$ACTION" = "start" ]; then
                 ;;
             -d|--dataset)
                 SYNC_DATASET=true
+                ;;
+            -k|--kafka|--fresh-broker-storage)
+                CLEAR_KAFKA_STORAGE=true
                 ;;
             -m|--mode)
                 if [ $# -lt 1 ]; then

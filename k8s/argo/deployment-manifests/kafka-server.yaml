@@ -25,10 +25,20 @@ spec:
           runAsUser: 0
           runAsGroup: 0
           allowPrivilegeEscalation: false
+        env:
+          - name: REDPANDA_RESET_DATA
+            value: "false"
         command:
           - sh
           - -c
-          - set -eux; mkdir -p /var/lib/redpanda/data; chown -R 101:101 /var/lib/redpanda/data; chmod -R ug+rwX /var/lib/redpanda/data
+          - |
+            set -eux
+            mkdir -p /var/lib/redpanda/data
+            if [ "${REDPANDA_RESET_DATA:-false}" = "true" ] || [ "${REDPANDA_RESET_DATA:-false}" = "1" ]; then
+              rm -rf /var/lib/redpanda/data/* /var/lib/redpanda/data/.[!.]* /var/lib/redpanda/data/..?* || true
+            fi
+            chown -R 101:101 /var/lib/redpanda/data
+            chmod -R ug+rwX /var/lib/redpanda/data
         volumeMounts:
           - name: redpanda-data
             mountPath: /var/lib/redpanda/data

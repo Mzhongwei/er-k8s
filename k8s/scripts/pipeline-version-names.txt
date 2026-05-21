@@ -1,5 +1,4 @@
 apple
-river
 stone
 forest
 window
@@ -10,7 +9,6 @@ candle
 bridge
 shadow
 meadow
-cloud
 paper
 lantern
 mountain
@@ -20,10 +18,8 @@ island
 flower
 breeze
 thunder
-summer
 winter
 autumn
-spring
 morning
 evening
 midnight
@@ -65,18 +61,15 @@ library
 chapter
 story
 poem
-music
 melody
 rhythm
 chorus
 echo
 whisper
-voice
 dream
 memory
 vision
 secret
-legend
 myth
 fable
 spirit
@@ -84,13 +77,11 @@ flame
 spark
 ember
 smoke
-ash
 coal
 copper
 bronze
 iron
 steel
-gold
 platinum
 marble
 granite
@@ -122,7 +113,6 @@ pepper
 ginger
 basil
 thyme
-mint
 olive
 wheat
 barley
@@ -142,7 +132,6 @@ table
 chair
 door
 key
-lock
 bell
 lamp
 carpet
@@ -150,7 +139,6 @@ curtain
 pillow
 blanket
 shelf
-drawer
 bucket
 rope
 wheel
@@ -180,7 +168,6 @@ pond
 stream
 brook
 waterfall
-shore
 beach
 coast
 reef
@@ -205,9 +192,7 @@ comet
 meteor
 orbit
 galaxy
-nebula
 eclipse
-flare
 nova
 horizon
 zenith
@@ -220,7 +205,6 @@ orchard
 prairie
 savanna
 tundra
-cave
 mine
 crystal
 gem
@@ -230,7 +214,6 @@ sapphire
 emerald
 topaz
 opal
-pearl
 onyx
 jade
 amber
@@ -280,7 +263,6 @@ swan
 dove
 owl
 sparrow
-robin
 whale
 dolphin
 shark
@@ -299,7 +281,6 @@ knight
 ranger
 archer
 hunter
-sailor
 pilot
 artist
 poet
@@ -328,7 +309,6 @@ oracle
 nomad
 hermit
 monarch
-prince
 queen
 crown
 throne
