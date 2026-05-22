@@ -8,25 +8,11 @@ fi
 
 set -euo pipefail
 
+PIPELINE_PATH=/home/kevin/k8s-python-llm/k8s/argo/pipeline.yaml
+NODE=server2-labo
+PVC_MANIFESTS=/home/kevin/k8s-python-llm/k8s/argo/pvc-manifests/
+PIPELINE_MODE="embedding"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-
-NAMESPACE="${EAER_PIPELINE_NAMESPACE:-argo}"
-PIPELINE_MANIFEST="${ROOT_DIR}/k8s/argo/pipeline.yaml"
-PVC_MANIFEST_DIR="${ROOT_DIR}/k8s/argo/pvc-manifests"
-PIPELINE_CONFIGMAP="er-pipeline-config"
-VERSION_NAMES_FILE="${SCRIPT_DIR}/pipeline-version-names.txt"
-
-PVC_NAMES=(
-    pipeline-bert-model-claim
-    pipeline-buffer-data-claim
-    pipeline-data-claim
-    pipeline-decision-evaluation-cache-claim
-    pipeline-embedding-model-cache-claim
-    pipeline-feature-index-cache-claim
-    pipeline-graph-cache-claim
-    pipeline-reports-claim
-)
 
 usage() {
     cat << 'EOF'
@@ -37,7 +23,6 @@ Options:
     stop                     Stop the latest pipeline
     terminate                Terminate the latest pipeline and clean up resources
     -m, --mode MODE          ConfigMap mode for pipeline config (`embedding` or `bert`) default: `embedding`
-    -r, --random-version-name    Pick a random version name from the local pool
     -h, --help, -help, help  Show this help
 EOF
 }
@@ -50,97 +35,6 @@ require_cmd() {
     fi
 }
 
-choose_random_version_name() {
-    local names_file="$1"
-    local available_count=""
-    local chosen_name=""
-    local temp_file=""
-
-    if [ ! -f "$names_file" ]; then
-        echo "Version name pool not found: $names_file"
-        exit 1
-    fi
-
-    available_count="$(grep -vc '^[[:space:]]*$' "$names_file" || true)"
-    if [ "$available_count" -le 0 ]; then
-        echo "No version names left in $names_file"
-        exit 1
-    fi
-
-    chosen_name="$(grep -v '^[[:space:]]*$' "$names_file" | shuf -n 1)"
-    temp_file="$(mktemp)"
-
-    awk -v choice="$chosen_name" '
-        BEGIN { removed = 0 }
-        /^[[:space:]]*$/ { print; next }
-        !removed && $0 == choice { removed = 1; next }
-        { print }
-        END { if (!removed) exit 1 }
-    ' "$names_file" > "$temp_file"
-
-    mv "$temp_file" "$names_file"
-    printf '%s\n' "$chosen_name"
-}
-
-delete_pipeline_configmaps() {
-    local configmap_names=()
-    local configmap_ref=""
-
-    while IFS= read -r configmap_ref; do
-        [ -n "$configmap_ref" ] || continue
-        configmap_names+=("${configmap_ref#configmap/}")
-    done < <(kubectl get cm -n "$NAMESPACE" -o name | grep '^configmap/eaer-' || true)
-
-    if [ "${#configmap_names[@]}" -gt 0 ]; then
-        kubectl delete cm -n "$NAMESPACE" "${configmap_names[@]}"
-    fi
-
-    kubectl delete cm -n "$NAMESPACE" "$PIPELINE_CONFIGMAP" --ignore-not-found=true
-}
-
-delete_pipeline_storage() {
-    local pvc=""
-    local pv=""
-    local pod=""
-    local pod_pvc=""
-    local pods_to_delete=()
-    local pv_names=()
-
-    # Delete any pod that still references one of the target PVCs.
-    # This avoids PVCs getting stuck in Terminating due to lingering Completed pods.
-    while IFS= read -r pod; do
-        [ -n "$pod" ] || continue
-
-        while IFS= read -r pod_pvc; do
-            [ -n "$pod_pvc" ] || continue
-            for pvc in "${PVC_NAMES[@]}"; do
-                if [ "$pod_pvc" = "$pvc" ]; then
-                    pods_to_delete+=("$pod")
-                    break
-                fi
-            done
-        done < <(kubectl get pod -n "$NAMESPACE" "$pod" -o jsonpath='{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null || true)
-    done < <(kubectl get pods -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null || true)
-
-    if [ "${#pods_to_delete[@]}" -gt 0 ]; then
-        mapfile -t pods_to_delete < <(printf '%s\n' "${pods_to_delete[@]}" | awk '!seen[$0]++')
-        kubectl delete pod -n "$NAMESPACE" "${pods_to_delete[@]}" --ignore-not-found=true --wait=false
-    fi
-
-    for pvc in "${PVC_NAMES[@]}"; do
-        pv="$(kubectl get pvc -n "$NAMESPACE" "$pvc" -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)"
-        if [ -n "$pv" ]; then
-            pv_names+=("$pv")
-        fi
-    done
-
-    kubectl delete pvc -n "$NAMESPACE" "${PVC_NAMES[@]}" --ignore-not-found=true
-
-    if [ "${#pv_names[@]}" -gt 0 ]; then
-        kubectl delete pv "${pv_names[@]}" --ignore-not-found=true
-    fi
-}
-
 latest_pipeline_workflow() {
     kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp \
         | awk '$1 ~ /^pipeline-/ { print $1 "\t" $2 }' \
@@ -150,26 +44,22 @@ latest_pipeline_workflow() {
 }
 
 start_pipeline() {
-    local version_name=""
-
-    if [ "$RANDOM_VERSION_NAME" = true ]; then
-        version_name="$(choose_random_version_name "$VERSION_NAMES_FILE")"
-        export EAER_PIPELINE_VERSION_NAME="$version_name"
-        echo "Using pipeline version name: $version_name"
-    fi
-
-    delete_pipeline_configmaps
-    delete_pipeline_storage
-
-    if [ ! -d "$PVC_MANIFEST_DIR" ]; then
-        echo "PVC manifest directory not found: $PVC_MANIFEST_DIR"
-        exit 1
-    fi
-
-    kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFEST_DIR"
-    bash "${SCRIPT_DIR}/erctl" dataset
-    bash "${SCRIPT_DIR}/erctl" configmaps "$PIPELINE_MODE"
-    argo submit -n "$NAMESPACE" "$PIPELINE_MANIFEST"
+    CONFIG_PATH=/home/kevin/k8s-python-llm/code/Energy-Aware-Entity-Resolution/config/examples/config-${PIPELINE_MODE}.yaml
+    timeout 5 kubectl get po -n argo -o name | grep '^pod/pipeline-' | xargs kubectl delete -n argo || true
+    timeout 5 kubectl delete pv -n argo --all || true
+    timeout 5 kubectl delete pvc -n argo --all || true
+    timeout 5 kubectl get po -n argo -o name | grep '^pod/kafka-server' | xargs kubectl delete -n argo || true
+    kubectl apply -n argo -f $PVC_MANIFESTS
+    for pvc in $(kubectl get pvc -n argo --no-headers | awk '$2=="Pending"{print $1}'); do
+    kubectl patch pvc "$pvc" -n argo \
+        -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
+    done
+    $SCRIPT_DIR/erctl.sh dataset
+    nano $CONFIG_PATH
+    kubectl get cm -n argo -o name | grep '^configmap/eaer-' | xargs kubectl delete -n argo
+    kubectl delete cm -n argo er-pipeline-config
+    $SCRIPT_DIR/erctl.sh configmaps $PIPELINE_MODE
+    argo submit -n argo $PIPELINE_PATH
 }
 
 stop_pipeline() {
@@ -218,9 +108,6 @@ fi
 if [ "$ACTION" = "start" ]; then
     while [ $# -gt 0 ]; do
         case "$1" in
-            -r|--random-version-name|--random-name)
-                RANDOM_VERSION_NAME=true
-                ;;
             -m|--mode)
                 if [ $# -lt 2 ]; then
                     echo "Missing value for $1. Expected 'embedding' or 'bert'."
