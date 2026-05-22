@@ -85,12 +85,14 @@ terminate_pipeline() {
     fi
 
     delete_pipeline_configmaps
-    delete_pipeline_storage
+    delete_pipeline_storage true
 }
 
 ACTION="start"
 RANDOM_VERSION_NAME=false
-PIPELINE_MODE="embedding"
+CREATE_CONFIGMAPS=false
+SYNC_DATASET=false
+CLEAR_KAFKA_STORAGE=false
 
 if [ $# -gt 0 ]; then
     case "$1" in
@@ -109,11 +111,11 @@ if [ "$ACTION" = "start" ]; then
     while [ $# -gt 0 ]; do
         case "$1" in
             -m|--mode)
-                if [ $# -lt 2 ]; then
+                if [ $# -lt 1 ]; then
                     echo "Missing value for $1. Expected 'embedding' or 'bert'."
                     exit 1
                 fi
-                PIPELINE_MODE="$2"
+                PIPELINE_MODE="$1"
                 shift
                 ;;
             --mode=*)
@@ -124,12 +126,11 @@ if [ "$ACTION" = "start" ]; then
                 exit 0
                 ;;
             *)
-                echo "Unknown option for pipeline start: $1"
+                echo "Unknown option for pipeline start: $current_arg"
                 echo "Use 'erctl pipeline --help' for usage information."
                 exit 1
                 ;;
         esac
-        shift
     done
 
     if [[ "$PIPELINE_MODE" != "embedding" && "$PIPELINE_MODE" != "bert" ]]; then
