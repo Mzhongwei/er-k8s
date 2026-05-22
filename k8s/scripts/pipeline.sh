@@ -115,18 +115,19 @@ if [ "$ACTION" = "start" ]; then
                     echo "Missing value for $1. Expected 'embedding' or 'bert'."
                     exit 1
                 fi
-                PIPELINE_MODE="$1"
-                shift
+                PIPELINE_MODE="$2"
+                shift 2
                 ;;
             --mode=*)
                 PIPELINE_MODE="${1#*=}"
+                shift
                 ;;
             -h|--help|-help|help)
                 usage
                 exit 0
                 ;;
             *)
-                echo "Unknown option for pipeline start: $current_arg"
+                echo "Unknown option for pipeline start: $1"
                 echo "Use 'erctl pipeline --help' for usage information."
                 exit 1
                 ;;
