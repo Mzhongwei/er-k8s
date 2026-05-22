@@ -34,6 +34,7 @@ spec:
         - name: raw_data
         - name: data_source_A
         - name: data_source_B
+        - name: function
       container:
         name: main
         image: kevinoulai/erctl:normalization
@@ -41,7 +42,7 @@ spec:
         command: [sh, -c]
         args:
         - |
-          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode '{{inputs.parameters.mode}}' --raw_data '{{inputs.parameters.raw_data}}' --data_source_A '{{inputs.parameters.data_source_A}}' --data_source_B '{{inputs.parameters.data_source_B}}' > /tmp/processed_data
+          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode '{{inputs.parameters.mode}}' --function '{{inputs.parameters.function}}' --raw_data '{{inputs.parameters.raw_data}}' --data_source_A '{{inputs.parameters.data_source_A}}' --data_source_B '{{inputs.parameters.data_source_B}}' > /tmp/processed_data
         env:
         - name: MODE
           value: '{{inputs.parameters.mode}}'
@@ -252,6 +253,7 @@ spec:
       inputs:
         parameters:
         - name: mode
+        - name: function
         artifacts:
         - name: processed_data
           path: /tmp/processed_data
@@ -268,6 +270,8 @@ spec:
         - /tmp/processed_data
         - --output
         - /tmp/cg_feature
+        - --function
+        - '{{inputs.parameters.function}}'
         env:
         - name: WORKFLOW_NAME
           value: '{{workflow.name}}'
@@ -475,6 +479,7 @@ spec:
           path: /tmp/processed_data
         parameters:
         - name: mode
+        - name: function
       container:
         name: main
         image: kevinoulai/erctl:bert
@@ -487,6 +492,8 @@ spec:
         - /tmp/processed_data
         - --output
         - /tmp/bert_output
+        - --function
+        - '{{inputs.parameters.function}}'
         env:
         - name: WORKFLOW_NAME
           value: '{{workflow.name}}'
@@ -667,6 +674,8 @@ spec:
               value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: normalization
         
         - name: graph-construction
           template: graph
@@ -711,6 +720,8 @@ spec:
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
+            - name: function
+              value: cg_feature_extraction
             artifacts:
             - name: processed_data
               from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
@@ -757,6 +768,8 @@ spec:
               value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: '{{inputs.parameters.mode}}-inc'
+            - name: function
+              value: normalization
         
         - name: graph-construction
           template: graph
@@ -791,6 +804,8 @@ spec:
             parameters:
             - name: mode
               value: embedding-inference
+            - name: function
+              value: cg_feature_extraction
 
         - name: feature-index-construction
           template: feature-index
@@ -901,6 +916,8 @@ spec:
               value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: bert-training
+            - name: function
+              value: normalization
 
         - name: bert-training
           depends: bert-normalization-training.Succeeded
@@ -912,6 +929,8 @@ spec:
             parameters:
             - name: mode
               value: bert-training
+            - name: function
+              value: bert_training
 
         - name: bert-normalization-inference
           depends: "pipeline-init.Succeeded && (bert-training.Succeeded || bert-training.Omitted)"
@@ -927,6 +946,8 @@ spec:
               value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: bert-inference
+            - name: function
+              value: normalization
 
         - name: bert-inference
           depends: bert-normalization-inference.Succeeded
@@ -938,6 +959,8 @@ spec:
             parameters:
             - name: mode
               value: bert-inference
+            - name: function
+              value: bert_inference
 
         - name: bert-normalization-b-evaluation
           depends: "pipeline-init.Succeeded && (bert-inference.Succeeded || bert-inference.Omitted) && (bert-training.Succeeded || bert-training.Omitted)"
@@ -953,6 +976,8 @@ spec:
               value: '{{workflow.parameters.data_source_B}}'
             - name: mode
               value: bert-b_evaluation
+            - name: function
+              value: normalization
 
         - name: bert-evaluation
           depends: bert-normalization-b-evaluation.Succeeded
@@ -964,3 +989,5 @@ spec:
             parameters:
             - name: mode
               value: bert-b_evaluation
+            - name: function
+              value: bert_evaluation
