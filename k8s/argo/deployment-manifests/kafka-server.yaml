@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kafka-server
-  namespace: argo
   labels:
     app.kubernetes.io/name: kafka-server
 spec:
@@ -15,58 +14,16 @@ spec:
       labels:
         app.kubernetes.io/name: kafka-server
     spec:
-      securityContext:
-        fsGroup: 101
-        fsGroupChangePolicy: OnRootMismatch
-      initContainers:
-      - name: init-redpanda-data-perms
-        image: busybox:1.36
-        securityContext:
-          runAsUser: 0
-          runAsGroup: 0
-          allowPrivilegeEscalation: false
-        env:
-          - name: REDPANDA_RESET_DATA
-            value: "false"
-        command:
-          - sh
-          - -c
-          - |
-            set -eux
-            mkdir -p /var/lib/redpanda/data
-            if [ "${REDPANDA_RESET_DATA:-false}" = "true" ] || [ "${REDPANDA_RESET_DATA:-false}" = "1" ]; then
-              rm -rf /var/lib/redpanda/data/* /var/lib/redpanda/data/.[!.]* /var/lib/redpanda/data/..?* || true
-            fi
-            chown -R 101:101 /var/lib/redpanda/data
-            chmod -R ug+rwX /var/lib/redpanda/data
-        volumeMounts:
-          - name: redpanda-data
-            mountPath: /var/lib/redpanda/data
       containers:
       - name: kafka-server
         image: kevinoulai/kafka:server
         imagePullPolicy: Always
-        securityContext:
-          runAsUser: 0
-          runAsGroup: 0
-          allowPrivilegeEscalation: false
         command:
           - redpanda
           - --redpanda-cfg
           - /etc/redpanda/redpanda.yaml
-          - --overprovisioned
-          - --smp=1
-          - --memory=256M
-          - --reserve-memory=0M
         ports:
           - containerPort: 9092
-        resources:
-          requests:
-            cpu: 250m
-            memory: 512Mi
-          limits:
-            cpu: "2"
-            memory: 2Gi
         volumeMounts:
           - name: redpanda-config
             mountPath: /etc/redpanda/redpanda.yaml

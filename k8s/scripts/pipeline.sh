@@ -8,26 +8,11 @@ fi
 
 set -euo pipefail
 
+PIPELINE_PATH=/home/kevin/k8s-python-llm/k8s/argo/pipeline.yaml
+NODE=server2-labo
+PVC_MANIFESTS=/home/kevin/k8s-python-llm/k8s/argo/pvc-manifests/
+PIPELINE_MODE="embedding"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-
-NAMESPACE="${EAER_PIPELINE_NAMESPACE:-argo}"
-PIPELINE_MANIFEST="${ROOT_DIR}/k8s/argo/pipeline.yaml"
-PVC_MANIFEST_DIR="${ROOT_DIR}/k8s/argo/pvc-manifests"
-PIPELINE_CONFIGMAP="er-pipeline-config"
-VERSION_NAMES_FILE="${SCRIPT_DIR}/pipeline-version-names.txt"
-
-PVC_NAMES=(
-    pipeline-bert-model-claim
-    pipeline-buffer-data-claim
-    pipeline-data-claim
-    pipeline-decision-evaluation-cache-claim
-    pipeline-kafka-data-claim
-    pipeline-embedding-model-cache-claim
-    pipeline-feature-index-cache-claim
-    pipeline-graph-cache-claim
-    pipeline-reports-claim
-)
 
 usage() {
     cat << 'EOF'
@@ -38,10 +23,6 @@ Options:
     stop                     Stop the latest pipeline
     terminate                Terminate the latest pipeline and clean up resources
     -m, --mode MODE          ConfigMap mode for pipeline config (`embedding` or `bert`) default: `embedding`
-    -c, --configmaps         Create the pipeline configmaps before submitting
-    -d, --dataset            Sync the dataset into the pipeline PVC before submitting
-    -k, --kafka              Delete the Kafka PVC before submitting for a fresh Redpanda start
-    -r, --random-version-name    Pick a random version name from the local pool
     -h, --help, -help, help  Show this help
 EOF
 }
@@ -54,173 +35,6 @@ require_cmd() {
     fi
 }
 
-log_step() {
-    printf '[pipeline] %s\n' "$1"
-}
-
-warn_pending_pvcs() {
-    local pvc=""
-    local pvc_status=""
-
-    for pvc in "${PVC_NAMES[@]}"; do
-        pvc_status="$(kubectl get pvc -n "$NAMESPACE" "$pvc" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-        if [ -n "$pvc_status" ] && [ "$pvc_status" != "Bound" ]; then
-            log_step "PVC $pvc is $pvc_status; continuing without waiting"
-        fi
-    done
-}
-
-choose_random_version_name() {
-    local names_file="$1"
-    local available_count=""
-    local chosen_name=""
-    local temp_file=""
-
-    if [ ! -f "$names_file" ]; then
-        echo "Version name pool not found: $names_file"
-        exit 1
-    fi
-
-    available_count="$(grep -vc '^[[:space:]]*$' "$names_file" || true)"
-    if [ "$available_count" -le 0 ]; then
-        echo "No version names left in $names_file"
-        exit 1
-    fi
-
-    chosen_name="$(grep -v '^[[:space:]]*$' "$names_file" | shuf -n 1)"
-    temp_file="$(mktemp)"
-
-    awk -v choice="$chosen_name" '
-        BEGIN { removed = 0 }
-        /^[[:space:]]*$/ { print; next }
-        !removed && $0 == choice { removed = 1; next }
-        { print }
-        END { if (!removed) exit 1 }
-    ' "$names_file" > "$temp_file"
-
-    mv "$temp_file" "$names_file"
-    printf '%s\n' "$chosen_name"
-}
-
-prepare_pipeline_config_file() {
-    local source_file="$1"
-    local version_name="$2"
-    local temp_file=""
-
-    temp_file="$(mktemp)"
-
-    if grep -qE '^[[:space:]]*(version_name|versionName)[[:space:]]*:' "$source_file"; then
-        awk -v version_name="$version_name" '
-            BEGIN { replaced = 0 }
-            /^[[:space:]]*(version_name|versionName)[[:space:]]*:/ && !replaced {
-                sub(/:.*/, ": \"" version_name "\"")
-                replaced = 1
-            }
-            { print }
-            END {
-                if (!replaced) {
-                    print "version_name: \"" version_name "\""
-                }
-            }
-        ' "$source_file" > "$temp_file"
-    elif grep -qF '__VERSION_NAME__' "$source_file"; then
-        sed "s/__VERSION_NAME__/${version_name//\/\\}/g" "$source_file" > "$temp_file"
-    else
-        cat "$source_file" > "$temp_file"
-        printf '\nversion_name: "%s"\n' "$version_name" >> "$temp_file"
-    fi
-
-    printf '%s\n' "$temp_file"
-}
-
-create_pipeline_configmap() {
-    local config_type="$1"
-    local version_name="${EAER_PIPELINE_VERSION_NAME:-}"
-    local config_file="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-${config_type}.yaml"
-    local config_file_to_use="$config_file"
-    local temp_file=""
-
-    if [ -n "$version_name" ]; then
-        config_file_to_use="$(prepare_pipeline_config_file "$config_file" "$version_name")"
-        temp_file="$config_file_to_use"
-    fi
-
-    kubectl create configmap "$PIPELINE_CONFIGMAP" \
-        --from-file="config.yaml=${config_file_to_use}" \
-        --dry-run=client -o yaml | \
-        kubectl apply -n "$NAMESPACE" -f -
-
-    if [ -n "$temp_file" ]; then
-        rm -f "$temp_file"
-    fi
-}
-
-delete_pipeline_configmaps() {
-    local configmap_names=()
-    local configmap_ref=""
-
-    while IFS= read -r configmap_ref; do
-        [ -n "$configmap_ref" ] || continue
-        configmap_names+=("${configmap_ref#configmap/}")
-    done < <(kubectl get cm -n "$NAMESPACE" -o name | grep '^configmap/eaer-' || true)
-
-    if [ "${#configmap_names[@]}" -gt 0 ]; then
-        kubectl delete cm -n "$NAMESPACE" "${configmap_names[@]}"
-    fi
-
-    kubectl delete cm -n "$NAMESPACE" "$PIPELINE_CONFIGMAP" --ignore-not-found=true
-}
-
-delete_pipeline_storage() {
-    local include_dataset_pvc="${1:-false}"
-    local include_kafka_pvc="${2:-false}"
-    local pvc=""
-    local pod=""
-    local pod_pvc=""
-    local pods_to_delete=()
-    local target_pvcs=()
-
-    for pvc in "${PVC_NAMES[@]}"; do
-        if [ "$pvc" = "pipeline-data-claim" ] && [ "$include_dataset_pvc" != true ]; then
-            continue
-        fi
-
-        if [ "$pvc" = "pipeline-kafka-data-claim" ] && [ "$include_kafka_pvc" != true ]; then
-            continue
-        fi
-
-        target_pvcs+=("$pvc")
-    done
-
-    # Delete any pod that still references one of the target PVCs.
-    # This avoids PVCs getting stuck in Terminating due to lingering Completed pods.
-    while IFS= read -r pod; do
-        [ -n "$pod" ] || continue
-
-        while IFS= read -r pod_pvc; do
-            [ -n "$pod_pvc" ] || continue
-            for pvc in "${target_pvcs[@]}"; do
-                if [ "$pod_pvc" = "$pvc" ]; then
-                    pods_to_delete+=("$pod")
-                    break
-                fi
-            done
-        done < <(kubectl get pod -n "$NAMESPACE" "$pod" -o jsonpath='{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null || true)
-    done < <(kubectl get pods -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null || true)
-
-    if [ "${#pods_to_delete[@]}" -gt 0 ]; then
-        mapfile -t pods_to_delete < <(printf '%s\n' "${pods_to_delete[@]}" | awk '!seen[$0]++')
-        kubectl delete pod -n "$NAMESPACE" "${pods_to_delete[@]}" --ignore-not-found=true --wait=false
-    fi
-
-    if [ "${#target_pvcs[@]}" -eq 0 ]; then
-        return 0
-    fi
-
-    log_step "Deleting pipeline PVCs"
-    kubectl delete pvc -n "$NAMESPACE" "${target_pvcs[@]}" --ignore-not-found=true --wait=true
-}
-
 latest_pipeline_workflow() {
     kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp \
         | awk '$1 ~ /^pipeline-/ { print $1 "\t" $2 }' \
@@ -230,43 +44,22 @@ latest_pipeline_workflow() {
 }
 
 start_pipeline() {
-    local version_name=""
-
-    if [ "$RANDOM_VERSION_NAME" = true ]; then
-        version_name="$(choose_random_version_name "$VERSION_NAMES_FILE")"
-        export EAER_PIPELINE_VERSION_NAME="$version_name"
-        echo "Using pipeline version name: $version_name"
-    fi
-
-    log_step "Cleaning up previous pipeline storage"
-    delete_pipeline_storage "$SYNC_DATASET" "$CLEAR_KAFKA_STORAGE"
-
-    if [ ! -d "$PVC_MANIFEST_DIR" ]; then
-        echo "PVC manifest directory not found: $PVC_MANIFEST_DIR"
-        exit 1
-    fi
-
-    log_step "Applying PVC manifests from $PVC_MANIFEST_DIR"
-    kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFEST_DIR"
-
-    warn_pending_pvcs
-
-    if [ "$SYNC_DATASET" = true ]; then
-        log_step "Syncing dataset into PVC"
-        bash "${SCRIPT_DIR}/erctl" dataset
-    fi
-
-    if [ "$CREATE_CONFIGMAPS" = true ]; then
-        delete_pipeline_configmaps
-        log_step "Creating ConfigMaps in $PIPELINE_MODE mode"
-        bash "${SCRIPT_DIR}/erctl" configmaps "$PIPELINE_MODE"
-    elif [ "$RANDOM_VERSION_NAME" = true ]; then
-        log_step "Creating pipeline ConfigMap in $PIPELINE_MODE mode"
-        create_pipeline_configmap "$PIPELINE_MODE"
-    fi
-
-    log_step "Submitting Argo workflow"
-    argo submit -n "$NAMESPACE" "$PIPELINE_MANIFEST"
+    CONFIG_PATH=/home/kevin/k8s-python-llm/code/Energy-Aware-Entity-Resolution/config/examples/config-${PIPELINE_MODE}.yaml
+    timeout 5 kubectl get po -n argo -o name | grep '^pod/pipeline-' | xargs kubectl delete -n argo || true
+    timeout 5 kubectl delete pv -n argo --all || true
+    timeout 5 kubectl delete pvc -n argo --all || true
+    timeout 5 kubectl get po -n argo -o name | grep '^pod/kafka-server' | xargs kubectl delete -n argo || true
+    kubectl apply -n argo -f $PVC_MANIFESTS
+    for pvc in $(kubectl get pvc -n argo --no-headers | awk '$2=="Pending"{print $1}'); do
+    kubectl patch pvc "$pvc" -n argo \
+        -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
+    done
+    $SCRIPT_DIR/erctl.sh dataset
+    nano $CONFIG_PATH
+    kubectl get cm -n argo -o name | grep '^configmap/eaer-' | xargs kubectl delete -n argo
+    kubectl delete cm -n argo er-pipeline-config
+    $SCRIPT_DIR/erctl.sh configmaps $PIPELINE_MODE
+    argo submit -n argo $PIPELINE_PATH
 }
 
 stop_pipeline() {
@@ -300,7 +93,6 @@ RANDOM_VERSION_NAME=false
 CREATE_CONFIGMAPS=false
 SYNC_DATASET=false
 CLEAR_KAFKA_STORAGE=false
-PIPELINE_MODE="embedding"
 
 if [ $# -gt 0 ]; then
     case "$1" in
@@ -317,61 +109,7 @@ fi
 
 if [ "$ACTION" = "start" ]; then
     while [ $# -gt 0 ]; do
-        current_arg="$1"
-        shift
-
-        case "$current_arg" in
-            -[!-]* )
-                short_flags="${current_arg#-}"
-                while [ -n "$short_flags" ]; do
-                    short_flag="${short_flags%${short_flags#?}}"
-                    short_flags="${short_flags#?}"
-
-                    case "$short_flag" in
-                        r)
-                            RANDOM_VERSION_NAME=true
-                            ;;
-                        c)
-                            CREATE_CONFIGMAPS=true
-                            ;;
-                        d)
-                            SYNC_DATASET=true
-                            ;;
-                        k)
-                            CLEAR_KAFKA_STORAGE=true
-                            ;;
-                        m)
-                            if [ -n "$short_flags" ]; then
-                                echo "-m cannot be bundled with other short options. Use '-m MODE'."
-                                exit 1
-                            fi
-                            if [ $# -lt 1 ]; then
-                                echo "Missing value for -m. Expected 'embedding' or 'bert'."
-                                exit 1
-                            fi
-                            PIPELINE_MODE="$1"
-                            shift
-                            ;;
-                        *)
-                            echo "Unknown option for pipeline start: -$short_flag"
-                            echo "Use 'erctl pipeline --help' for usage information."
-                            exit 1
-                            ;;
-                    esac
-                done
-                ;;
-            -r|--random-version-name|--random-name)
-                RANDOM_VERSION_NAME=true
-                ;;
-            -c|--configmaps)
-                CREATE_CONFIGMAPS=true
-                ;;
-            -d|--dataset)
-                SYNC_DATASET=true
-                ;;
-            -k|--kafka|--fresh-broker-storage)
-                CLEAR_KAFKA_STORAGE=true
-                ;;
+        case "$1" in
             -m|--mode)
                 if [ $# -lt 1 ]; then
                     echo "Missing value for $1. Expected 'embedding' or 'bert'."

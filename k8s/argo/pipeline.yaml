@@ -584,7 +584,7 @@ spec:
       container:
         name: main
         image: kevinoulai/kafka:producer
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: [python, /app/producer.py]
         ports:
         - containerPort: 9092

@@ -4,7 +4,6 @@ metadata:
   name: pipeline-kafka-data-claim
   namespace: argo
 spec:
-  storageClassName: standard
   accessModes:
     - ReadWriteOnce
   resources:
