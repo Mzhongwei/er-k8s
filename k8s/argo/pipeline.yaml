@@ -7,6 +7,13 @@ spec:
   serviceAccountName: argo
   imagePullSecrets:
   - name: regcred
+
+  tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+
   podGC:
     strategy: OnWorkflowCompletion
     deleteDelayDuration: 30m
@@ -26,6 +33,7 @@ spec:
     - name: data_source_B
       value: Data_example/fodors_zagats-tableB.csv
   entrypoint: main
+
   templates:
     - name: normalization
       inputs:
@@ -246,8 +254,8 @@ spec:
           name: eaer-codecarbon
       outputs:
         artifacts:
-          - name: matching_pairs
-            path: /tmp/matching_pairs.json
+        - name: matching_pairs
+          path: /tmp/matching_pairs.json
 
     - name: cg-feature-extraction
       inputs:
@@ -485,6 +493,9 @@ spec:
         image: kevinoulai/erctl:bert
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/distributions/bert_distribution.py]
+        resources:
+          limits:
+            nvidia.com/gpu: 1
         args:
         - --mode
         - '{{inputs.parameters.mode}}'
@@ -545,7 +556,7 @@ spec:
         - name: bert_output
           valueFrom:
             path: /tmp/bert_output
-      
+
     - name: pipeline-init
       inputs:
         parameters:
@@ -559,14 +570,14 @@ spec:
         - name: FALLBACK_MODE
           value: '{{inputs.parameters.fallback_mode}}'
         volumeMounts:
-          - name: pipeline-config
-            mountPath: /app/config/examples/config-embedding.yaml
-            subPath: config.yaml
-          - name: pipeline-init-script
-            mountPath: /app/init.sh
-            subPath: init.sh
-          - name: pipeline-buffer-data
-            mountPath: /app/data/buffers
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: pipeline-init-script
+          mountPath: /app/init.sh
+          subPath: init.sh
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
       volumes:
       - name: pipeline-config
         configMap:
@@ -585,7 +596,7 @@ spec:
         artifacts:
         - name: config
           path: /tmp/config.yaml
-      
+
     - name: kafka-producer
       daemon: true
       container:
@@ -596,14 +607,14 @@ spec:
         ports:
         - containerPort: 9092
         volumeMounts:
-          - name: pipeline-kafka-producer
-            mountPath: /app/producer.py
-            subPath: producer.py
-          - name: pipeline-config
-            mountPath: /app/config/examples/config-embedding.yaml
-            subPath: config.yaml
-          - name: pipeline-data
-            mountPath: /app/Data_example
+        - name: pipeline-kafka-producer
+          mountPath: /app/producer.py
+          subPath: producer.py
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: pipeline-data
+          mountPath: /app/Data_example
       volumes:
       - name: pipeline-kafka-producer
         configMap:
@@ -626,19 +637,19 @@ spec:
         ports:
         - containerPort: 9092
         volumeMounts:
-          - name: pipeline-kafka-consumer
-            mountPath: /app/consumer.py
-            subPath: consumer.py
-          - name: pipeline-config
-            mountPath: /app/config/examples/config-embedding.yaml
-            subPath: config.yaml
-          - name: pipeline-data
-            mountPath: /app/Data_example
-          - name: pipeline-buffer-data
-            mountPath: /app/data/buffers
-          - name: pipeline-buffer-utils
-            mountPath: /app/utils/buffers.py
-            subPath: buffers.py
+        - name: pipeline-kafka-consumer
+          mountPath: /app/consumer.py
+          subPath: consumer.py
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: pipeline-data
+          mountPath: /app/Data_example
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
       volumes:
       - name: pipeline-buffer-data
         persistentVolumeClaim:
@@ -676,7 +687,7 @@ spec:
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: normalization
-        
+
         - name: graph-construction
           template: graph
           depends: normalization.Succeeded
@@ -749,7 +760,7 @@ spec:
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: evaluation
-      
+
     - name: embedding-inference-dag
       inputs:
         parameters:
@@ -770,7 +781,7 @@ spec:
               value: '{{inputs.parameters.mode}}-inc'
             - name: function
               value: normalization
-        
+
         - name: graph-construction
           template: graph
           arguments:
