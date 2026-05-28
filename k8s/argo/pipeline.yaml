@@ -481,6 +481,8 @@ spec:
             path: /tmp/predicted_matching
 
     - name: bert
+      podSpecPatch: |
+        runtimeClassName: nvidia
       inputs:
         artifacts:
         - name: processed_data
