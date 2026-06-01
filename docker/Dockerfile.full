@@ -7,7 +7,11 @@ WORKDIR /app
 
 COPY code/Energy-Aware-Entity-Resolution/requirements-full.txt /app/requirements.txt
 
-RUN /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt 
+RUN /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt \
+    && /opt/venv/bin/pip uninstall -y torch torchvision torchaudio \
+    && /opt/venv/bin/pip install --no-cache-dir \
+        torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+        --index-url https://download.pytorch.org/whl/cu121
 
 FROM kevinoulai/erctl:min
 

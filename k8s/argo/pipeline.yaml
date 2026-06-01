@@ -8,12 +8,6 @@ spec:
   imagePullSecrets:
   - name: regcred
 
-  tolerations:
-  - key: "nvidia.com/gpu"
-    operator: "Equal"
-    value: "true"
-    effect: "NoSchedule"
-
   podGC:
     strategy: OnWorkflowCompletion
     deleteDelayDuration: 30m
@@ -36,6 +30,8 @@ spec:
 
   templates:
     - name: normalization
+      nodeSelector:
+        kubernetes.io/hostname: fedora
       inputs:
         parameters:
         - name: mode
@@ -105,6 +101,8 @@ spec:
           path: /tmp/processed_data
 
     - name: graph
+      nodeSelector:
+        kubernetes.io/hostname: fedora
       inputs:
         artifacts:
         - name: processed_data
@@ -179,6 +177,8 @@ spec:
           path: /tmp/sequences.json
 
     - name: embedding
+      nodeSelector:
+        kubernetes.io/hostname: fedora
       inputs:
         artifacts:
         - name: sequences
@@ -481,6 +481,11 @@ spec:
             path: /tmp/predicted_matching
 
     - name: bert
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
       podSpecPatch: |
         runtimeClassName: nvidia
       inputs:
