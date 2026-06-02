@@ -63,6 +63,15 @@ kind: Pod
 metadata:
   name: ${SYNC_POD}
 spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                  - matis-asus-expertbook-b1500ceaey-b1500ceae
   restartPolicy: Never
   containers:
   - name: ${SYNC_POD}
