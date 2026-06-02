@@ -5,8 +5,7 @@ metadata:
   namespace: argo
 spec:
   accessModes:
-    - ReadWriteMany
-  storageClassName: nfs-client
+    - ReadWriteOnce
   resources:
     requests:
       storage: 20Gi
