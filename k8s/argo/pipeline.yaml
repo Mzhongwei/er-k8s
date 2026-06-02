@@ -113,7 +113,7 @@ spec:
 
     - name: graph
       nodeSelector:
-        kubernetes.io/hostname: fedora
+        kubernetes.io/hostname: server2-labo
       inputs:
         artifacts:
         - name: processed_data
@@ -189,7 +189,7 @@ spec:
 
     - name: embedding
       nodeSelector:
-        kubernetes.io/hostname: fedora
+        kubernetes.io/hostname: server2-labo
       inputs:
         artifacts:
         - name: sequences
@@ -269,6 +269,8 @@ spec:
           path: /tmp/matching_pairs.json
 
     - name: cg-feature-extraction
+      nodeSelector:
+        kubernetes.io/hostname: fedora
       inputs:
         parameters:
         - name: mode
@@ -338,6 +340,8 @@ spec:
           path: /tmp/cg_feature
 
     - name: feature-index
+      nodeSelector:
+        kubernetes.io/hostname: fedora
       inputs:
         artifacts:
         - name: cg_feature
@@ -412,6 +416,8 @@ spec:
           path: /tmp/candidate_pairs.json
 
     - name: prediction
+      nodeSelector:
+        kubernetes.io/hostname: fedora
       inputs:
         parameters:
         - name: mode
@@ -576,6 +582,8 @@ spec:
             path: /tmp/bert_output
 
     - name: pipeline-init
+      nodeSelector:
+        kubernetes.io/hostname: fedora
       inputs:
         parameters:
         - name: fallback_mode
@@ -616,6 +624,8 @@ spec:
           path: /tmp/config.yaml
 
     - name: kafka-producer
+      nodeSelector:
+        kubernetes.io/hostname: server2-labo
       daemon: true
       container:
         name: main
@@ -645,6 +655,8 @@ spec:
           claimName: pipeline-data-claim
 
     - name: kafka-consumer
+      nodeSelector:
+        kubernetes.io/hostname: server2-labo
       daemon: true
       serviceAccountName: argo
       container:

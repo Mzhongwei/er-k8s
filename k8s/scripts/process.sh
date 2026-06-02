@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 
-# process.sh
-# Monitor Python /app/... processes and attach EcoFloc using:
-#   sudo -n /bin/execute ecofloc ...
+# process_cluster_v4_compact.sh
+# VERSION: v4-compact-no-remote-sudo-prompt
+# Run from one machine (for example server2-labo) and collect EcoFloc PID
+# measurements from multiple Kubernetes nodes.
 #
-# Important:
-# - No setsid: sudo auth cache can be TTY/session-dependent.
-# - PID existence uses /proc and ps, not kill -0.
-# - EcoFloc runs with -t -1, then receives SIGINT when the target process ends.
-# - Only the main process writes state files.
-# - EcoFloc display groups rows by script + function, not by PID.
+# It works as a coordinator + remote/local agents:
+# - the coordinator runs on the machine where you execute this script;
+# - each agent scans local host processes with ps and /proc;
+# - remote agents are launched through SSH by streaming this same script to bash;
+# - EcoFloc is always executed on the node where the target PID exists.
+#
+# Default nodes for your current setup:
+#   server2-labo -> local, sudo /bin/execute ecofloc
+#   fedora       -> ssh kevinoulai@10.0.8.34, sudo ecofloc
+# SSH sudo is handled by the coordinator before the live display starts, to avoid concurrent prompts.
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
@@ -17,234 +22,79 @@ fi
 
 set -euo pipefail
 
-COMMAND_WRAPPER=()
-
 WATCH_INTERVAL="0.5"
 SCAN_INTERVAL="0.1"
-
 ECOFLOC_INTERVAL="1000"
 ECOFLOC_METRICS="cpu,ram,sd,nic,gpu"
 ECOFLOC_LOG_DIR="/tmp/erctl-ecofloc"
 ECOFLOC_EXPORT_PATH=""
+FULL=false
+WATCH=false
+CMD=""
 
-ROWS_FILE=""
-SESSIONS_FILE=""
-RESULTS_FILE=""
-SUDO_KEEPALIVE_PID=""
-CLEANUP_DONE=false
+# Default nodes. Override with --node if needed.
+# Format accepted by --node:
+#   name=local:execute
+#   name=local:direct
+#   name=ssh:user@host:execute
+#   name=ssh:user@host:direct
+NODES=(
+  "server2-labo=local:execute"
+  "fedora=ssh:kevinoulai@10.0.8.34:direct"
+)
+CUSTOM_NODES=false
+ASK_SSH_SUDO=true
 
 print_help() {
-  cat <<'EOF'
-Usage: process.sh [options] [command]
+  cat <<'EOF_HELP'
+Usage: process_cluster.sh [options] [command]
 
 Commands:
-  get                       Show Python PIDs running /app/... scripts.
-  ecofloc                   Monitor detected Python PIDs with EcoFloc.
+  get                       Show Python PIDs running /app/... scripts on all configured nodes.
+  ecofloc                   Monitor detected Python PIDs with EcoFloc on all configured nodes.
 
 Options:
-  --full                    Show full process commands.
   --watch                   Refresh continuously.
+  --full                    In get mode, show full commands.
   --interval SECONDS        Table refresh interval. Default: 0.5.
-  --scan-interval SECONDS   PID detection interval. Default: 0.1.
+  --scan-interval SECONDS   PID detection interval on agents. Default: 0.1.
+
+Node options:
+  --node SPEC               Add a node and disable defaults.
+                            Formats:
+                              server2-labo=local:execute
+                              fedora=ssh:kevinoulai@10.0.8.34:direct
 
 EcoFloc options:
   --ecofloc-interval MS     EcoFloc measurement interval in ms. Default: 1000.
   --metrics LIST            Comma-separated metrics. Default: cpu,ram,sd,nic,gpu.
-                            Example: --metrics cpu,ram
-  --export PATH             Pass -f PATH to EcoFloc.
+  --export PATH             Pass -f PATH to EcoFloc on each node.
+                            If PATH contains {node}, it is replaced by node name.
 
-Other:
-  --help                    Show this help.
+Sudo modes:
+  execute                   sudo -n /bin/execute ecofloc ...
+  direct                    sudo -n /usr/local/bin/ecofloc ...
 
 Examples:
-  process.sh get
-  process.sh --watch get
-  process.sh ecofloc
-  process.sh --watch ecofloc
-  process.sh --watch ecofloc --metrics cpu,ram
-  process.sh --watch ecofloc --metrics cpu,ram --scan-interval 0.05 --interval 0.5
-EOF
+  ./process_cluster.sh --watch ecofloc
+  ./process_cluster.sh --watch ecofloc --metrics cpu,ram
+  ./process_cluster.sh get
+
+  ./process_cluster.sh --watch ecofloc \
+    --node server2-labo=local:execute \
+    --node fedora=ssh:kevinoulai@10.0.8.34:direct
+EOF_HELP
 }
 
-run_wrapped() {
-  "${COMMAND_WRAPPER[@]}" "$@"
-}
+hide_cursor() { tput civis 2>/dev/null || true; }
+show_cursor() { tput cnorm 2>/dev/null || true; }
+restore_terminal() { show_cursor; stty sane 2>/dev/null || true; }
+screen_init() { hide_cursor; printf '\033[2J\033[H'; }
+render_file_in_place() { local file="$1"; printf '\033[H'; cat "$file"; printf '\033[J'; }
 
-hide_cursor() {
-  tput civis 2>/dev/null || true
-}
-
-show_cursor() {
-  tput cnorm 2>/dev/null || true
-}
-
-restore_terminal() {
-  show_cursor
-  stty sane 2>/dev/null || true
-}
-
-screen_init() {
-  hide_cursor
-  printf '\033[2J\033[H'
-}
-
-render_file_in_place() {
-  local file="$1"
-
-  printf '\033[H'
-  cat "$file"
-  printf '\033[J'
-}
-
-start_sudo_keepalive() {
-  echo "[INFO] Checking sudo access for EcoFloc PID mode..."
-  sudo -v
-
-  local test_pid=""
-  local test_log="/tmp/erctl-ecofloc-sudo-test.log"
-
-  sleep 10 &
-  test_pid="$!"
-
-  if ! sudo -n /bin/execute ecofloc --cpu -p "$test_pid" -i 1000 -t 1 > "$test_log" 2>&1; then
-    kill "$test_pid" 2>/dev/null || true
-    echo "[ERROR] Cannot run EcoFloc PID mode through sudo /bin/execute."
-    echo "[ERROR] Last output:"
-    tail -n 20 "$test_log"
-    exit 1
-  fi
-
-  kill "$test_pid" 2>/dev/null || true
-
-  (
-    while true; do
-      sudo -n true 2>/dev/null || exit 0
-      sleep 60
-    done
-  ) &
-
-  SUDO_KEEPALIVE_PID="$!"
-}
-
-stop_sudo_keepalive() {
-  if [ -n "${SUDO_KEEPALIVE_PID:-}" ]; then
-    kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
-    wait "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
-    SUDO_KEEPALIVE_PID=""
-  fi
-}
-
-pid_exists() {
-  local pid="$1"
-
-  if [ -d "/proc/$pid" ]; then
-    return 0
-  fi
-
-  ps -p "$pid" >/dev/null 2>&1
-}
-
-ensure_ecofloc_log_dir() {
-  mkdir -p "$ECOFLOC_LOG_DIR"
-}
-
-children_of() {
-  local parent="$1"
-  pgrep -P "$parent" 2>/dev/null || true
-}
-
-all_descendants() {
-  local parent="$1"
-  local child=""
-
-  for child in $(children_of "$parent"); do
-    echo "$child"
-    all_descendants "$child"
-  done
-}
-
-stop_process_tree_with_int() {
-  local root_pid="$1"
-  local descendants=""
-
-  [ -n "${root_pid:-}" ] || return 0
-
-  descendants="$(all_descendants "$root_pid" | tac 2>/dev/null || all_descendants "$root_pid")"
-
-  for p in $descendants; do
-    kill -INT "$p" 2>/dev/null || true
-  done
-
-  kill -INT "$root_pid" 2>/dev/null || true
-
-  sleep 1
-
-  for p in $descendants; do
-    if ps -p "$p" >/dev/null 2>&1; then
-      kill -TERM "$p" 2>/dev/null || true
-    fi
-  done
-
-  if ps -p "$root_pid" >/dev/null 2>&1; then
-    kill -TERM "$root_pid" 2>/dev/null || true
-  fi
-
-  sleep 0.5
-
-  for p in $descendants; do
-    if ps -p "$p" >/dev/null 2>&1; then
-      kill -KILL "$p" 2>/dev/null || true
-    fi
-  done
-
-  if ps -p "$root_pid" >/dev/null 2>&1; then
-    kill -KILL "$root_pid" 2>/dev/null || true
-  fi
-}
-
-stop_all_ecofloc_sessions() {
-  local pid=""
-  local metric=""
-  local eco_pid=""
-  local log_file=""
-  local start_ts=""
-
-  [ -n "${SESSIONS_FILE:-}" ] || return 0
-  [ -f "$SESSIONS_FILE" ] || return 0
-
-  while IFS=$'\t' read -r pid metric eco_pid log_file start_ts; do
-    [ -n "${eco_pid:-}" ] || continue
-    stop_process_tree_with_int "$eco_pid"
-  done < "$SESSIONS_FILE"
-}
-
-cleanup() {
-  local exit_code="${1:-0}"
-
-  if [ "$CLEANUP_DONE" = true ]; then
-    exit "$exit_code"
-  fi
-
-  CLEANUP_DONE=true
-
-  stop_all_ecofloc_sessions >/dev/null 2>&1 || true
-  stop_sudo_keepalive >/dev/null 2>&1 || true
-  restore_terminal
-
-  [ -n "${ROWS_FILE:-}" ] && rm -f "$ROWS_FILE" 2>/dev/null || true
-  [ -n "${SESSIONS_FILE:-}" ] && rm -f "$SESSIONS_FILE" 2>/dev/null || true
-  [ -n "${RESULTS_FILE:-}" ] && rm -f "$RESULTS_FILE" 2>/dev/null || true
-
-  exit "$exit_code"
-}
-
-handle_stop_signal() {
-  cleanup 130
-}
-
-get_raw_processes() {
-  run_wrapped ps axww -o pid=,args=
-}
+# -----------------------------------------------------------------------------
+# Shared process parsing
+# -----------------------------------------------------------------------------
 
 filter_processes() {
   python3 -c '
@@ -254,10 +104,14 @@ import sys
 SELF_PATTERNS = [
     "sudo -n /bin/execute ecofloc",
     "sudo /bin/execute ecofloc",
+    "sudo -n ecofloc",
+    "sudo ecofloc",
     "/bin/execute ecofloc",
     "/opt/ecofloc/ecofloc",
     " ecofloc ",
     "process.sh",
+    "process_cluster.sh",
+    "process_multinode.sh",
     "erctl process",
 ]
 
@@ -275,11 +129,9 @@ def parse_line(line):
     line = line.rstrip("\n")
     if not line.strip():
         return None, ""
-
     parts = line.strip().split(None, 1)
     if len(parts) == 1:
         return parts[0], ""
-
     return parts[0], parts[1]
 
 def base(path):
@@ -306,229 +158,270 @@ def should_ignore(cmd):
 def is_target_python_process(cmd):
     if should_ignore(cmd):
         return False
-
     ts = tokens(cmd)
     if len(ts) < 2:
         return False
-
     return is_python_token(ts[0]) and ts[1].startswith("/app/")
 
 seen = set()
-
 for line in sys.stdin:
     pid, cmd = parse_line(line)
-
     if not pid or not cmd:
         continue
-
     if pid in seen:
         continue
-
     if not is_target_python_process(cmd):
         continue
-
     seen.add(pid)
     print(f"{pid}\t{cmd}")
 '
 }
 
-get_matching_processes() {
-  get_raw_processes | filter_processes
+# -----------------------------------------------------------------------------
+# Agent mode: runs locally on each node. Emits events to stdout.
+# -----------------------------------------------------------------------------
+
+agent_node_name=""
+agent_sudo_mode="execute"
+AGENT_ECOFLOC_DIRECT_BIN="${ERCTL_ECOFLOC_DIRECT_BIN:-/usr/local/bin/ecofloc}"
+AGENT_SUDO_PASSWORD="${ERCTL_AGENT_SUDO_PASSWORD:-}"
+if [ -n "${ERCTL_AGENT_SUDO_PASSWORD_B64:-}" ]; then
+  AGENT_SUDO_PASSWORD="$(printf "%s" "$ERCTL_AGENT_SUDO_PASSWORD_B64" | base64 -d 2>/dev/null || true)"
+fi
+AGENT_ROWS_FILE=""
+AGENT_SESSIONS_FILE=""
+AGENT_RESULTS_FILE=""
+AGENT_SUDO_KEEPALIVE_PID=""
+AGENT_CLEANUP_DONE=false
+
+agent_ecofloc_cmd_prefix() {
+  case "$agent_sudo_mode" in
+    execute) printf '%s\0%s\0%s\0' "sudo" "-n" "/bin/execute" ;;
+    direct)  printf '%s\0%s\0' "sudo" "-n" ;;
+    *) echo "[agent:$agent_node_name] invalid sudo mode: $agent_sudo_mode" >&2; exit 1 ;;
+  esac
 }
 
-print_process_table() {
-  python3 -c '
-import os
-import re
-import sys
-
-PID_W = 8
-SCRIPT_W = 20
-FUNC_W = 20
-
-def fit(value, width):
-    value = str(value)
-    if len(value) <= width:
-        return value
-    return value[:max(width - 1, 0)] + "…"
-
-def base(path):
-    return os.path.basename(path.rstrip())
-
-def tokens(cmd):
-    return cmd.split()
-
-def clean(value):
-    return value.strip().strip("\"").strip(chr(39))
-
-def extract_script(cmd):
-    ts = tokens(cmd)
-    if len(ts) >= 2 and ts[1].startswith("/app/"):
-        return base(ts[1])
-    return "-"
-
-def extract_function(cmd):
-    ts = tokens(cmd)
-
-    for i, tok in enumerate(ts):
-        if tok == "--function" and i + 1 < len(ts):
-            return clean(ts[i + 1])
-
-        if tok.startswith("--function="):
-            return clean(tok.split("=", 1)[1])
-
-    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
-    if m:
-        return clean(m.group(1))
-
-    return "-"
-
-print("{:<{}} | {:<{}} | {:<{}}".format("PID", PID_W, "SCRIPT", SCRIPT_W, "FUNCTION", FUNC_W))
-print("{}-+-{}-+-{}".format("-" * PID_W, "-" * SCRIPT_W, "-" * FUNC_W))
-
-for line in sys.stdin:
-    line = line.rstrip("\n")
-    if not line or "\t" not in line:
-        continue
-
-    pid, cmd = line.split("\t", 1)
-
-    print("{:<{}} | {:<{}} | {:<{}}".format(
-        fit(pid, PID_W), PID_W,
-        fit(extract_script(cmd), SCRIPT_W), SCRIPT_W,
-        fit(extract_function(cmd), FUNC_W), FUNC_W
-    ))
-'
-}
-
-run_get_once() {
-  if [ "${QUIET_HEADER:-false}" != true ]; then
-    echo "Getting PID of Python processes running in the Argo workflow..."
-  fi
-
-  if [ "$FULL" = true ]; then
-    get_matching_processes
+agent_build_ecofloc_command() {
+  local -n out_ref=$1
+  out_ref=()
+  if [ "$agent_sudo_mode" = "execute" ]; then
+    if [ -n "$AGENT_SUDO_PASSWORD" ]; then
+      out_ref=(sudo -S -p "" /bin/execute ecofloc)
+    else
+      out_ref=(sudo -n /bin/execute ecofloc)
+    fi
   else
-    get_matching_processes | print_process_table
+    # Fedora/direct mode: use the absolute path so a sudoers rule like
+    #   kevinoulai ALL=(root) NOPASSWD: /usr/local/bin/ecofloc
+    # matches exactly.
+    out_ref=(sudo -n "$AGENT_ECOFLOC_DIRECT_BIN")
   fi
 }
 
-append_row_if_missing() {
-  local pid="$1"
-  local cmd="$2"
-
-  python3 - "$ROWS_FILE" "$pid" "$cmd" <<'PY'
-import sys
-
-rows_file = sys.argv[1]
-pid = sys.argv[2]
-cmd = sys.argv[3]
-
-try:
-    with open(rows_file, "r", encoding="utf-8") as f:
-        rows = f.read().splitlines()
-except FileNotFoundError:
-    rows = []
-
-for row in rows:
-    parts = row.split("\t", 1)
-    if parts and parts[0] == pid:
-        sys.exit(0)
-
-rows.append(f"{pid}\t{cmd}")
-
-with open(rows_file, "w", encoding="utf-8") as f:
-    f.write("\n".join(rows) + "\n")
-PY
-}
-
-session_exists() {
-  local pid="$1"
-  local metric="$2"
-
-  grep -q "^${pid}"$'\t'"${metric}"$'\t' "$SESSIONS_FILE" 2>/dev/null
-}
-
-result_exists() {
-  local pid="$1"
-  local metric="$2"
-
-  grep -q "^${pid}"$'\t'"${metric}"$'\t' "$RESULTS_FILE" 2>/dev/null
-}
-
-write_result() {
-  local pid="$1"
-  local metric="$2"
-  local value="$3"
-  local tmp=""
-
-  tmp="$(mktemp)"
-
-  if [ -f "$RESULTS_FILE" ]; then
-    grep -v "^${pid}"$'\t'"${metric}"$'\t' "$RESULTS_FILE" > "$tmp" || true
+agent_sudo_validate() {
+  if [ "$agent_sudo_mode" = "direct" ]; then
+    sudo -n "$AGENT_ECOFLOC_DIRECT_BIN" --help >/dev/null 2>&1
+    return $?
   fi
 
-  printf "%s\t%s\t%s\n" "$pid" "$metric" "$value" >> "$tmp"
-  mv "$tmp" "$RESULTS_FILE"
+  if [ -n "$AGENT_SUDO_PASSWORD" ]; then
+    printf '%s
+' "$AGENT_SUDO_PASSWORD" | sudo -S -p "" -v >/dev/null 2>&1
+  else
+    sudo -n -v >/dev/null 2>&1
+  fi
 }
 
-start_ecofloc_session() {
-  local pid="$1"
-  local metric="$2"
-  local log_file="$3"
-  local export_args=()
-
-  ensure_ecofloc_log_dir
-
-  if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
-    export_args=(-f "$ECOFLOC_EXPORT_PATH")
+agent_run_ecofloc_foreground() {
+  local cmd=()
+  agent_build_ecofloc_command cmd
+  if [ -n "$AGENT_SUDO_PASSWORD" ]; then
+    printf '%s
+' "$AGENT_SUDO_PASSWORD" | "${cmd[@]}" "$@"
+  else
+    "${cmd[@]}" "$@"
   fi
+}
 
-  sudo -n /bin/execute ecofloc "--${metric}" \
-    -p "$pid" \
-    -i "$ECOFLOC_INTERVAL" \
-    -t -1 \
-    "${export_args[@]}" > "$log_file" 2>&1 &
-
+agent_start_ecofloc_background() {
+  local log_file="$1"
+  shift
+  local cmd=()
+  agent_build_ecofloc_command cmd
+  if [ -n "$AGENT_SUDO_PASSWORD" ]; then
+    ( printf '%s
+' "$AGENT_SUDO_PASSWORD" | "${cmd[@]}" "$@" ) > "$log_file" 2>&1 &
+  else
+    "${cmd[@]}" "$@" > "$log_file" 2>&1 &
+  fi
   echo "$!"
 }
 
-parse_ecofloc_log() {
-  local log_file="$1"
+agent_pid_exists() {
+  local pid="$1"
+  [ -d "/proc/$pid" ] || ps -p "$pid" >/dev/null 2>&1
+}
 
-  if [ ! -f "$log_file" ]; then
-    echo "NO_LOG"
-    return 0
+agent_children_of() { pgrep -P "$1" 2>/dev/null || true; }
+
+agent_all_descendants() {
+  local parent="$1"
+  local child=""
+  for child in $(agent_children_of "$parent"); do
+    echo "$child"
+    agent_all_descendants "$child"
+  done
+}
+
+agent_stop_process_tree_with_int() {
+  local root_pid="$1"
+  local descendants=""
+  [ -n "${root_pid:-}" ] || return 0
+  descendants="$(agent_all_descendants "$root_pid" | tac 2>/dev/null || agent_all_descendants "$root_pid")"
+  for p in $descendants; do kill -INT "$p" 2>/dev/null || true; done
+  kill -INT "$root_pid" 2>/dev/null || true
+  sleep 1
+  for p in $descendants; do ps -p "$p" >/dev/null 2>&1 && kill -TERM "$p" 2>/dev/null || true; done
+  ps -p "$root_pid" >/dev/null 2>&1 && kill -TERM "$root_pid" 2>/dev/null || true
+  sleep 0.5
+  for p in $descendants; do ps -p "$p" >/dev/null 2>&1 && kill -KILL "$p" 2>/dev/null || true; done
+  ps -p "$root_pid" >/dev/null 2>&1 && kill -KILL "$root_pid" 2>/dev/null || true
+}
+
+agent_emit() {
+  # Keep lines short enough for atomic pipe writes.
+  printf '%s\n' "$*"
+}
+
+agent_get_raw_processes() { ps axww -o pid=,args=; }
+agent_get_matching_processes() { agent_get_raw_processes | filter_processes; }
+
+agent_start_sudo_keepalive() {
+  echo "[agent:$agent_node_name] checking sudo access for EcoFloc PID mode..." >&2
+  if ! agent_sudo_validate; then
+    echo "[agent:$agent_node_name] sudo validation failed." >&2
+    exit 1
   fi
 
-  local avg=""
-  local total=""
+  local test_pid=""
+  local test_log="/tmp/erctl-ecofloc-sudo-test-${agent_node_name}.log"
 
-  avg="$(
-    awk -F ':' '
-      BEGIN { IGNORECASE = 1 }
-      /Average[[:space:]]+Power/ {
-        gsub(/^[ \t]+|[ \t]+$/, "", $2)
-        last = $2
-      }
-      END {
-        if (last != "") print last
-      }
-    ' "$log_file" | awk '{ print $1 }'
-  )"
+  sleep 10 &
+  test_pid="$!"
 
-  total="$(
-    awk -F ':' '
-      BEGIN { IGNORECASE = 1 }
-      /Total.*Energy/ {
-        gsub(/^[ \t]+|[ \t]+$/, "", $2)
-        last = $2
-      }
-      END {
-        if (last != "") print last
-      }
-    ' "$log_file" | awk '{ print $1 }'
-  )"
+  if ! agent_run_ecofloc_foreground --cpu -p "$test_pid" -i 1000 -t 1 > "$test_log" 2>&1; then
+    kill "$test_pid" 2>/dev/null || true
+    echo "[agent:$agent_node_name] cannot run EcoFloc PID mode with sudo mode '$agent_sudo_mode'." >&2
+    tail -n 20 "$test_log" >&2 || true
+    exit 1
+  fi
+
+  kill "$test_pid" 2>/dev/null || true
+
+  (
+    while true; do
+      agent_sudo_validate || exit 0
+      sleep 60
+    done
+  ) &
+  AGENT_SUDO_KEEPALIVE_PID="$!"
+}
+
+agent_stop_sudo_keepalive() {
+  if [ -n "${AGENT_SUDO_KEEPALIVE_PID:-}" ]; then
+    kill "$AGENT_SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    wait "$AGENT_SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    AGENT_SUDO_KEEPALIVE_PID=""
+  fi
+}
+
+agent_stop_all_ecofloc_sessions() {
+  [ -n "${AGENT_SESSIONS_FILE:-}" ] || return 0
+  [ -f "$AGENT_SESSIONS_FILE" ] || return 0
+  local pid="" metric="" eco_pid="" log_file="" start_ts=""
+  while IFS=$'\t' read -r pid metric eco_pid log_file start_ts; do
+    [ -n "${eco_pid:-}" ] || continue
+    agent_stop_process_tree_with_int "$eco_pid"
+  done < "$AGENT_SESSIONS_FILE"
+}
+
+agent_cleanup() {
+  local exit_code="${1:-0}"
+  if [ "$AGENT_CLEANUP_DONE" = true ]; then
+    exit "$exit_code"
+  fi
+  AGENT_CLEANUP_DONE=true
+  agent_stop_all_ecofloc_sessions >/dev/null 2>&1 || true
+  agent_stop_sudo_keepalive >/dev/null 2>&1 || true
+  [ -n "${AGENT_ROWS_FILE:-}" ] && rm -f "$AGENT_ROWS_FILE" 2>/dev/null || true
+  [ -n "${AGENT_SESSIONS_FILE:-}" ] && rm -f "$AGENT_SESSIONS_FILE" 2>/dev/null || true
+  [ -n "${AGENT_RESULTS_FILE:-}" ] && rm -f "$AGENT_RESULTS_FILE" 2>/dev/null || true
+  exit "$exit_code"
+}
+
+agent_append_row_if_missing() {
+  local pid="$1"
+  local cmd="$2"
+  python3 - "$AGENT_ROWS_FILE" "$agent_node_name" "$pid" "$cmd" <<'PY'
+import sys
+rows_file, node, pid, cmd = sys.argv[1:5]
+try:
+    rows = open(rows_file, encoding="utf-8").read().splitlines()
+except FileNotFoundError:
+    rows = []
+for row in rows:
+    parts = row.split("\t", 2)
+    if len(parts) >= 2 and parts[0] == node and parts[1] == pid:
+        sys.exit(0)
+rows.append(f"{node}\t{pid}\t{cmd}")
+with open(rows_file, "w", encoding="utf-8") as f:
+    f.write("\n".join(rows) + "\n")
+PY
+  agent_emit $'ROW\t'"${agent_node_name}"$'\t'"${pid}"$'\t'"${cmd}"
+}
+
+agent_session_exists() { grep -q "^${1}"$'\t'"${2}"$'\t' "$AGENT_SESSIONS_FILE" 2>/dev/null; }
+agent_result_exists() { grep -q "^${1}"$'\t'"${2}"$'\t' "$AGENT_RESULTS_FILE" 2>/dev/null; }
+
+agent_write_result() {
+  local pid="$1" metric="$2" value="$3" tmp=""
+  tmp="$(mktemp)"
+  if [ -f "$AGENT_RESULTS_FILE" ]; then
+    grep -v "^${pid}"$'\t'"${metric}"$'\t' "$AGENT_RESULTS_FILE" > "$tmp" || true
+  fi
+  printf "%s\t%s\t%s\n" "$pid" "$metric" "$value" >> "$tmp"
+  mv "$tmp" "$AGENT_RESULTS_FILE"
+  agent_emit $'RESULT\t'"${agent_node_name}"$'\t'"${pid}"$'\t'"${metric}"$'\t'"${value}"
+}
+
+agent_start_ecofloc_session() {
+  local pid="$1" metric="$2" log_file="$3"
+  local export_args=()
+  local cmd=()
+
+  mkdir -p "$ECOFLOC_LOG_DIR"
+
+  if [ -n "$ECOFLOC_EXPORT_PATH" ]; then
+    local export_path="$ECOFLOC_EXPORT_PATH"
+    export_path="${export_path//\{node\}/$agent_node_name}"
+    export_args=(-f "$export_path")
+  fi
+
+  agent_start_ecofloc_background "$log_file" "--${metric}" \
+    -p "$pid" \
+    -i "$ECOFLOC_INTERVAL" \
+    -t -1 \
+    "${export_args[@]}"
+}
+
+agent_parse_ecofloc_log() {
+  local log_file="$1"
+  if [ ! -f "$log_file" ]; then echo "NO_LOG"; return 0; fi
+
+  local avg="" total=""
+  avg="$(awk -F ':' 'BEGIN { IGNORECASE = 1 } /Average[[:space:]]+Power/ { gsub(/^[ \t]+|[ \t]+$/, "", $2); last = $2 } END { if (last != "") print last }' "$log_file" | awk '{ print $1 }')"
+  total="$(awk -F ':' 'BEGIN { IGNORECASE = 1 } /Total.*Energy/ { gsub(/^[ \t]+|[ \t]+$/, "", $2); last = $2 } END { if (last != "") print last }' "$log_file" | awk '{ print $1 }')"
 
   if [ -n "$avg" ] || [ -n "$total" ]; then
     [ -z "$avg" ] && avg="?"
@@ -536,679 +429,591 @@ parse_ecofloc_log() {
     echo "${avg}W/${total}J"
     return 0
   fi
-
-  if grep -qi "a password is required\|a terminal is required\|no tty\|sudo:" "$log_file"; then
-    echo "SUDO_AUTH"
-    return 0
-  fi
-
-  if grep -qi "invalid option\|usage:" "$log_file"; then
-    echo "BAD_ARGS"
-    return 0
-  fi
-
-  if grep -qi "not allowed\|not permitted\|permission denied" "$log_file"; then
-    echo "DENIED"
-    return 0
-  fi
-
-  if grep -qi "no such process\|invalid pid\|process.*not.*found" "$log_file"; then
-    echo "BAD_PID"
-    return 0
-  fi
-
+  if grep -qi "a password is required\|a terminal is required\|no tty\|sudo:" "$log_file"; then echo "SUDO_AUTH"; return 0; fi
+  if grep -qi "invalid option\|usage:" "$log_file"; then echo "BAD_ARGS"; return 0; fi
+  if grep -qi "not allowed\|not permitted\|permission denied" "$log_file"; then echo "DENIED"; return 0; fi
+  if grep -qi "no such process\|invalid pid\|process.*not.*found" "$log_file"; then echo "BAD_PID"; return 0; fi
   local last_line=""
   last_line="$(grep -v '^[[:space:]]*$' "$log_file" | tail -n 1 | tr -d '\r' | cut -c 1-14)"
-
-  if [ -n "$last_line" ]; then
-    echo "LOG:${last_line}"
-  else
-    echo "EMPTY_LOG"
-  fi
+  [ -n "$last_line" ] && echo "LOG:${last_line}" || echo "EMPTY_LOG"
 }
 
-create_sessions_for_matches() {
+agent_create_sessions_for_matches() {
   local matches="$1"
-  local pid=""
-  local cmd=""
-  local metric=""
-  local log_file=""
-  local eco_pid=""
-  local start_ts=""
-
+  local pid="" cmd="" metric="" log_file="" eco_pid="" start_ts=""
   while IFS=$'\t' read -r pid cmd; do
     [ -n "${pid:-}" ] || continue
     [ -n "${cmd:-}" ] || continue
-
-    append_row_if_missing "$pid" "$cmd"
-
+    agent_append_row_if_missing "$pid" "$cmd"
     IFS=',' read -r -a metric_list <<< "$ECOFLOC_METRICS"
-
     for metric in "${metric_list[@]}"; do
       metric="$(printf "%s" "$metric" | tr '[:upper:]' '[:lower:]' | xargs)"
-
       case "$metric" in
         cpu|ram|sd|nic|gpu)
-          if result_exists "$pid" "$metric"; then
-            continue
-          fi
-
-          if session_exists "$pid" "$metric"; then
-            continue
-          fi
-
-          if ! pid_exists "$pid"; then
-            write_result "$pid" "$metric" "TOO_SHORT"
-            continue
-          fi
-
-          if ! sudo -n true 2>/dev/null; then
-            write_result "$pid" "$metric" "SUDO_AUTH"
-            continue
-          fi
-
+          if agent_result_exists "$pid" "$metric" || agent_session_exists "$pid" "$metric"; then continue; fi
+          if ! agent_pid_exists "$pid"; then agent_write_result "$pid" "$metric" "TOO_SHORT"; continue; fi
+          if ! agent_sudo_validate; then agent_write_result "$pid" "$metric" "SUDO_AUTH"; continue; fi
           start_ts="$(date +%s)"
-          log_file="${ECOFLOC_LOG_DIR}/ecofloc_${pid}_${metric}_${start_ts}.log"
-          eco_pid="$(start_ecofloc_session "$pid" "$metric" "$log_file")"
-
-          printf "%s\t%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" "$start_ts" >> "$SESSIONS_FILE"
-
+          log_file="${ECOFLOC_LOG_DIR}/ecofloc_${agent_node_name}_${pid}_${metric}_${start_ts}.log"
+          eco_pid="$(agent_start_ecofloc_session "$pid" "$metric" "$log_file")"
+          printf "%s\t%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" "$start_ts" >> "$AGENT_SESSIONS_FILE"
+          agent_emit $'ACTIVE\t'"${agent_node_name}"$'\t'"${pid}"$'\t'"${metric}"
           sleep 0.03
-          ;;
-        *)
           ;;
       esac
     done
   done <<< "$matches"
 }
 
-finalize_finished_sessions() {
-  local tmp=""
-  local pid=""
-  local metric=""
-  local eco_pid=""
-  local log_file=""
-  local start_ts=""
-  local now=""
-  local elapsed=""
-  local value=""
-
-  [ -f "$SESSIONS_FILE" ] || return 0
-
+agent_finalize_finished_sessions() {
+  [ -f "$AGENT_SESSIONS_FILE" ] || return 0
+  local tmp="" pid="" metric="" eco_pid="" log_file="" start_ts="" now="" elapsed="" value=""
   tmp="$(mktemp)"
   now="$(date +%s)"
-
   while IFS=$'\t' read -r pid metric eco_pid log_file start_ts; do
     [ -n "${pid:-}" ] || continue
     [ -n "${metric:-}" ] || continue
     [ -n "${eco_pid:-}" ] || continue
     [ -n "${log_file:-}" ] || continue
     [ -n "${start_ts:-}" ] || start_ts="$now"
-
-    if pid_exists "$pid"; then
+    if agent_pid_exists "$pid"; then
       printf "%s\t%s\t%s\t%s\t%s\n" "$pid" "$metric" "$eco_pid" "$log_file" "$start_ts" >> "$tmp"
       continue
     fi
-
     elapsed="$((now - start_ts))"
-
-    stop_process_tree_with_int "$eco_pid"
-
-    value="$(parse_ecofloc_log "$log_file" | tail -n 1 | tr -d '\r')"
-
+    agent_stop_process_tree_with_int "$eco_pid"
+    value="$(agent_parse_ecofloc_log "$log_file" | tail -n 1 | tr -d '\r')"
     if [ -z "$value" ] || [ "$value" = "NO_LOG" ] || [ "$value" = "EMPTY_LOG" ]; then
-      if [ "$elapsed" -lt 1 ]; then
-        value="TOO_SHORT"
-      else
-        value="NO_DATA"
-      fi
+      if [ "$elapsed" -lt 1 ]; then value="TOO_SHORT"; else value="NO_DATA"; fi
     fi
-
-    write_result "$pid" "$metric" "$value"
-  done < "$SESSIONS_FILE"
-
-  mv "$tmp" "$SESSIONS_FILE"
+    agent_write_result "$pid" "$metric" "$value"
+  done < "$AGENT_SESSIONS_FILE"
+  mv "$tmp" "$AGENT_SESSIONS_FILE"
 }
 
-render_ecofloc_table() {
-  python3 - "$ROWS_FILE" "$SESSIONS_FILE" "$RESULTS_FILE" "$ECOFLOC_METRICS" <<'PY'
-import os
-import re
-import sys
-import time
-from collections import OrderedDict
-
-rows_file = sys.argv[1]
-sessions_file = sys.argv[2]
-results_file = sys.argv[3]
-enabled_metrics = {m.strip().lower() for m in sys.argv[4].split(",") if m.strip()}
-
-PIDS_W = 16
-SCRIPT_W = 20
-FUNC_W = 20
-METRIC_W = 16
-TOTAL_W = 12
-
-METRICS = ["cpu", "ram", "sd", "nic", "gpu"]
-VALUE_RE = re.compile(r"^\s*([0-9.]+|\?)W/([0-9.]+|\?)J\s*$")
-
-def fit(value, width):
-    value = str(value)
-    if len(value) <= width:
-        return value
-    return value[:max(width - 1, 0)] + "…"
-
-def base(path):
-    return os.path.basename(path.rstrip())
-
-def tokens(cmd):
-    return cmd.split()
-
-def clean(value):
-    return value.strip().strip("\"").strip("'")
-
-def extract_script(cmd):
-    ts = tokens(cmd)
-    if len(ts) >= 2 and ts[1].startswith("/app/"):
-        return base(ts[1])
-    return "-"
-
-def extract_function(cmd):
-    ts = tokens(cmd)
-
-    for i, tok in enumerate(ts):
-        if tok == "--function" and i + 1 < len(ts):
-            return clean(ts[i + 1])
-
-        if tok.startswith("--function="):
-            return clean(tok.split("=", 1)[1])
-
-    m = re.search(r"--function(?:=|\s+)([^ ]+)", cmd)
-    if m:
-        return clean(m.group(1))
-
-    return "-"
-
-def parse_metric_value(value):
-    m = VALUE_RE.match(str(value))
-    if not m:
-        return 0.0, 0.0, False
-
-    power_raw, energy_raw = m.groups()
-    power = 0.0 if power_raw == "?" else float(power_raw)
-    energy = 0.0 if energy_raw == "?" else float(energy_raw)
-
-    return power, energy, True
-
-def format_metric(power, energy, valid_count):
-    if valid_count <= 0:
-        return "-"
-    return f"{power:.2f}W/{energy:.2f}J"
-
-def format_energy(energy, valid_count):
-    if valid_count <= 0:
-        return "-"
-    return f"{energy:.2f}J"
-
-def spinner_value():
-    frames = ["|", "/", "-", "\\"]
-    return f"{frames[int(time.time() * 4) % len(frames)]} measuring"
-
-results = {}
-sessions = {}
-now = int(time.time())
-
-try:
-    with open(results_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            parts = line.split("\t", 2)
-            if len(parts) == 3:
-                pid, metric, value = parts
-                results[(pid, metric)] = value
-except FileNotFoundError:
-    pass
-
-try:
-    with open(sessions_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            parts = line.split("\t")
-            if len(parts) >= 5:
-                pid, metric, eco_pid, log_file, start_ts = parts[:5]
-                sessions[(pid, metric)] = True
-except FileNotFoundError:
-    pass
-
-try:
-    with open(rows_file, "r", encoding="utf-8") as f:
-        rows = f.read().splitlines()
-except FileNotFoundError:
-    rows = []
-
-groups = OrderedDict()
-
-for row in rows:
-    if not row.strip():
-        continue
-
-    parts = row.split("\t", 1)
-    if len(parts) != 2:
-        continue
-
-    pid, cmd = parts
-    script = extract_script(cmd)
-    function = extract_function(cmd)
-    key = (script, function)
-
-    if key not in groups:
-        groups[key] = {
-            "pids": [],
-            "script": script,
-            "function": function,
-        }
-
-    if pid not in groups[key]["pids"]:
-        groups[key]["pids"].append(pid)
-
-def pid_metric_values(pids, metric):
-    values = []
-    active = False
-
-    for pid in pids:
-        if metric not in enabled_metrics:
-            continue
-
-        if (pid, metric) in sessions:
-            active = True
-
-        if (pid, metric) in results:
-            values.append(results[(pid, metric)])
-
-    return values, active
-
-def aggregate_metric_for_group(pids, metric):
-    if metric not in enabled_metrics:
-        return "-", 0.0, 0.0, 0, False
-
-    values, active = pid_metric_values(pids, metric)
-
-    total_power = 0.0
-    total_energy = 0.0
-    valid_count = 0
-    statuses = []
-
-    for value in values:
-        power, energy, valid = parse_metric_value(value)
-        if valid:
-            total_power += power
-            total_energy += energy
-            valid_count += 1
-        else:
-            statuses.append(value)
-
-    if active:
-        display = spinner_value()
-    elif valid_count > 0:
-        display = format_metric(total_power, total_energy, valid_count)
-    elif statuses:
-        unique = sorted(set(statuses))
-        display = unique[0] if len(unique) == 1 else "PARTIAL"
-    else:
-        display = "WAIT"
-
-    return display, total_power, total_energy, valid_count, active
-
-headers = ["PIDS", "SCRIPT", "FUNCTION", "CPU", "RAM", "SD", "NIC", "GPU", "TOTAL"]
-widths = [PIDS_W, SCRIPT_W, FUNC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, METRIC_W, TOTAL_W]
-
-print(" | ".join("{:<{}}".format(h, w) for h, w in zip(headers, widths)))
-print("-+-".join("-" * w for w in widths))
-
-column_power_totals = {metric: 0.0 for metric in METRICS}
-column_energy_totals = {metric: 0.0 for metric in METRICS}
-column_valid_counts = {metric: 0 for metric in METRICS}
-column_active = {metric: False for metric in METRICS}
-
-grand_energy_total = 0.0
-grand_valid_count = 0
-grand_active = False
-
-for group in groups.values():
-    pids = group["pids"]
-    pids_text = ",".join(pids)
-
-    metric_values = {}
-    row_energy_total = 0.0
-    row_valid_count = 0
-    row_active = False
-
-    for metric in METRICS:
-        display, power, energy, valid_count, active = aggregate_metric_for_group(pids, metric)
-        metric_values[metric] = display
-
-        if valid_count > 0:
-            row_energy_total += energy
-            row_valid_count += valid_count
-
-            column_power_totals[metric] += power
-            column_energy_totals[metric] += energy
-            column_valid_counts[metric] += valid_count
-
-            grand_energy_total += energy
-            grand_valid_count += valid_count
-
-        if active:
-            row_active = True
-            column_active[metric] = True
-            grand_active = True
-
-    row_total = spinner_value() if row_active else format_energy(row_energy_total, row_valid_count)
-
-    values = [
-        pids_text,
-        group["script"],
-        group["function"],
-        metric_values["cpu"],
-        metric_values["ram"],
-        metric_values["sd"],
-        metric_values["nic"],
-        metric_values["gpu"],
-        row_total,
-    ]
-
-    print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(values, widths)))
-
-print("-+-".join("-" * w for w in widths))
-
-def column_total(metric):
-    if column_active[metric]:
-        return spinner_value()
-
-    return format_metric(
-        column_power_totals[metric],
-        column_energy_totals[metric],
-        column_valid_counts[metric],
-    )
-
-total_values = [
-    "TOTAL",
-    "-",
-    "-",
-    column_total("cpu"),
-    column_total("ram"),
-    column_total("sd"),
-    column_total("nic"),
-    column_total("gpu"),
-    spinner_value() if grand_active else format_energy(grand_energy_total, grand_valid_count),
-]
-
-print(" | ".join("{:<{}}".format(fit(v, w), w) for v, w in zip(total_values, widths)))
-PY
-}
-
-render_ecofloc_frame() {
-  local status="$1"
-  local frame_file=""
-
-  frame_file="$(mktemp)"
-
-  {
-    echo "EcoFloc PID monitoring. Press Ctrl+C to stop."
-    echo "Status: ${status}"
-    echo
-
-    if [ -s "$ROWS_FILE" ]; then
-      render_ecofloc_table
-    else
-      echo "No matching Argo workflow process found."
-    fi
-  } > "$frame_file"
-
-  render_file_in_place "$frame_file"
-  rm -f "$frame_file"
-}
-
-run_ecofloc_watch() {
-  local matches=""
-  local status=""
-  local active=""
-  local last_render_ns="0"
-  local now_ns="0"
-
-  start_sudo_keepalive
-  ensure_ecofloc_log_dir
-
-  ROWS_FILE="$(mktemp)"
-  SESSIONS_FILE="$(mktemp)"
-  RESULTS_FILE="$(mktemp)"
-
-  trap 'cleanup 0' EXIT
-  trap handle_stop_signal INT TERM HUP QUIT TSTP
-
-  screen_init
+agent_main() {
+  shift # __agent__
+  local mode="watch"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --node-name) agent_node_name="$2"; shift 2 ;;
+      --sudo-mode) agent_sudo_mode="$2"; shift 2 ;;
+      --mode) mode="$2"; shift 2 ;;
+      --scan-interval) SCAN_INTERVAL="$2"; shift 2 ;;
+      --ecofloc-interval) ECOFLOC_INTERVAL="$2"; shift 2 ;;
+      --metrics) ECOFLOC_METRICS="$2"; shift 2 ;;
+      --export) ECOFLOC_EXPORT_PATH="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  [ -n "$agent_node_name" ] || agent_node_name="$(hostname)"
+
+  AGENT_ROWS_FILE="$(mktemp)"
+  AGENT_SESSIONS_FILE="$(mktemp)"
+  AGENT_RESULTS_FILE="$(mktemp)"
+  trap 'agent_cleanup 0' EXIT
+  trap 'agent_cleanup 130' INT TERM HUP QUIT TSTP
+
+  if [ "$mode" = "get" ]; then
+    local matches=""
+    matches="$(agent_get_matching_processes || true)"
+    while IFS=$'\t' read -r pid cmd; do
+      [ -n "${pid:-}" ] || continue
+      agent_emit $'ROW\t'"${agent_node_name}"$'\t'"${pid}"$'\t'"${cmd}"
+    done <<< "$matches"
+    agent_cleanup 0
+  fi
+
+  agent_start_sudo_keepalive
+  mkdir -p "$ECOFLOC_LOG_DIR"
 
   while true; do
-    matches="$(get_matching_processes || true)"
-
-    if [ -n "$matches" ]; then
-      create_sessions_for_matches "$matches"
-    fi
-
-    finalize_finished_sessions
-
-    active="$(wc -l < "$SESSIONS_FILE" | xargs)"
-
-    if [ "$active" != "0" ]; then
-      status="monitoring; active EcoFloc sessions: ${active}"
-    elif [ -s "$ROWS_FILE" ]; then
-      status="waiting for new processes"
-    else
-      status="waiting for matching processes"
-    fi
-
-    now_ns="$(date +%s%N)"
-
-    if [ "$last_render_ns" = "0" ]; then
-      render_ecofloc_frame "$status"
-      last_render_ns="$now_ns"
-    else
-      if python3 - "$last_render_ns" "$now_ns" "$WATCH_INTERVAL" <<'PY'
-import sys
-last_ns = int(sys.argv[1])
-now_ns = int(sys.argv[2])
-interval = float(sys.argv[3])
-elapsed = (now_ns - last_ns) / 1_000_000_000
-sys.exit(0 if elapsed >= interval else 1)
-PY
-      then
-        render_ecofloc_frame "$status"
-        last_render_ns="$now_ns"
-      fi
-    fi
-
+    local matches=""
+    matches="$(agent_get_matching_processes || true)"
+    if [ -n "$matches" ]; then agent_create_sessions_for_matches "$matches"; fi
+    agent_finalize_finished_sessions
+    local active="0"
+    active="$(wc -l < "$AGENT_SESSIONS_FILE" | xargs)"
+    agent_emit $'HEARTBEAT\t'"${agent_node_name}"$'\t'"${active}"
     sleep "$SCAN_INTERVAL"
   done
 }
 
-run_ecofloc_once() {
-  local matches=""
-  local active=""
+# -----------------------------------------------------------------------------
+# Coordinator mode
+# -----------------------------------------------------------------------------
 
-  start_sudo_keepalive
-  ensure_ecofloc_log_dir
+COORD_ROWS_FILE=""
+COORD_RESULTS_FILE=""
+COORD_ACTIVE_FILE=""
+COORD_HEARTBEAT_FILE=""
+COORD_PIDS=()
+COORD_FIFO=""
+COORD_DONE=false
+COORD_LOG_DIR="/tmp/process-cluster-logs"
 
-  ROWS_FILE="$(mktemp)"
-  SESSIONS_FILE="$(mktemp)"
-  RESULTS_FILE="$(mktemp)"
+coord_cleanup() {
+  local code="${1:-0}"
+  if [ "$COORD_DONE" = true ]; then exit "$code"; fi
+  COORD_DONE=true
+  for p in "${COORD_PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done
+  for p in "${COORD_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
+  restore_terminal
+  [ -n "${COORD_ROWS_FILE:-}" ] && rm -f "$COORD_ROWS_FILE" 2>/dev/null || true
+  [ -n "${COORD_RESULTS_FILE:-}" ] && rm -f "$COORD_RESULTS_FILE" 2>/dev/null || true
+  [ -n "${COORD_ACTIVE_FILE:-}" ] && rm -f "$COORD_ACTIVE_FILE" 2>/dev/null || true
+  [ -n "${COORD_HEARTBEAT_FILE:-}" ] && rm -f "$COORD_HEARTBEAT_FILE" 2>/dev/null || true
+  [ -n "${COORD_FIFO:-}" ] && rm -f "$COORD_FIFO" 2>/dev/null || true
+  exit "$code"
+}
 
-  trap 'cleanup 0' EXIT
-  trap handle_stop_signal INT TERM HUP QUIT TSTP
+parse_node_spec() {
+  # Echoes: name|kind|target|sudo_mode
+  # Supported:
+  #   server2-labo=local:execute
+  #   fedora=ssh:kevinoulai@10.0.8.34:direct
+  local spec="${1:-}"
+  local parsed_name="" parsed_rest="" parsed_kind="" parsed_target="" parsed_sudo_mode=""
 
-  screen_init
-
-  matches="$(get_matching_processes || true)"
-
-  if [ -z "$matches" ]; then
-    echo "No matching Argo workflow process found."
-    cleanup 0
+  if [ -z "$spec" ]; then
+    echo "Invalid empty node spec" >&2
+    exit 1
   fi
 
-  create_sessions_for_matches "$matches"
+  if [[ "$spec" != *=* ]]; then
+    echo "Invalid node spec, missing '=': $spec" >&2
+    exit 1
+  fi
 
-  while true; do
-    finalize_finished_sessions
+  parsed_name="${spec%%=*}"
+  parsed_rest="${spec#*=}"
 
-    active="$(wc -l < "$SESSIONS_FILE" | xargs)"
-    render_ecofloc_frame "monitoring; active EcoFloc sessions: ${active}"
+  if [[ "$parsed_rest" != *:* ]]; then
+    echo "Invalid node spec, missing kind/sudo separator ':': $spec" >&2
+    exit 1
+  fi
 
-    if [ "$active" = "0" ]; then
-      break
+  parsed_kind="${parsed_rest%%:*}"
+  parsed_rest="${parsed_rest#*:}"
+
+  case "$parsed_kind" in
+    local)
+      parsed_target=""
+      parsed_sudo_mode="$parsed_rest"
+      ;;
+    ssh)
+      if [[ "$parsed_rest" != *:* ]]; then
+        echo "Invalid SSH node spec, expected name=ssh:user@host:mode: $spec" >&2
+        exit 1
+      fi
+      parsed_target="${parsed_rest%%:*}"
+      parsed_sudo_mode="${parsed_rest##*:}"
+      ;;
+    *)
+      echo "Invalid node kind in spec: $spec" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ -z "$parsed_name" ] || [ -z "$parsed_kind" ] || [ -z "$parsed_sudo_mode" ]; then
+    echo "Invalid node spec after parsing: $spec" >&2
+    exit 1
+  fi
+
+  if [ "$parsed_kind" = "ssh" ] && [ -z "$parsed_target" ]; then
+    echo "Invalid SSH node spec, missing target: $spec" >&2
+    exit 1
+  fi
+
+  case "$parsed_sudo_mode" in
+    execute|direct) ;;
+    *) echo "Invalid sudo mode '$parsed_sudo_mode' in spec: $spec" >&2; exit 1 ;;
+  esac
+
+  printf '%s|%s|%s|%s\n' "$parsed_name" "$parsed_kind" "$parsed_target" "$parsed_sudo_mode"
+}
+
+start_agent_for_node() {
+  local spec="$1"
+  local mode="$2"
+  local parsed="" name="" kind="" target="" sudo_mode=""
+  local agent_err=""
+
+  parsed="$(parse_node_spec "$spec")"
+  IFS='|' read -r name kind target sudo_mode <<< "$parsed"
+
+  mkdir -p "$COORD_LOG_DIR"
+  agent_err="$COORD_LOG_DIR/agent-${name}.err"
+
+  echo "[coordinator] starting agent: node=$name kind=$kind sudo=$sudo_mode target=${target:-local}" >&2
+
+  if [ "$kind" = "local" ]; then
+    if [ "$mode" != "get" ]; then
+      echo "[coordinator] validating local sudo for $name..." >&2
+      sudo -v
     fi
 
-    sleep "$WATCH_INTERVAL"
+    bash "$0" __agent__ \
+      --node-name "$name" \
+      --sudo-mode "$sudo_mode" \
+      --mode "$mode" \
+      --scan-interval "$SCAN_INTERVAL" \
+      --ecofloc-interval "$ECOFLOC_INTERVAL" \
+      --metrics "$ECOFLOC_METRICS" \
+      --export "$ECOFLOC_EXPORT_PATH" > "$COORD_FIFO" 2> "$agent_err" &
+  else
+    local remote_script="/tmp/process_cluster_${USER:-user}.sh"
+    local sudo_password=""
+    local sudo_password_b64=""
+
+    echo "[coordinator] copying agent script to $target:$remote_script" >&2
+    scp -q -o ConnectTimeout=5 "$0" "$target:$remote_script"
+
+    if [ "$mode" != "get" ] && [ "$sudo_mode" = "execute" ]; then
+      printf "[coordinator] sudo password for %s: " "$target" >&2
+      stty -echo 2>/dev/null || true
+      IFS= read -r sudo_password
+      stty echo 2>/dev/null || true
+      printf "
+" >&2
+
+      if ! printf '%s
+' "$sudo_password" | ssh -o ConnectTimeout=5 "$target" "sudo -S -p '' -v" >/dev/null 2> "$agent_err"; then
+        echo "[coordinator] remote sudo validation failed for $target. See $agent_err" >&2
+        return 1
+      fi
+
+      sudo_password_b64="$(printf '%s' "$sudo_password" | base64 | tr -d '
+')"
+      unset sudo_password
+    elif [ "$mode" != "get" ] && [ "$sudo_mode" = "direct" ]; then
+      echo "[coordinator] validating remote direct sudo for $target without password..." >&2
+      if ! ssh -o ConnectTimeout=5 "$target" "sudo -n /usr/local/bin/ecofloc --help >/dev/null" 2> "$agent_err"; then
+        echo "[coordinator] remote direct sudo validation failed for $target. Check sudoers for /usr/local/bin/ecofloc. See $agent_err" >&2
+        return 1
+      fi
+    fi
+
+    ssh -o ConnectTimeout=5 "$target" \
+      "ERCTL_AGENT_SUDO_PASSWORD_B64='$sudo_password_b64' ERCTL_ECOFLOC_DIRECT_BIN='/usr/local/bin/ecofloc' exec bash '$remote_script' __agent__ --node-name '$name' --sudo-mode '$sudo_mode' --mode '$mode' --scan-interval '$SCAN_INTERVAL' --ecofloc-interval '$ECOFLOC_INTERVAL' --metrics '$ECOFLOC_METRICS' --export '$ECOFLOC_EXPORT_PATH'" \
+      > "$COORD_FIFO" 2> "$agent_err" &
+  fi
+  COORD_PIDS+=("$!")
+}
+
+coord_append_row() {
+  local node="$1" pid="$2" cmd="$3"
+  python3 - "$COORD_ROWS_FILE" "$node" "$pid" "$cmd" <<'PY'
+import sys
+path,node,pid,cmd=sys.argv[1:5]
+try:
+    rows=open(path,encoding="utf-8").read().splitlines()
+except FileNotFoundError:
+    rows=[]
+for r in rows:
+    parts=r.split("\t",2)
+    if len(parts)>=2 and parts[0]==node and parts[1]==pid:
+        sys.exit(0)
+rows.append(f"{node}\t{pid}\t{cmd}")
+open(path,"w",encoding="utf-8").write("\n".join(rows)+"\n")
+PY
+}
+
+coord_set_result() {
+  local node="$1" pid="$2" metric="$3" value="$4" tmp=""
+  tmp="$(mktemp)"
+  [ -f "$COORD_RESULTS_FILE" ] && grep -v "^${node}"$'\t'"${pid}"$'\t'"${metric}"$'\t' "$COORD_RESULTS_FILE" > "$tmp" || true
+  printf "%s\t%s\t%s\t%s\n" "$node" "$pid" "$metric" "$value" >> "$tmp"
+  mv "$tmp" "$COORD_RESULTS_FILE"
+  # A final result means the active session is over.
+  coord_remove_active "$node" "$pid" "$metric"
+}
+
+coord_add_active() {
+  local node="$1" pid="$2" metric="$3"
+  if ! grep -q "^${node}"$'\t'"${pid}"$'\t'"${metric}"'$' "$COORD_ACTIVE_FILE" 2>/dev/null; then
+    printf "%s\t%s\t%s\n" "$node" "$pid" "$metric" >> "$COORD_ACTIVE_FILE"
+  fi
+}
+
+coord_remove_active() {
+  local node="$1" pid="$2" metric="$3" tmp=""
+  tmp="$(mktemp)"
+  [ -f "$COORD_ACTIVE_FILE" ] && grep -v "^${node}"$'\t'"${pid}"$'\t'"${metric}"'$' "$COORD_ACTIVE_FILE" > "$tmp" || true
+  mv "$tmp" "$COORD_ACTIVE_FILE"
+}
+
+coord_set_heartbeat() {
+  local node="$1" active="$2" tmp=""
+  tmp="$(mktemp)"
+  [ -f "$COORD_HEARTBEAT_FILE" ] && grep -v "^${node}"$'\t' "$COORD_HEARTBEAT_FILE" > "$tmp" || true
+  printf "%s\t%s\t%s\n" "$node" "$active" "$(date +%s)" >> "$tmp"
+  mv "$tmp" "$COORD_HEARTBEAT_FILE"
+}
+
+render_table() {
+  python3 - "$COORD_ROWS_FILE" "$COORD_ACTIVE_FILE" "$COORD_RESULTS_FILE" "$COORD_HEARTBEAT_FILE" "$ECOFLOC_METRICS" "$FULL" "$CMD" <<'PY'
+import os, re, sys, time
+from collections import OrderedDict
+rows_file, active_file, results_file, heartbeat_file, metrics_raw, full_raw, cmd_mode = sys.argv[1:8]
+enabled_metrics={m.strip().lower() for m in metrics_raw.split(',') if m.strip()}
+METRICS=["cpu","ram","sd","nic","gpu"]
+VALUE_RE=re.compile(r"^\s*([0-9.]+|\?)W/([0-9.]+|\?)J\s*$")
+NODE_W=12; PIDS_W=12; SCRIPT_W=18; FUNC_W=16; METRIC_W=12; TOTAL_W=10
+
+def fit(v,w):
+    v=str(v)
+    return v if len(v)<=w else v[:max(w-1,0)]+'…'
+def base(p): return os.path.basename(p.rstrip())
+def tokens(cmd): return cmd.split()
+def clean(v): return v.strip().strip('"').strip("'")
+def extract_script(cmd):
+    ts=tokens(cmd)
+    return base(ts[1]) if len(ts)>=2 and ts[1].startswith('/app/') else '-'
+def extract_function(cmd):
+    ts=tokens(cmd)
+    for i,tok in enumerate(ts):
+        if tok=='--function' and i+1<len(ts): return clean(ts[i+1])
+        if tok.startswith('--function='): return clean(tok.split('=',1)[1])
+    m=re.search(r"--function(?:=|\s+)([^ ]+)",cmd)
+    return clean(m.group(1)) if m else '-'
+def parse_metric(v):
+    m=VALUE_RE.match(str(v))
+    if not m: return 0.0,0.0,False
+    p,e=m.groups(); return (0.0 if p=='?' else float(p), 0.0 if e=='?' else float(e), True)
+def fmt_metric(p,e,c): return '-' if c<=0 else f"{p:.2f}W/{e:.2f}J"
+def fmt_energy(e,c): return '-' if c<=0 else f"{e:.2f}J"
+def spinner(): return ["|","/","-","\\"][int(time.time()*4)%4]+' measuring'
+
+rows=[]
+try: rows=open(rows_file,encoding='utf-8').read().splitlines()
+except FileNotFoundError: pass
+active=set()
+try:
+    for line in open(active_file,encoding='utf-8'):
+        parts=line.rstrip('\n').split('\t')
+        if len(parts)>=3: active.add(tuple(parts[:3]))
+except FileNotFoundError: pass
+results={}
+try:
+    for line in open(results_file,encoding='utf-8'):
+        parts=line.rstrip('\n').split('\t',3)
+        if len(parts)==4:
+            node,pid,metric,value=parts
+            results[(node,pid,metric)] = value
+except FileNotFoundError: pass
+heartbeats={}
+try:
+    for line in open(heartbeat_file,encoding='utf-8'):
+        parts=line.rstrip('\n').split('\t')
+        if len(parts)>=3: heartbeats[parts[0]]=(parts[1],parts[2])
+except FileNotFoundError: pass
+
+print('Cluster EcoFloc PID monitoring. Press Ctrl+C to stop.' if cmd_mode=='ecofloc' else 'Cluster Python PID scan.')
+if heartbeats:
+    hb=[]
+    now=int(time.time())
+    for node,(count,ts) in sorted(heartbeats.items()):
+        age=now-int(ts)
+        hb.append(f"{node}: active={count}, {age}s ago")
+    print('Agents: '+ ' | '.join(hb))
+print()
+
+groups=OrderedDict()
+for r in rows:
+    if not r.strip(): continue
+    parts=r.split('\t',2)
+    if len(parts)!=3: continue
+    node,pid,pcmd=parts
+    script=extract_script(pcmd); func=extract_function(pcmd)
+    key=(node,script,func)
+    groups.setdefault(key, {"node":node,"pids":[],"script":script,"function":func,"cmds":[]})
+    if pid not in groups[key]['pids']: groups[key]['pids'].append(pid)
+    groups[key]['cmds'].append(pcmd)
+
+if full_raw.lower()=='true' and cmd_mode=='get':
+    for g in groups.values():
+        for pid,pcmd in zip(g['pids'], g['cmds']):
+            print(f"{g['node']}\t{pid}\t{pcmd}")
+    sys.exit(0)
+
+metric_cols=[m for m in METRICS if m in enabled_metrics]
+headers=["NODE","PIDS","SCRIPT","FUNCTION"] + [m.upper() for m in metric_cols] + ["TOTAL"]
+widths=[NODE_W,PIDS_W,SCRIPT_W,FUNC_W] + [METRIC_W for _ in metric_cols] + [TOTAL_W]
+print(' | '.join(f"{h:<{w}}" for h,w in zip(headers,widths)))
+print('-+-'.join('-'*w for w in widths))
+col_p={m:0.0 for m in METRICS}; col_e={m:0.0 for m in METRICS}; col_c={m:0 for m in METRICS}; col_a={m:False for m in METRICS}
+grand_e=0.0; grand_c=0; grand_a=False
+
+def aggregate(node,pids,metric):
+    if metric not in enabled_metrics: return '-',0.0,0.0,0,False
+    vals=[]; act=False
+    for pid in pids:
+        if (node,pid,metric) in active: act=True
+        if (node,pid,metric) in results: vals.append(results[(node,pid,metric)])
+    tp=te=0.0; vc=0; statuses=[]
+    for v in vals:
+        p,e,valid=parse_metric(v)
+        if valid: tp+=p; te+=e; vc+=1
+        else: statuses.append(v)
+    if act: disp=spinner()
+    elif vc>0: disp=fmt_metric(tp,te,vc)
+    elif statuses:
+        u=sorted(set(statuses)); disp=u[0] if len(u)==1 else 'PARTIAL'
+    else: disp='WAIT' if cmd_mode=='ecofloc' else '-'
+    return disp,tp,te,vc,act
+
+for g in groups.values():
+    node=g['node']; pids=g['pids']; row_e=0.0; row_c=0; row_a=False; mvals={}
+    for m in METRICS:
+        disp,p,e,c,a=aggregate(node,pids,m)
+        mvals[m]=disp
+        if c>0:
+            row_e+=e; row_c+=c; col_p[m]+=p; col_e[m]+=e; col_c[m]+=c; grand_e+=e; grand_c+=c
+        if a: row_a=True; col_a[m]=True; grand_a=True
+    vals=[node, ','.join(pids), g['script'], g['function']] + [mvals[m] for m in metric_cols] + [spinner() if row_a else fmt_energy(row_e,row_c)]
+    print(' | '.join(f"{fit(v,w):<{w}}" for v,w in zip(vals,widths)))
+print('-+-'.join('-'*w for w in widths))
+def ctot(m): return spinner() if col_a[m] else fmt_metric(col_p[m],col_e[m],col_c[m])
+vals=['TOTAL','-','-','-'] + [ctot(m) for m in metric_cols] + [spinner() if grand_a else fmt_energy(grand_e,grand_c)]
+print(' | '.join(f"{fit(v,w):<{w}}" for v,w in zip(vals,widths)))
+PY
+}
+
+coord_render_frame() {
+  local frame=""
+  frame="$(mktemp)"
+  render_table > "$frame"
+  render_file_in_place "$frame"
+  rm -f "$frame"
+}
+
+handle_event_line() {
+  local line="$1"
+  local type="" node="" pid="" metric="" value="" cmd_line="" active=""
+  type="${line%%$'\t'*}"
+  case "$type" in
+    ROW)
+      IFS=$'\t' read -r _ node pid cmd_line <<< "$line"
+      [ -n "${node:-}" ] && [ -n "${pid:-}" ] && coord_append_row "$node" "$pid" "$cmd_line"
+      ;;
+    ACTIVE)
+      IFS=$'\t' read -r _ node pid metric <<< "$line"
+      [ -n "${node:-}" ] && coord_add_active "$node" "$pid" "$metric"
+      ;;
+    RESULT)
+      IFS=$'\t' read -r _ node pid metric value <<< "$line"
+      [ -n "${node:-}" ] && coord_set_result "$node" "$pid" "$metric" "$value"
+      ;;
+    HEARTBEAT)
+      IFS=$'\t' read -r _ node active <<< "$line"
+      [ -n "${node:-}" ] && coord_set_heartbeat "$node" "$active"
+      ;;
+  esac
+}
+
+coord_main() {
+  COORD_ROWS_FILE="$(mktemp)"
+  COORD_RESULTS_FILE="$(mktemp)"
+  COORD_ACTIVE_FILE="$(mktemp)"
+  COORD_HEARTBEAT_FILE="$(mktemp)"
+  COORD_FIFO="$(mktemp -u)"
+  mkfifo "$COORD_FIFO"
+
+  trap 'coord_cleanup 0' EXIT
+  trap 'coord_cleanup 130' INT TERM HUP QUIT TSTP
+
+  local agent_mode="watch"
+  [ "$CMD" = "get" ] && agent_mode="get"
+
+  echo "[coordinator] process_cluster_v4_compact starting with ${#NODES[@]} configured node(s)" >&2
+  if [ "${#NODES[@]}" -eq 0 ]; then
+    echo "[coordinator] no nodes configured; using built-in defaults" >&2
+    NODES=("server2-labo=local:execute" "fedora=ssh:kevinoulai@10.0.8.34:direct")
+  fi
+
+  for spec in "${NODES[@]}"; do
+    if [ -z "${spec:-}" ]; then
+      echo "[coordinator] skipped empty node spec" >&2
+      continue
+    fi
+    echo "[coordinator] node spec: $spec" >&2
+    start_agent_for_node "$spec" "$agent_mode"
   done
 
-  render_ecofloc_frame "done"
-  cleanup 0
+  if [ "$WATCH" = true ] || [ "$CMD" = "ecofloc" ]; then
+    screen_init
+  fi
+
+  local last_render_ns="0" now_ns="0"
+
+  if [ "$CMD" = "get" ]; then
+    while IFS= read -r line; do
+      handle_event_line "$line"
+    done < "$COORD_FIFO"
+    render_table
+    coord_cleanup 0
+  fi
+
+  while IFS= read -r line; do
+    handle_event_line "$line"
+    now_ns="$(date +%s%N)"
+    if [ "$last_render_ns" = "0" ]; then
+      coord_render_frame
+      last_render_ns="$now_ns"
+    else
+      if python3 - "$last_render_ns" "$now_ns" "$WATCH_INTERVAL" <<'PY'
+import sys
+last_ns=int(sys.argv[1]); now_ns=int(sys.argv[2]); interval=float(sys.argv[3])
+sys.exit(0 if (now_ns-last_ns)/1_000_000_000 >= interval else 1)
+PY
+      then
+        coord_render_frame
+        last_render_ns="$now_ns"
+      fi
+    fi
+  done < "$COORD_FIFO"
 }
 
-render_process_watch_frame() {
-  local frame_file=""
+# -----------------------------------------------------------------------------
+# Argument parsing
+# -----------------------------------------------------------------------------
 
-  frame_file="$(mktemp)"
-
-  {
-    echo "Watching Argo workflow Python processes. Press Ctrl+C to stop."
-    echo
-    QUIET_HEADER=true run_get_once || true
-  } > "$frame_file"
-
-  render_file_in_place "$frame_file"
-  rm -f "$frame_file"
-}
-
-run_get_watch() {
-  trap 'restore_terminal; exit 0' EXIT INT TERM HUP QUIT TSTP
-
-  screen_init
-
-  while true; do
-    render_process_watch_frame
-    sleep "$WATCH_INTERVAL"
-  done
-}
+if [ "${1:-}" = "__agent__" ]; then
+  agent_main "$@"
+fi
 
 if [ $# -eq 0 ]; then
   print_help
   exit 1
 fi
 
-FULL=false
-WATCH=false
-CMD=""
-
 while [ $# -gt 0 ]; do
   case "$1" in
-    --full)
-      FULL=true
-      shift
-      ;;
-
-    --watch)
-      WATCH=true
-      shift
-      ;;
-
-    --interval)
-      if [ $# -lt 2 ]; then
-        echo "Missing value for --interval"
-        exit 1
+    --full) FULL=true; shift ;;
+    --watch) WATCH=true; shift ;;
+    --interval) WATCH_INTERVAL="$2"; shift 2 ;;
+    --scan-interval) SCAN_INTERVAL="$2"; shift 2 ;;
+    --ecofloc-interval) ECOFLOC_INTERVAL="$2"; shift 2 ;;
+    --metrics) ECOFLOC_METRICS="$2"; shift 2 ;;
+    --export) ECOFLOC_EXPORT_PATH="$2"; shift 2 ;;
+    --node)
+      if [ "$CUSTOM_NODES" = false ]; then
+        NODES=()
+        CUSTOM_NODES=true
       fi
-      WATCH_INTERVAL="$2"
+      NODES+=("$2")
       shift 2
       ;;
-
-    --scan-interval)
-      if [ $# -lt 2 ]; then
-        echo "Missing value for --scan-interval"
-        exit 1
-      fi
-      SCAN_INTERVAL="$2"
-      shift 2
-      ;;
-
-    --ecofloc-interval)
-      if [ $# -lt 2 ]; then
-        echo "Missing value for --ecofloc-interval"
-        exit 1
-      fi
-      ECOFLOC_INTERVAL="$2"
-      shift 2
-      ;;
-
-    --metrics)
-      if [ $# -lt 2 ]; then
-        echo "Missing value for --metrics"
-        exit 1
-      fi
-      ECOFLOC_METRICS="$2"
-      shift 2
-      ;;
-
-    --export)
-      if [ $# -lt 2 ]; then
-        echo "Missing value for --export"
-        exit 1
-      fi
-      ECOFLOC_EXPORT_PATH="$2"
-      shift 2
-      ;;
-
-    -h|--help)
-      CMD="--help"
-      shift
-      ;;
-
-    *)
-      if [ -z "$CMD" ]; then
-        CMD="$1"
-      fi
-      shift
-      ;;
+    -h|--help) print_help; exit 0 ;;
+    get|ecofloc) CMD="$1"; shift ;;
+    *) echo "Unknown argument: $1" >&2; print_help; exit 1 ;;
   esac
 done
 
 case "$CMD" in
-  get)
-    if [ "$WATCH" = true ]; then
-      run_get_watch
-    else
-      run_get_once
-    fi
-    ;;
-
-  ecofloc)
-    if [ "$WATCH" = true ]; then
-      run_ecofloc_watch
-    else
-      run_ecofloc_once
-    fi
-    ;;
-
-  --help)
-    print_help
-    exit 0
-    ;;
-
-  "")
-    print_help
-    exit 1
-    ;;
-
-  *)
-    echo "Unknown command: $CMD"
-    print_help
-    exit 1
-    ;;
+  get|ecofloc) coord_main ;;
+  "") print_help; exit 1 ;;
+  *) echo "Unknown command: $CMD" >&2; print_help; exit 1 ;;
 esac
