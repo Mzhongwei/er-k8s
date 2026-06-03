@@ -10,6 +10,10 @@ This repository contains a Kubernetes and Argo Workflows deployment of the Energ
 - Tracks CodeCarbon emissions per pod and aggregates them into a shared CSV report.
 - Fetches the report back to your local machine with `erctl fetch-report`.
 
+Pipeline schema illustrating the main components and data flow:
+
+![Pipeline Schema](architecture.png)
+
 ## Repository Map
 
 - `code/Energy-Aware-Entity-Resolution/` - main EAER Python project.

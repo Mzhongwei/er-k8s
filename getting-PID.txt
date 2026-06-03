@@ -1,4 +1,0 @@
-In local:
-
-From the machine : Can access only the VM process
-Through ssh : can access python processes. command : minikube ssh -p domolandes -- "ps -ef" (clean output with grep /opt/venv/bin/python)
