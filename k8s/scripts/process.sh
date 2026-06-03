@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # process_cluster_v4_compact.sh
-# VERSION: v4-compact-no-remote-sudo-prompt
+# VERSION: v4-compact-no-remote-sudo-prompt-v3
 # Run from one machine (for example server2-labo) and collect EcoFloc PID
 # measurements from multiple Kubernetes nodes.
 #
@@ -220,9 +220,12 @@ agent_build_ecofloc_command() {
 }
 
 agent_sudo_validate() {
+  # In direct mode we cannot use "ecofloc --help" because EcoFloc may not
+  # support that option. The real validation is done once in
+  # agent_start_sudo_keepalive() with a short PID measurement.
+  # Per-session failures will be captured in the EcoFloc log.
   if [ "$agent_sudo_mode" = "direct" ]; then
-    sudo -n "$AGENT_ECOFLOC_DIRECT_BIN" --help >/dev/null 2>&1
-    return $?
+    return 0
   fi
 
   if [ -n "$AGENT_SUDO_PASSWORD" ]; then
@@ -319,13 +322,15 @@ agent_start_sudo_keepalive() {
 
   kill "$test_pid" 2>/dev/null || true
 
-  (
-    while true; do
-      agent_sudo_validate || exit 0
-      sleep 60
-    done
-  ) &
-  AGENT_SUDO_KEEPALIVE_PID="$!"
+  if [ "$agent_sudo_mode" = "execute" ]; then
+    (
+      while true; do
+        agent_sudo_validate || exit 0
+        sleep 60
+      done
+    ) &
+    AGENT_SUDO_KEEPALIVE_PID="$!"
+  fi
 }
 
 agent_stop_sudo_keepalive() {
@@ -753,7 +758,7 @@ coord_set_heartbeat() {
 }
 
 render_table() {
-  python3 - "$COORD_ROWS_FILE" "$COORD_ACTIVE_FILE" "$COORD_RESULTS_FILE" "$COORD_HEARTBEAT_FILE" "$ECOFLOC_METRICS" "$FULL" "$CMD" <<'PY'
+  python3 - "$COORD_ROWS_FILE" "$COORD_ACTIVE_FILE" "$COORD_RESULTS_FILE" "$COORD_HEARTBEAT_FILE" "$ECOFLOC_METRICS" "$FULL" "$CMD" 2>/dev/null <<'PY'
 import os, re, sys, time
 from collections import OrderedDict
 rows_file, active_file, results_file, heartbeat_file, metrics_raw, full_raw, cmd_mode = sys.argv[1:8]
@@ -927,7 +932,7 @@ coord_main() {
   local agent_mode="watch"
   [ "$CMD" = "get" ] && agent_mode="get"
 
-  echo "[coordinator] process_cluster_v4_compact_noremote_sudo_v2 starting with ${#NODES[@]} configured node(s)" >&2
+  echo "[coordinator] process_cluster_v4_compact_noremote_sudo_v3 starting with ${#NODES[@]} configured node(s)" >&2
   if [ "${#NODES[@]}" -eq 0 ]; then
     echo "[coordinator] no nodes configured; using built-in defaults" >&2
     NODES=("server2-labo=local:execute" "fedora=ssh:kevinoulai@10.0.8.34:direct")
@@ -946,7 +951,9 @@ coord_main() {
     screen_init
   fi
 
-  local last_render_ns="0" now_ns="0"
+  local last_render_ms="0" now_ms="0" interval_ms=""
+  interval_ms="$(awk -v x="$WATCH_INTERVAL" 'BEGIN { printf "%d", x * 1000 }')"
+  [ "$interval_ms" -le 0 ] 2>/dev/null && interval_ms="500"
 
   if [ "$CMD" = "get" ]; then
     while IFS= read -r line; do
@@ -958,20 +965,10 @@ coord_main() {
 
   while IFS= read -r line; do
     handle_event_line "$line"
-    now_ns="$(date +%s%N)"
-    if [ "$last_render_ns" = "0" ]; then
+    now_ms="$(date +%s%3N)"
+    if [ "$last_render_ms" = "0" ] || [ $((now_ms - last_render_ms)) -ge "$interval_ms" ]; then
       coord_render_frame
-      last_render_ns="$now_ns"
-    else
-      if python3 - "$last_render_ns" "$now_ns" "$WATCH_INTERVAL" <<'PY'
-import sys
-last_ns=int(sys.argv[1]); now_ns=int(sys.argv[2]); interval=float(sys.argv[3])
-sys.exit(0 if (now_ns-last_ns)/1_000_000_000 >= interval else 1)
-PY
-      then
-        coord_render_frame
-        last_render_ns="$now_ns"
-      fi
+      last_render_ms="$now_ms"
     fi
   done < "$COORD_FIFO"
 }

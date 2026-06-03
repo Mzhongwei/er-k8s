@@ -41,8 +41,16 @@ spec:
 
   templates:
     - name: normalization
-      nodeSelector:
-        kubernetes.io/hostname: fedora
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - fedora
       inputs:
         parameters:
         - name: mode
@@ -269,8 +277,16 @@ spec:
           path: /tmp/matching_pairs.json
 
     - name: cg-feature-extraction
-      nodeSelector:
-        kubernetes.io/hostname: fedora
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - fedora
       inputs:
         parameters:
         - name: mode
@@ -340,8 +356,16 @@ spec:
           path: /tmp/cg_feature
 
     - name: feature-index
-      nodeSelector:
-        kubernetes.io/hostname: fedora
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - fedora
       inputs:
         artifacts:
         - name: cg_feature
@@ -416,8 +440,16 @@ spec:
           path: /tmp/candidate_pairs.json
 
     - name: prediction
-      nodeSelector:
-        kubernetes.io/hostname: fedora
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - fedora
       inputs:
         parameters:
         - name: mode
@@ -582,8 +614,16 @@ spec:
             path: /tmp/bert_output
 
     - name: pipeline-init
-      nodeSelector:
-        kubernetes.io/hostname: fedora
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - fedora
       inputs:
         parameters:
         - name: fallback_mode
