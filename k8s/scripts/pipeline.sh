@@ -52,6 +52,8 @@ start_pipeline() {
     kubectl apply -n argo -f $PVC_MANIFESTS
     kubectl patch pvc pipeline-kafka-data-claim -n argo \
         -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
+    kubectl patch pvc pipeline-data-claim -n argo \
+        -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
     $SCRIPT_DIR/erctl.sh dataset
     nano $CONFIG_PATH
     kubectl get cm -n argo -o name | grep '^configmap/eaer-' | xargs kubectl delete -n argo

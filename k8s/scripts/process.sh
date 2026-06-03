@@ -689,7 +689,7 @@ start_agent_for_node() {
       unset sudo_password
     elif [ "$mode" != "get" ] && [ "$sudo_mode" = "direct" ]; then
       echo "[coordinator] validating remote direct sudo for $target without password..." >&2
-      if ! ssh -o ConnectTimeout=5 "$target" "sudo -n /usr/local/bin/ecofloc --help >/dev/null" 2> "$agent_err"; then
+      if ! ssh -o ConnectTimeout=5 "$target" 'tmp_log="/tmp/erctl-ecofloc-remote-sudo-test.log"; sleep 10 & test_pid=$!; sudo -n /usr/local/bin/ecofloc --cpu -p "$test_pid" -i 1000 -t 1 > "$tmp_log" 2>&1; rc=$?; kill "$test_pid" 2>/dev/null || true; if [ "$rc" -ne 0 ]; then cat "$tmp_log" >&2; fi; exit "$rc"' 2> "$agent_err"; then
         echo "[coordinator] remote direct sudo validation failed for $target. Check sudoers for /usr/local/bin/ecofloc. See $agent_err" >&2
         return 1
       fi
@@ -927,7 +927,7 @@ coord_main() {
   local agent_mode="watch"
   [ "$CMD" = "get" ] && agent_mode="get"
 
-  echo "[coordinator] process_cluster_v4_compact starting with ${#NODES[@]} configured node(s)" >&2
+  echo "[coordinator] process_cluster_v4_compact_noremote_sudo_v2 starting with ${#NODES[@]} configured node(s)" >&2
   if [ "${#NODES[@]}" -eq 0 ]; then
     echo "[coordinator] no nodes configured; using built-in defaults" >&2
     NODES=("server2-labo=local:execute" "fedora=ssh:kevinoulai@10.0.8.34:direct")
