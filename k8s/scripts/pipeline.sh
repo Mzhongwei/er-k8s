@@ -50,10 +50,8 @@ start_pipeline() {
     timeout 5 kubectl delete pvc -n argo --all || true
     timeout 5 kubectl get po -n argo -o name | grep '^pod/kafka-server' | xargs kubectl delete -n argo || true
     kubectl apply -n argo -f $PVC_MANIFESTS
-    for pvc in pipeline-kafka-data-claim pipeline-data-claim; do
-        kubectl patch pvc "$pvc" -n argo \
-            -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
-    done
+    kubectl patch pvc pipeline-kafka-data-claim -n argo \
+        -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
     $SCRIPT_DIR/erctl.sh dataset
     nano $CONFIG_PATH
     kubectl get cm -n argo -o name | grep '^configmap/eaer-' | xargs kubectl delete -n argo
