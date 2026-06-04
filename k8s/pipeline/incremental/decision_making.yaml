@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: prediction
+  name: decision-making
 spec:
   affinity:
     nodeAffinity:

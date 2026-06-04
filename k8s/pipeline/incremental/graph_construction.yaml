@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: graph
+  name: graph-construction
 spec:
   nodeSelector:
     kubernetes.io/hostname: server2-labo

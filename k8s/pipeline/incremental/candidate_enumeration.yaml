@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: feature-index
+  name: candidate-enumeration
 spec:
   affinity:
     nodeAffinity:
