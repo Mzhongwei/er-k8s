@@ -72,6 +72,7 @@ spec:
                 operator: NotIn
                 values:
                   - matis-asus-expertbook-b1500ceaey-b1500ceae
+                  - server1-labo
   restartPolicy: Never
   containers:
   - name: ${SYNC_POD}
