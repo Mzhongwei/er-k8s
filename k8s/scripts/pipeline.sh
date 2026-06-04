@@ -90,19 +90,10 @@ start_pipeline() {
     kubectl delete cm -n "$NAMESPACE" er-pipeline-config || true
     "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
 
-    local workflow_name
     if [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
-        argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH"
-        workflow_name="$(latest_pipeline_workflow)"
-        if [ -z "$workflow_name" ]; then
-            echo "Failed to submit pipeline workflow."
-            exit 1
-        fi
+        argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" --watch
     fi
     if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
-        if [ -n "$workflow_name" ]; then
-            argo watch -n "$NAMESPACE" "$workflow_name"
-        fi
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED"
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
