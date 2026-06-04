@@ -95,11 +95,11 @@ start_pipeline() {
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
         mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
         if [[ "$config_mode" == *evaluation* ]]; then
+            echo "Waiting for decision-making to complete before starting evaluation..."
             while true; do
                 if kubectl get po -n "$NAMESPACE" -l app=decision-making -o jsonpath='{.items[*].status.phase}' | grep -q "Succeeded"; then
                     break
                 fi
-                echo "Waiting for decision-making to complete before starting evaluation..."
                 sleep 5
             done
             kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
