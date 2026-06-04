@@ -68,6 +68,7 @@ start_pipeline() {
     config_path="$PIPELINE_CONFIG_DIR/config-${PIPELINE_MODE}.yaml"
 
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs kubectl delete -n "$NAMESPACE" || true
+        kubectl delete -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
     timeout 5 kubectl delete pv --all || true
     timeout 5 kubectl delete pvc -n "$NAMESPACE" --all || true
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/kafka-server' | xargs kubectl delete -n "$NAMESPACE" || true
@@ -90,7 +91,6 @@ start_pipeline() {
     "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
 
     if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
-        kubectl delete -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
     elif [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
         argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH"
