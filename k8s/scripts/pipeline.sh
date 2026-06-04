@@ -48,10 +48,18 @@ latest_pipeline_workflow() {
         | cut -f1
 }
 
-wait_for_deployment_available() {
-    local deployment_name="$1"
+wait_for_pod_completion() {
+    local app_label="$1"
+    local pod_name=""
 
-    kubectl wait -n "$NAMESPACE" --for=condition=available "deployment/$deployment_name" --timeout=5m
+    while [ -z "$pod_name" ]; do
+        pod_name="$(kubectl get pod -n "$NAMESPACE" -l "app=$app_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+        if [ -z "$pod_name" ]; then
+            sleep 2
+        fi
+    done
+
+    kubectl wait -n "$NAMESPACE" --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod_name" --timeout=30m
 }
 
 extract_mode_from_config() {
@@ -104,10 +112,10 @@ start_pipeline() {
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
         if [[ "$config_mode" == *evaluation* ]]; then
-            echo "Waiting for decision-making deployment to become available before starting evaluation..."
-            wait_for_deployment_available decision-making
+            echo "Waiting for decision-making pod to complete before starting evaluation..."
+            wait_for_pod_completion decision-making
             kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
-            wait_for_deployment_available evaluation
+            wait_for_pod_completion evaluation
             kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]'
         fi
     else
