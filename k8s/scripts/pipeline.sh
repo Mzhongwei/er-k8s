@@ -90,7 +90,27 @@ start_pipeline() {
     kubectl delete cm -n "$NAMESPACE" er-pipeline-config || true
     "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
 
+    local workflow_name
+    if [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
+        argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH"
+        # Get the workflow name of the submitted pipeline
+        workflow_name="$(latest_pipeline_workflow)"
+        if [ -z "$workflow_name" ]; then
+            echo "Failed to submit pipeline workflow."
+            exit 1
+        fi
+    fi
     if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
+        # If argo pipeline is running, wait for it to complete before starting incremental pipeline
+        if [ -n "$workflow_name" ]; then
+            echo "Waiting for batch pipeline to complete before starting incremental pipeline..."
+            while true; do
+                if argo get -n "$NAMESPACE" "$workflow_name" -o jsonpath='{.status.phase}' | grep -q "Succeeded"; then
+                    break
+                fi                
+                sleep 5
+            done
+        fi
         mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED"
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
         mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
@@ -111,8 +131,6 @@ start_pipeline() {
             done
             kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]'
         fi
-    elif [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
-        argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH"
     else
         echo "Unsupported mode in $config_path: $config_mode"
         exit 1
