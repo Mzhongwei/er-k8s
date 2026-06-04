@@ -3,6 +3,7 @@ kind: Pod
 metadata:
   name: kafka-consumer
 spec:
+  restartPolicy: OnFailure
   nodeSelector:
     kubernetes.io/hostname: server2-labo
   serviceAccountName: argo

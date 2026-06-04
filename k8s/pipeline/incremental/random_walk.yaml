@@ -3,6 +3,7 @@ kind: Pod
 metadata:
   name: random-walk
 spec:
+  restartPolicy: OnFailure
   nodeSelector:
     kubernetes.io/hostname: server2-labo
   containers:

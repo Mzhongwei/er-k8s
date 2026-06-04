@@ -3,6 +3,7 @@ kind: Pod
 metadata:
   name: feature-index-construction
 spec:
+  restartPolicy: OnFailure
   affinity:
     nodeAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:

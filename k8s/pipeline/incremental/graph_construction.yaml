@@ -3,6 +3,7 @@ kind: Pod
 metadata:
   name: graph-construction
 spec:
+  restartPolicy: OnFailure
   nodeSelector:
     kubernetes.io/hostname: server2-labo
   containers:

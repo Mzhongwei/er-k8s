@@ -3,6 +3,7 @@ kind: Pod
 metadata:
   name: candidate-enumeration
 spec:
+  restartPolicy: OnFailure
   affinity:
     nodeAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
