@@ -1,75 +1,83 @@
 apiVersion: v1
-kind: Pod
+kind: Deployment
 metadata:
   name: normalization
 spec:
-  restartPolicy: OnFailure
-  affinity:
-    nodeAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 100
-          preference:
-            matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: In
-                values:
-                  - fedora
-  containers:
-    - name: main
-      image: kevinoulai/erctl:normalization
-      imagePullPolicy: Always
-      command: [sh, -c]
-      args:
-        - |
-          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode embedding-inference-inc --function normalization --raw_data Data_example/fodors_zagats-tableA.csv --data_source_A Data_example/fodors_zagats-tableA.csv --data_source_B Data_example/fodors_zagats-tableB.csv
-      env:
-        - name: CODECARBON_REPORT_PATH
-          value: /app/reports/codecarbon/result/emissions.csv
-      resources:
-        requests:
-          cpu: 100m
-          memory: 256Mi
-        limits:
-          cpu: 500m
-          memory: 512Mi
-      volumeMounts:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: normalization
+  template:
+    metadata:
+      labels:
+        app: normalization
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - fedora
+      containers:
+        - name: main
+          image: kevinoulai/erctl:normalization
+          imagePullPolicy: Always
+          command: [sh, -c]
+          args:
+            - |
+              /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode embedding-inference-inc --function normalization --raw_data Data_example/fodors_zagats-tableA.csv --data_source_A Data_example/fodors_zagats-tableA.csv --data_source_B Data_example/fodors_zagats-tableB.csv
+          env:
+            - name: CODECARBON_REPORT_PATH
+              value: /app/reports/codecarbon/result/emissions.csv
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: pipeline-config
+              mountPath: /app/config/examples/config-embedding.yaml
+              subPath: config.yaml
+            - name: normalization-distribution
+              mountPath: /app/distributions/normalization_distribution.py
+              subPath: normalization_distribution.py
+            - name: pipeline-data
+              mountPath: /app/Data_example
+            - name: pipeline-buffer-data
+              mountPath: /app/data/buffers
+            - name: pipeline-reports
+              mountPath: /app/reports
+            - name: pipeline-buffer-utils
+              mountPath: /app/utils/buffers.py
+              subPath: buffers.py
+            - name: codecarbon
+              mountPath: /app/utils/codecarbon.py
+              subPath: codecarbon.py
+      volumes:
         - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
+          configMap:
+            name: er-pipeline-config
         - name: normalization-distribution
-          mountPath: /app/distributions/normalization_distribution.py
-          subPath: normalization_distribution.py
+          configMap:
+            name: eaer-normalization-distribution
         - name: pipeline-data
-          mountPath: /app/Data_example
+          persistentVolumeClaim:
+            claimName: pipeline-data-claim
         - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
+          persistentVolumeClaim:
+            claimName: pipeline-buffer-data-claim
         - name: pipeline-reports
-          mountPath: /app/reports
+          persistentVolumeClaim:
+            claimName: pipeline-reports-claim
         - name: pipeline-buffer-utils
-          mountPath: /app/utils/buffers.py
-          subPath: buffers.py
+          configMap:
+            name: eaer-kafka-buffers
         - name: codecarbon
-          mountPath: /app/utils/codecarbon.py
-          subPath: codecarbon.py
-  volumes:
-    - name: pipeline-config
-      configMap:
-        name: er-pipeline-config
-    - name: normalization-distribution
-      configMap:
-        name: eaer-normalization-distribution
-    - name: pipeline-data
-      persistentVolumeClaim:
-        claimName: pipeline-data-claim
-    - name: pipeline-buffer-data
-      persistentVolumeClaim:
-        claimName: pipeline-buffer-data-claim
-    - name: pipeline-reports
-      persistentVolumeClaim:
-        claimName: pipeline-reports-claim
-    - name: pipeline-buffer-utils
-      configMap:
-        name: eaer-kafka-buffers
-    - name: codecarbon
-      configMap:
-        name: eaer-codecarbon
+          configMap:
+            name: eaer-codecarbon
