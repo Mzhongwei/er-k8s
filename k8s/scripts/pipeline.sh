@@ -103,9 +103,9 @@ start_pipeline() {
         if [ -n "$workflow_name" ]; then
             argo watch -n "$NAMESPACE" "$workflow_name"
         fi
-        mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED"
+        mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED"
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
-        mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
+        mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
         if [[ "$config_mode" == *evaluation* ]]; then
             echo "Waiting for decision-making to complete before starting evaluation..."
             while true; do
@@ -114,7 +114,7 @@ start_pipeline() {
                 fi
                 sleep 5
             done
-            kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
+            kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
             while true; do
                 if kubectl get po -n "$NAMESPACE" -l app=evaluation -o jsonpath='{.items[*].status.phase}' | grep -q "Succeeded"; then
                     break
