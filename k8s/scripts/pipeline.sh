@@ -91,7 +91,9 @@ start_pipeline() {
     "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
 
     if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
+        mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED"
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
+        mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
     elif [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
         argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH"
     else
