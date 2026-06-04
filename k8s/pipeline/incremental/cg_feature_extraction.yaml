@@ -1,17 +1,17 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: cg-feature-extraction
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: cg-feature-extraction
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
   template:
     metadata:
       labels:
         app: cg-feature-extraction
     spec:
+      restartPolicy: OnFailure
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

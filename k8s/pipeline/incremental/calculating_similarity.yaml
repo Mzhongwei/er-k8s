@@ -1,17 +1,17 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: calculating-similarity
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: calculating-similarity
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
   template:
     metadata:
       labels:
         app: calculating-similarity
     spec:
+      restartPolicy: OnFailure
       nodeSelector:
         kubernetes.io/hostname: server2-labo
       containers:

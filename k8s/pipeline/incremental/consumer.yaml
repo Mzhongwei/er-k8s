@@ -1,17 +1,17 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: kafka-consumer
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: kafka-consumer
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
   template:
     metadata:
       labels:
         app: kafka-consumer
     spec:
+      restartPolicy: OnFailure
       nodeSelector:
         kubernetes.io/hostname: server2-labo
       serviceAccountName: argo
