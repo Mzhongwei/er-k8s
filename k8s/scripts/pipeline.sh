@@ -48,6 +48,12 @@ latest_pipeline_workflow() {
         | cut -f1
 }
 
+wait_for_deployment_available() {
+    local deployment_name="$1"
+
+    kubectl wait -n "$NAMESPACE" --for=condition=available "deployment/$deployment_name" --timeout=5m
+}
+
 extract_mode_from_config() {
     local config_path="$1"
 
@@ -98,21 +104,11 @@ start_pipeline() {
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
         if [[ "$config_mode" == *evaluation* ]]; then
-            echo "Waiting for decision-making to complete before starting evaluation..."
-            while true; do
-                if kubectl get po -n "$NAMESPACE" -l app=decision-making -o jsonpath='{.items[*].status.phase}' | grep -q "Succeeded"; then
-                    break
-                fi
-                sleep 5
-            done
+            echo "Waiting for decision-making deployment to become available before starting evaluation..."
+            wait_for_deployment_available decision-making
             kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
-            while true; do
-                if kubectl get po -n "$NAMESPACE" -l app=evaluation -o jsonpath='{.items[*].status.phase}' | grep -q "Succeeded"; then
-                    break
-                fi
-                sleep 5
-            done
-            kubectl logs -n "$NAMESPACE" -l app=evaluation | grep -F '[Result]'
+            wait_for_deployment_available evaluation
+            kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]'
         fi
     else
         echo "Unsupported mode in $config_path: $config_mode"
