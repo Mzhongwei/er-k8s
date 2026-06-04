@@ -94,6 +94,16 @@ start_pipeline() {
         mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED"
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
         mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
+        if [[ "$PIPELINE_MODE" == *evaluation* ]]; then
+            while true; do
+                if kubectl get po -n "$NAMESPACE" -l app=decision-making -o jsonpath='{.items[*].status.phase}' | grep -q "Succeeded"; then
+                    break
+                fi
+                echo "Waiting for decision-making to complete before starting evaluation..."
+                sleep 5
+            done
+            kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
+        fi
     elif [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
         argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH"
     else
