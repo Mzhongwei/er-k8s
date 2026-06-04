@@ -103,6 +103,13 @@ start_pipeline() {
                 sleep 5
             done
             kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml"
+            while true; do
+                if kubectl get po -n "$NAMESPACE" -l app=evaluation -o jsonpath='{.items[*].status.phase}' | grep -q "Succeeded"; then
+                    break
+                fi
+                sleep 5
+            done
+            kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]'
         fi
     elif [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
         argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH"
