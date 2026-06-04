@@ -93,7 +93,6 @@ start_pipeline() {
     local workflow_name
     if [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
         argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH"
-        # Get the workflow name of the submitted pipeline
         workflow_name="$(latest_pipeline_workflow)"
         if [ -z "$workflow_name" ]; then
             echo "Failed to submit pipeline workflow."
@@ -101,15 +100,8 @@ start_pipeline() {
         fi
     fi
     if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
-        # If argo pipeline is running, wait for it to complete before starting incremental pipeline
         if [ -n "$workflow_name" ]; then
-            echo "Waiting for batch pipeline to complete before starting incremental pipeline..."
-            while true; do
-                if argo get -n "$NAMESPACE" "$workflow_name" -o jsonpath='{.status.phase}' | grep -q "Succeeded"; then
-                    break
-                fi                
-                sleep 5
-            done
+            argo watch -n "$NAMESPACE" "$workflow_name"
         fi
         mv "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml" "$PIPELINE_INCREMENTAL_DIR/evalutation.yaml.DISABLED"
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
