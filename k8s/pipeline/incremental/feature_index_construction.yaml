@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: feature-index
+spec:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - fedora
+  containers:
+    - name: main
+      image: kevinoulai/erctl:featureindex
+      imagePullPolicy: IfNotPresent
+      command: [/opt/venv/bin/python, /app/distributions/featureindex_candidate.py]
+      args:
+        - --mode
+        - embedding-inference
+        - --function
+        - feature_index_construction
+      env:
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/result/emissions.csv
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: feature-index-distribution
+          mountPath: /app/distributions/featureindex_candidate.py
+          subPath: featureindex_candidate.py
+        - name: pipeline-feature-index-cache
+          mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
+  volumes:
+    - name: pipeline-config
+      configMap:
+        name: er-pipeline-config
+    - name: feature-index-distribution
+      configMap:
+        name: eaer-feature-index
+    - name: pipeline-feature-index-cache
+      persistentVolumeClaim:
+        claimName: pipeline-feature-index-cache-claim
+    - name: pipeline-buffer-utils
+      configMap:
+        name: eaer-kafka-buffers
+    - name: pipeline-buffer-data
+      persistentVolumeClaim:
+        claimName: pipeline-buffer-data-claim
+    - name: pipeline-reports
+      persistentVolumeClaim:
+        claimName: pipeline-reports-claim
+    - name: codecarbon
+      configMap:
+        name: eaer-codecarbon

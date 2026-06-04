@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: embedding
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: server2-labo
+  containers:
+    - name: main
+      image: kevinoulai/erctl:embedding
+      imagePullPolicy: Always
+      command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
+      args:
+        - --mode
+        - embedding-inference
+        - --function
+        - embedding_training
+      env:
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/result/emissions.csv
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: embedding-distribution
+          mountPath: /app/distributions/embedding_calculating.py
+          subPath: embedding_calculating.py
+        - name: pipeline-embedding-model-cache
+          mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
+  volumes:
+    - name: pipeline-config
+      configMap:
+        name: er-pipeline-config
+    - name: embedding-distribution
+      configMap:
+        name: eaer-embedding-calculating
+    - name: pipeline-embedding-model-cache
+      persistentVolumeClaim:
+        claimName: pipeline-embedding-model-cache-claim
+    - name: pipeline-buffer-data
+      persistentVolumeClaim:
+        claimName: pipeline-buffer-data-claim
+    - name: pipeline-buffer-utils
+      configMap:
+        name: eaer-kafka-buffers
+    - name: pipeline-reports
+      persistentVolumeClaim:
+        claimName: pipeline-reports-claim
+    - name: codecarbon
+      configMap:
+        name: eaer-codecarbon

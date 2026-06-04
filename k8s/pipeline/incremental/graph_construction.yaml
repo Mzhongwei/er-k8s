@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: graph
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: server2-labo
+  containers:
+    - name: main
+      image: kevinoulai/erctl:graph
+      imagePullPolicy: Always
+      command: [/opt/venv/bin/python, /app/distributions/graph_randomwalk.py]
+      args:
+        - --mode
+        - embedding-inference
+        - --function
+        - graph_construction
+      env:
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/result/emissions.csv
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: graph-distribution
+          mountPath: /app/distributions/graph_randomwalk.py
+          subPath: graph_randomwalk.py
+        - name: pipeline-graph-cache
+          mountPath: /app/data
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
+  volumes:
+    - name: pipeline-config
+      configMap:
+        name: er-pipeline-config
+    - name: graph-distribution
+      configMap:
+        name: eaer-graph-distribution
+    - name: pipeline-graph-cache
+      persistentVolumeClaim:
+        claimName: pipeline-graph-cache-claim
+    - name: pipeline-buffer-data
+      persistentVolumeClaim:
+        claimName: pipeline-buffer-data-claim
+    - name: pipeline-reports
+      persistentVolumeClaim:
+        claimName: pipeline-reports-claim
+    - name: pipeline-buffer-utils
+      configMap:
+        name: eaer-kafka-buffers
+    - name: codecarbon
+      configMap:
+        name: eaer-codecarbon

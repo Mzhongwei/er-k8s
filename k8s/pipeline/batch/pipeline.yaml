@@ -831,110 +831,6 @@ spec:
             - name: function
               value: evaluation
 
-    - name: embedding-inference-dag
-      inputs:
-        parameters:
-        - name: mode
-      dag:
-        tasks:
-        - name: normalization
-          template: normalization
-          arguments:
-            parameters:
-            - name: raw_data
-              value: '{{workflow.parameters.raw_data}}'
-            - name: data_source_A
-              value: '{{workflow.parameters.data_source_A}}'
-            - name: data_source_B
-              value: '{{workflow.parameters.data_source_B}}'
-            - name: mode
-              value: '{{inputs.parameters.mode}}-inc'
-            - name: function
-              value: normalization
-
-        - name: graph-construction
-          template: graph
-          arguments:
-            parameters:
-            - name: mode
-              value: embedding-inference
-            - name: function
-              value: graph_construction
-
-        - name: random-walk
-          template: graph
-          arguments:
-            parameters:
-            - name: mode
-              value: embedding-inference
-            - name: function
-              value: random_walk
-
-        - name: embedding-training
-          template: embedding
-          arguments:
-            parameters:
-            - name: mode
-              value: embedding-inference
-            - name: function
-              value: embedding_training
-
-        - name: cg-feature-extraction
-          template: cg-feature-extraction
-          arguments:
-            parameters:
-            - name: mode
-              value: embedding-inference
-            - name: function
-              value: cg_feature_extraction
-
-        - name: feature-index-construction
-          template: feature-index
-          arguments:
-            parameters:
-            - name: mode
-              value: embedding-inference
-            - name: function
-              value: feature_index_construction
-
-        - name: candidate-enumeration
-          template: feature-index
-          arguments:
-            parameters:
-            - name: mode
-              value: embedding-inference
-            - name: function
-              value: candidate_enumeration
-
-        - name: calculating-similarity
-          template: embedding
-          arguments:
-            parameters:
-            - name: mode
-              value: embedding-inference
-            - name: function
-              value: calculating_similarity
-
-        - name: decision-making
-          template: prediction
-          arguments:
-            parameters:
-            - name: mode
-              value: embedding-inference
-            - name: function
-              value: decision_making
-
-        - name: evaluation
-          depends: decision-making.Succeeded
-          when: "'{{inputs.parameters.mode}}' =~ '.*evaluation.*'"
-          template: prediction
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: evaluation
-
     - name: main
       dag:
         tasks:
@@ -945,15 +841,6 @@ spec:
             - name: fallback_mode
               value: '{{workflow.parameters.mode}}'
 
-        - name: kafka-producer
-          template: kafka-producer
-          depends: pipeline-init.Succeeded && ( embedding-training.Succeeded || embedding-training.Skipped )
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-
-        - name: kafka-consumer
-          template: kafka-consumer
-          depends: kafka-producer.Daemoned
-
         - name: embedding-training
           depends: pipeline-init.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
@@ -963,18 +850,9 @@ spec:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
 
-        - name: embedding-inference
-          depends: kafka-consumer.Daemoned && ( embedding-training.Succeeded || embedding-training.Skipped )
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: embedding-inference-dag
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-
         - name: evaluation
-          depends: pipeline-init.Succeeded && embedding-training.Skipped && (kafka-consumer.Succeeded || kafka-consumer.Omitted)
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*evaluation.*' && !('{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*')"
+          depends: pipeline-init.Succeeded && embedding-training.Skipped)
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*')"
           template: prediction
           arguments:
             parameters:

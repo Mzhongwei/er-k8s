@@ -16,7 +16,7 @@ LOCAL_BERT_DATA_DIR="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_exampl
 GROUND_TRUTH_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-matches.txt"
 FODORS_TABLE_A_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableA.csv"
 FODORS_TABLE_B_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableB.csv"
-PVC_MANIFEST="${ROOT_DIR}/k8s/argo/pvc-manifests/pvc-bert-data.yaml"
+PVC_MANIFEST="${ROOT_DIR}/k8s/pvc-manifests/pvc-bert-data.yaml"
 SYNC_POD="data-sync-$$"
 
 require_cmd() {

@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cg-feature-extraction
+spec:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - fedora
+  containers:
+    - name: main
+      image: kevinoulai/erctl:cgfeature
+      imagePullPolicy: IfNotPresent
+      command: [/opt/venv/bin/python, /app/distributions/cg_feature_distribution.py]
+      args:
+        - --mode
+        - embedding-inference
+        - --function
+        - cg_feature_extraction
+      env:
+        - name: CODECARBON_REPORT_PATH
+          value: /app/reports/codecarbon/result/emissions.csv
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: cg-feature-distribution
+          mountPath: /app/distributions/cg_feature_distribution.py
+          subPath: cg_feature_distribution.py
+        - name: pipeline-buffer-utils
+          mountPath: /app/utils/buffers.py
+          subPath: buffers.py
+        - name: pipeline-buffer-data
+          mountPath: /app/data/buffers
+        - name: pipeline-reports
+          mountPath: /app/reports
+        - name: codecarbon
+          mountPath: /app/utils/codecarbon.py
+          subPath: codecarbon.py
+  volumes:
+    - name: pipeline-config
+      configMap:
+        name: er-pipeline-config
+    - name: cg-feature-distribution
+      configMap:
+        name: eaer-cg-feature-distribution
+    - name: pipeline-buffer-utils
+      configMap:
+        name: eaer-kafka-buffers
+    - name: pipeline-buffer-data
+      persistentVolumeClaim:
+        claimName: pipeline-buffer-data-claim
+    - name: pipeline-reports
+      persistentVolumeClaim:
+        claimName: pipeline-reports-claim
+    - name: codecarbon
+      configMap:
+        name: eaer-codecarbon

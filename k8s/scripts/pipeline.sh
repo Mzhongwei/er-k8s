@@ -8,9 +8,9 @@ fi
 
 set -euo pipefail
 
-PIPELINE_PATH=/home/kevin/k8s-python-llm/k8s/argo/pipeline.yaml
+PIPELINE_PATH=/home/kevin/k8s-python-llm/k8s/pipeline/batch/pipeline.yaml
 NODE=server2-labo
-PVC_MANIFESTS=/home/kevin/k8s-python-llm/k8s/argo/pvc-manifests/
+PVC_MANIFESTS=/home/kevin/k8s-python-llm/k8s/k8s/pvc-manifests/
 PIPELINE_MODE="embedding"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
