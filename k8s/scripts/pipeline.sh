@@ -121,7 +121,7 @@ start_pipeline() {
                 fi
                 sleep 5
             done
-            kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]'
+            kubectl logs -n "$NAMESPACE" evaluation | grep -F '[Result]'
         fi
     else
         echo "Unsupported mode in $config_path: $config_mode"
