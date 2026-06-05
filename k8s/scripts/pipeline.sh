@@ -99,12 +99,15 @@ start_pipeline() {
     "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
 
     pipeline_start_time=$(date +%s)
+    executed_pipeline=false
     if [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
         argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" --watch
         if [[ "$config_mode" == *b_evaluation* ]]; then
             argo logs -n "$NAMESPACE" @latest | grep -F '[RESULT]'
         fi
-    elif [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
+        executed_pipeline=true
+    fi
+    if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED"
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
@@ -115,7 +118,9 @@ start_pipeline() {
             wait_for_job_completion evaluation
             kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]'
         fi
-    else
+        executed_pipeline=true
+    fi
+    if [[ ! "$executed_pipeline" ]]; then
         echo "Unsupported mode in $config_path: $config_mode"
         exit 1
     fi
