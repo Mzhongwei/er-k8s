@@ -99,6 +99,9 @@ start_pipeline() {
 
     if [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
         argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" --watch
+        if [[ "$config_mode" == *b_evaluation* ]]; then
+            argo logs -n "$NAMESPACE" @latest | grep -F '[RESULT]'
+        fi
     fi
     if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED"
