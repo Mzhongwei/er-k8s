@@ -76,7 +76,7 @@ start_pipeline() {
 
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs kubectl delete -n "$NAMESPACE" || true
         kubectl delete -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
-    timeout 5 argo list -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
+    timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
     timeout 5 kubectl delete pv --all || true
     timeout 5 kubectl delete pvc -n "$NAMESPACE" --all || true
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/kafka-server' | xargs kubectl delete -n "$NAMESPACE" || true
