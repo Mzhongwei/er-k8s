@@ -72,6 +72,7 @@ start_pipeline() {
     local config_mode
 
     config_path="$PIPELINE_CONFIG_DIR/config-${PIPELINE_MODE}.yaml"
+    start_time=$(date +%s)
 
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs kubectl delete -n "$NAMESPACE" || true
         kubectl delete -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
@@ -114,6 +115,10 @@ start_pipeline() {
         echo "Unsupported mode in $config_path: $config_mode"
         exit 1
     fi
+
+    end_time=$(date +%s)
+    duration=$((end_time - start_time))
+    echo "Pipeline completed in $duration seconds."
 }
 
 stop_pipeline() {
