@@ -122,9 +122,13 @@ start_pipeline() {
 
     end_time=$(date +%s)
     pipeline_duration=$((end_time - pipeline_start_time))
-    echo "Pipeline completed in $pipeline_duration seconds."
+    pipeline_min=$((pipeline_duration/60))
+    pipeline_sec=$((pipeline_duration%60))
+    printf "Pipeline completed in %dm %02ds.\n" "$pipeline_min" "$pipeline_sec"
     script_duration=$((end_time - script_start_time))
-    echo "Total script execution time: $script_duration seconds."
+    script_min=$((script_duration/60))
+    script_sec=$((script_duration%60))
+    printf "Total script execution time: %dm %02ds.\n" "$script_min" "$script_sec"
 }
 
 stop_pipeline() {
