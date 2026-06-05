@@ -853,7 +853,7 @@ spec:
 
         - name: evaluation
           depends: pipeline-init.Succeeded && embedding-training.Skipped
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*')"
+          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*'"
           template: prediction
           arguments:
             parameters:
