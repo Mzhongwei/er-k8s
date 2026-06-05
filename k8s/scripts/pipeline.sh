@@ -104,8 +104,7 @@ start_pipeline() {
         if [[ "$config_mode" == *b_evaluation* ]]; then
             argo logs -n "$NAMESPACE" @latest | grep -F '[RESULT]'
         fi
-    fi
-    if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
+    elif [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED"
         kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
         mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
