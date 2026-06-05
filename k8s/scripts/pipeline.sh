@@ -72,7 +72,7 @@ start_pipeline() {
     local config_mode
 
     config_path="$PIPELINE_CONFIG_DIR/config-${PIPELINE_MODE}.yaml"
-    start_time=$(date +%s)
+    script_start_time=$(date +%s)
 
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs kubectl delete -n "$NAMESPACE" || true
         kubectl delete -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
@@ -97,6 +97,7 @@ start_pipeline() {
     kubectl delete cm -n "$NAMESPACE" er-pipeline-config || true
     "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
 
+    pipeline_start_time=$(date +%s)
     if [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
         argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" --watch
         if [[ "$config_mode" == *b_evaluation* ]]; then
@@ -120,8 +121,10 @@ start_pipeline() {
     fi
 
     end_time=$(date +%s)
-    duration=$((end_time - start_time))
-    echo "Pipeline completed in $duration seconds."
+    pipeline_duration=$((end_time - pipeline_start_time))
+    echo "Pipeline completed in $pipeline_duration seconds."
+    script_duration=$((end_time - script_start_time))
+    echo "Total script execution time: $script_duration seconds."
 }
 
 stop_pipeline() {
