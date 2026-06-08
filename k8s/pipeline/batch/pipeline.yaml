@@ -44,6 +44,13 @@ spec:
     - name: normalization
       affinity:
         nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - matis-asus-expertbook-b1500ceaey-b1500ceae
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:
@@ -52,6 +59,7 @@ spec:
                     operator: In
                     values:
                       - fedora
+                      - server1-k3s-worker
       inputs:
         parameters:
         - name: mode
@@ -280,6 +288,13 @@ spec:
     - name: cg-feature-extraction
       affinity:
         nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - matis-asus-expertbook-b1500ceaey-b1500ceae
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:
@@ -288,6 +303,7 @@ spec:
                     operator: In
                     values:
                       - fedora
+                      - server1-k3s-worker
       inputs:
         parameters:
         - name: mode
@@ -359,6 +375,13 @@ spec:
     - name: feature-index
       affinity:
         nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - matis-asus-expertbook-b1500ceaey-b1500ceae
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:
@@ -367,6 +390,7 @@ spec:
                     operator: In
                     values:
                       - fedora
+                      - server1-k3s-worker
       inputs:
         artifacts:
         - name: cg_feature
@@ -443,6 +467,13 @@ spec:
     - name: prediction
       affinity:
         nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - matis-asus-expertbook-b1500ceaey-b1500ceae
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:
@@ -451,6 +482,7 @@ spec:
                     operator: In
                     values:
                       - fedora
+                      - server1-k3s-worker
       inputs:
         parameters:
         - name: mode
@@ -617,6 +649,14 @@ spec:
     - name: pipeline-init
       affinity:
         nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - matis-asus-expertbook-b1500ceaey-b1500ceae
+                      - server1-k3s-worker
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:

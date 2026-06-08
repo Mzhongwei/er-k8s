@@ -14,6 +14,7 @@
 # Default nodes for your current setup:
 #   server2-labo -> local, sudo /bin/execute ecofloc
 #   fedora       -> ssh kevinoulai@10.0.8.34, sudo ecofloc
+#   server1-k3s-worker -> ssh ?@192.168.121.33 sudo ecofloc
 # SSH sudo is handled by the coordinator before the live display starts, to avoid concurrent prompts.
 
 if [ -z "${BASH_VERSION:-}" ]; then
@@ -47,7 +48,7 @@ ASK_SSH_SUDO=true
 
 print_help() {
   cat <<'EOF_HELP'
-Usage: process_cluster.sh [options] [command]
+Usage: process.sh [options] [command]
 
 Commands:
   get                       Show Python PIDs running /app/... scripts on all configured nodes.
@@ -76,11 +77,11 @@ Sudo modes:
   direct                    sudo -n /usr/local/bin/ecofloc ...
 
 Examples:
-  ./process_cluster.sh --watch ecofloc
-  ./process_cluster.sh --watch ecofloc --metrics cpu,ram
-  ./process_cluster.sh get
+  ./process.sh --watch ecofloc
+  ./process.sh --watch ecofloc --metrics cpu,ram
+  ./process.sh get
 
-  ./process_cluster.sh --watch ecofloc \
+  ./process.sh --watch ecofloc \
     --node server2-labo=local:execute \
     --node fedora=ssh:kevinoulai@10.0.8.34:direct
 EOF_HELP
