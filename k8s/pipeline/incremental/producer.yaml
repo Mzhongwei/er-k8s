@@ -13,7 +13,8 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        kubernetes.io/hostname: server2-labo
+        kubernetes.io/hostname: server1-k3s-worker
+        #kubernetes.io/hostname: fedora
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -23,7 +24,6 @@ spec:
                     operator: NotIn
                     values:
                       - matis-asus-expertbook-b1500ceaey-b1500ceae
-                      - server1-k3s-worker
       containers:
         - name: main
           image: kevinoulai/kafka:producer
