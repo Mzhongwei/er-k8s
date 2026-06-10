@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# process_cluster_v4_compact.sh
-# VERSION: v4-compact-no-remote-sudo-prompt-v3
+# process_cluster_aliases_vmhost.sh
+# VERSION: aliases-vmhost-connector-v1
 # Run from one machine (for example server2-labo) and collect EcoFloc PID
 # measurements from multiple Kubernetes nodes.
 #
@@ -13,12 +13,11 @@
 #
 # Default nodes for your current setup:
 #   server2-labo -> local, sudo /bin/execute ecofloc
-#   fedora       -> ssh kevinoulai@10.0.8.34, sudo ecofloc
-#   server1-k3s-worker -> vm kevin@192.168.1.102, sudo ecofloc
-# SSH sudo is handled by the coordinator before the live display starts, to avoid concurrent prompts.
-# VM means SSH to the host, connect to the VM, run the CPU connector then run EcoFloc
-# Command to connect to the vm : ssh -i ~/.vagrant_keys/vm_private_key vagrant@192.168.1.53
-# CPU connector : /home/vagrant/update_freq.sh
+#   fedora       -> ssh fedora, sudo /usr/local/bin/ecofloc
+#   server1-k3s-worker -> ssh server1, start host connector, then ssh vm and run EcoFloc
+# SSH aliases are expected to be defined in ~/.ssh/config.
+# VM flow: coordinator -> ssh server1 -> start connector once on host -> ssh vm -> run agent/EcoFloc.
+# Host connector default path: /home/vagrant/update_freq.sh, override with ERCTL_VM_HOST_CONNECTOR_SCRIPT.
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
@@ -43,14 +42,18 @@ CMD=""
 #   name=vm:user@host:[execute|direct]
 NODES=(
   "server2-labo=local:execute"
-  "fedora=ssh:kevinoulai@10.0.8.34:direct"
-  "server1-k3s-worker=vm:kevin@192.168.1.102:direct"
+  "fedora=ssh:fedora:direct"
+  "server1-k3s-worker=vm:server1:direct"
 )
 CUSTOM_NODES=false
 ASK_SSH_SUDO=true
-VM_SSH_KEY="${ERCTL_VM_SSH_KEY:-~/.vagrant_keys/vm_private_key}"
-VM_SSH_TARGET="${ERCTL_VM_SSH_TARGET:-vagrant@192.168.1.53}"
+VM_SSH_TARGET="${ERCTL_VM_SSH_TARGET:-vm}"
+VM_SSH_OPTS="${ERCTL_VM_SSH_OPTS:-}"
 VM_REMOTE_SCRIPT="${ERCTL_VM_REMOTE_SCRIPT:-/tmp/process_cluster_vm_agent.sh}"
+VM_HOST_CONNECTOR_SCRIPT="${ERCTL_VM_HOST_CONNECTOR_SCRIPT:-/home/vagrant/update_freq.sh}"
+VM_HOST_CONNECTOR_LOCK="${ERCTL_VM_HOST_CONNECTOR_LOCK:-/tmp/erctl-vm-connector.lock}"
+VM_HOST_CONNECTOR_PIDFILE="${ERCTL_VM_HOST_CONNECTOR_PIDFILE:-/tmp/erctl-vm-connector.pid}"
+VM_HOST_CONNECTOR_LOG="${ERCTL_VM_HOST_CONNECTOR_LOG:-/tmp/erctl-vm-connector.log}"
 
 print_help() {
   cat <<'EOF_HELP'
@@ -70,8 +73,8 @@ Node options:
   --node SPEC               Add a node and disable defaults.
                             Formats:
                               server2-labo=local:execute
-                              fedora=ssh:kevinoulai@10.0.8.34:direct
-                              server1-k3s-worker=vm:kevin@192.168.1.102:direct
+                              fedora=ssh:fedora:direct
+                              server1-k3s-worker=vm:server1:direct
 
 EcoFloc options:
   --ecofloc-interval MS     EcoFloc measurement interval in ms. Default: 1000.
@@ -80,9 +83,12 @@ EcoFloc options:
                             If PATH contains {node}, it is replaced by node name.
 
 VM options:
-  ERCTL_VM_SSH_TARGET       VM SSH target. Default: vagrant@192.168.1.53
-  ERCTL_VM_SSH_KEY          SSH key path on the host. Default: ~/.vagrant_keys/vm_private_key
-  ERCTL_VM_CONNECTOR_SCRIPT Connector path inside VM. Default: /home/vagrant/update_freq.sh
+  ERCTL_VM_SSH_TARGET              VM SSH alias/target from the host. Default: vm
+  ERCTL_VM_SSH_OPTS                Extra SSH options used by the host to reach the VM. Default: empty
+  ERCTL_VM_HOST_CONNECTOR_SCRIPT   Connector path on the VM host. Default: /home/vagrant/update_freq.sh
+  ERCTL_VM_HOST_CONNECTOR_PIDFILE  Host connector PID file. Default: /tmp/erctl-vm-connector.pid
+  ERCTL_VM_HOST_CONNECTOR_LOCK     Host connector lock file. Default: /tmp/erctl-vm-connector.lock
+  ERCTL_VM_HOST_CONNECTOR_LOG      Host connector log file. Default: /tmp/erctl-vm-connector.log
 
 Sudo modes:
   execute                   sudo -n /bin/execute ecofloc ...
@@ -632,6 +638,7 @@ COORD_RESULTS_FILE=""
 COORD_ACTIVE_FILE=""
 COORD_HEARTBEAT_FILE=""
 COORD_PIDS=()
+COORD_VM_CONNECTORS=()
 COORD_FIFO=""
 COORD_DONE=false
 COORD_LOG_DIR="/tmp/process-cluster-logs"
@@ -642,6 +649,13 @@ coord_cleanup() {
   COORD_DONE=true
   for p in "${COORD_PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done
   for p in "${COORD_PIDS[@]:-}"; do wait "$p" 2>/dev/null || true; done
+  for item in "${COORD_VM_CONNECTORS[@]:-}"; do
+    local host="${item%%|*}"
+    local pid="${item#*|}"
+    if [ -n "$host" ] && [ -n "$pid" ] && [ "$host" != "$pid" ]; then
+      ssh -o ConnectTimeout=5 "$host" "if kill -0 '$pid' 2>/dev/null; then kill '$pid' 2>/dev/null || true; fi" >/dev/null 2>&1 || true
+    fi
+  done
   restore_terminal
   [ -n "${COORD_ROWS_FILE:-}" ] && rm -f "$COORD_ROWS_FILE" 2>/dev/null || true
   [ -n "${COORD_RESULTS_FILE:-}" ] && rm -f "$COORD_RESULTS_FILE" 2>/dev/null || true
@@ -801,16 +815,56 @@ start_agent_for_node() {
   if [ "$kind" = "vm" ]; then
     local host_target="$target"
     local host_script="/tmp/process_cluster_${USER:-user}_host.sh"
-    local vm_key="$VM_SSH_KEY"
     local vm_target="$VM_SSH_TARGET"
+    local vm_opts="$VM_SSH_OPTS"
     local vm_script="$VM_REMOTE_SCRIPT"
+    local connector_status=""
 
     echo "[coordinator] copying agent script to VM host $host_target:$host_script" >&2
     scp -q -o ConnectTimeout=5 "$0" "$host_target:$host_script"
 
+    if [ "$mode" != "get" ]; then
+      echo "[coordinator] starting host connector on $host_target if needed: $VM_HOST_CONNECTOR_SCRIPT" >&2
+      connector_status="$(ssh -o ConnectTimeout=5 "$host_target" \
+        bash -s -- "$VM_HOST_CONNECTOR_SCRIPT" "$VM_HOST_CONNECTOR_LOCK" "$VM_HOST_CONNECTOR_PIDFILE" "$VM_HOST_CONNECTOR_LOG" <<'EOSSH'
+connector_script="$1"
+connector_lock="$2"
+connector_pidfile="$3"
+connector_log="$4"
+mkdir -p /tmp 2>/dev/null || true
+(
+  flock -n 9 || { echo already_locked; exit 0; }
+  if [ -f "$connector_pidfile" ]; then
+    pid="$(cat "$connector_pidfile" 2>/dev/null || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      echo already_running:"$pid"
+      exit 0
+    fi
+  fi
+  if [ ! -f "$connector_script" ]; then
+    echo missing_connector:"$connector_script"
+    exit 2
+  fi
+  nohup sh "$connector_script" > "$connector_log" 2>&1 &
+  pid="$!"
+  echo "$pid" > "$connector_pidfile"
+  echo started:"$pid"
+) 9>"$connector_lock"
+EOSSH
+      )" || { echo "[coordinator] failed to start/check connector on $host_target. See $agent_err" >&2; return 1; }
+
+      echo "[coordinator] connector status on $host_target: $connector_status" >&2
+      if [[ "$connector_status" == started:* ]]; then
+        COORD_VM_CONNECTORS+=("$host_target|${connector_status#started:}")
+      elif [[ "$connector_status" == missing_connector:* ]]; then
+        echo "[coordinator] connector missing on host $host_target: ${connector_status#missing_connector:}" >&2
+        return 1
+      fi
+    fi
+
     echo "[coordinator] copying agent script from host to VM $vm_target:$vm_script" >&2
     if ! ssh -o ConnectTimeout=5 "$host_target" \
-      "ssh -i '$vm_key' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '$vm_target' 'cat > $vm_script && chmod +x $vm_script' < '$host_script'" \
+      "ssh $vm_opts '$vm_target' 'cat > $vm_script && chmod +x $vm_script' < '$host_script'" \
       2> "$agent_err"; then
       echo "[coordinator] failed to copy agent script to VM through $host_target. See $agent_err" >&2
       return 1
@@ -819,7 +873,7 @@ start_agent_for_node() {
     if [ "$mode" != "get" ] && [ "$sudo_mode" = "direct" ]; then
       echo "[coordinator] validating VM direct sudo through $host_target -> $vm_target without password..." >&2
       if ! ssh -o ConnectTimeout=5 "$host_target" \
-        "ssh -i '$vm_key' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '$vm_target' 'tmp_log=\"/tmp/erctl-ecofloc-vm-sudo-test.log\"; sleep 10 & test_pid=\$!; sudo -n /usr/local/bin/ecofloc --cpu -p \"\$test_pid\" -i 1000 -t 1 > \"\$tmp_log\" 2>&1; rc=\$?; kill \"\$test_pid\" 2>/dev/null || true; if [ \"\$rc\" -ne 0 ]; then cat \"\$tmp_log\" >&2; fi; exit \"\$rc\"'" \
+        "ssh $vm_opts '$vm_target' 'tmp_log="/tmp/erctl-ecofloc-vm-sudo-test.log"; sleep 10 & test_pid=\$!; sudo -n /usr/local/bin/ecofloc --cpu -p "\$test_pid" -i 1000 -t 1 > "\$tmp_log" 2>&1; rc=\$?; kill "\$test_pid" 2>/dev/null || true; if [ "\$rc" -ne 0 ]; then cat "\$tmp_log" >&2; fi; exit "\$rc"'" \
         2> "$agent_err"; then
         echo "[coordinator] VM direct sudo validation failed. Check sudoers for /usr/local/bin/ecofloc in the VM. See $agent_err" >&2
         return 1
@@ -828,7 +882,7 @@ start_agent_for_node() {
 
     echo "[coordinator] launching VM agent through $host_target -> $vm_target" >&2
     ssh -o ConnectTimeout=5 "$host_target" \
-      "ssh -i '$vm_key' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '$vm_target' \"ERCTL_ECOFLOC_DIRECT_BIN='/usr/local/bin/ecofloc' exec bash '$vm_script' __agent__ --vm --node-name '$name' --sudo-mode '$sudo_mode' --mode '$mode' --scan-interval '$SCAN_INTERVAL' --ecofloc-interval '$ECOFLOC_INTERVAL' --metrics '$ECOFLOC_METRICS' --export '$ECOFLOC_EXPORT_PATH'\"" \
+      "ssh $vm_opts '$vm_target' "ERCTL_ECOFLOC_DIRECT_BIN='/usr/local/bin/ecofloc' exec bash '$vm_script' __agent__ --node-name '$name' --sudo-mode '$sudo_mode' --mode '$mode' --scan-interval '$SCAN_INTERVAL' --ecofloc-interval '$ECOFLOC_INTERVAL' --metrics '$ECOFLOC_METRICS' --export '$ECOFLOC_EXPORT_PATH'"" \
       > "$COORD_FIFO" 2> "$agent_err" &
 
     COORD_PIDS+=("$!")
@@ -1067,7 +1121,7 @@ coord_main() {
   echo "[coordinator] starting with ${#NODES[@]} configured node(s)" >&2
   if [ "${#NODES[@]}" -eq 0 ]; then
     echo "[coordinator] no nodes configured; using built-in defaults" >&2
-    NODES=("server2-labo=local:execute" "fedora=ssh:kevinoulai@10.0.8.34:direct" "server1-k3s-worker=vm:kevin@192.168.1.102:direct")
+    NODES=("server2-labo=local:execute" "fedora=ssh:fedora:direct" "server1-k3s-worker=vm:server1:direct")
   fi
 
   for spec in "${NODES[@]}"; do
