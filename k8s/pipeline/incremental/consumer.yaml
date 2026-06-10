@@ -13,7 +13,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        kubernetes.io/hostname: server1-k3s-worker
+        kubernetes.io/hostname: server2-labo
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -23,7 +23,7 @@ spec:
                     operator: NotIn
                     values:
                       - matis-asus-expertbook-b1500ceaey-b1500ceae
-                      #- server1-k3s-worker
+                      - server1-k3s-worker
       serviceAccountName: argo
       containers:
         - name: main

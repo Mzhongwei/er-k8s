@@ -434,6 +434,10 @@ agent_parse_ecofloc_log() {
   if [ ! -f "$log_file" ]; then echo "NO_LOG"; return 0; fi
 
   local avg="" total=""
+  if grep -qi "PID .* CLOSED OR INEXISTENT\|Failed to open file for PID\|process may not exist\|process.*closed" "$log_file"; then
+    echo "PID_CLOSED"
+    return 0
+  fi
   avg="$(awk -F ':' 'BEGIN { IGNORECASE = 1 } /Average[[:space:]]+Power/ { gsub(/^[ \t]+|[ \t]+$/, "", $2); last = $2 } END { if (last != "") print last }' "$log_file" | awk '{ print $1 }')"
   total="$(awk -F ':' 'BEGIN { IGNORECASE = 1 } /Total.*Energy/ { gsub(/^[ \t]+|[ \t]+$/, "", $2); last = $2 } END { if (last != "") print last }' "$log_file" | awk '{ print $1 }')"
 
@@ -884,7 +888,14 @@ def extract_function(cmd):
 def parse_metric(v):
     m=VALUE_RE.match(str(v))
     if not m: return 0.0,0.0,False
-    p,e=m.groups(); return (0.0 if p=='?' else float(p), 0.0 if e=='?' else float(e), True)
+    p,e=m.groups(); return (0.0 if p=='?' else float(p), 0.0 if e==power = 0.0 if p == "?" else float(p)
+    energy = 0.0 if e == "?" else float(e)
+
+    if abs(power) < 0.005:
+        power = 0.0
+    if abs(energy) < 0.005:
+        energy = 0.0'?' else float(e), True)
+
 def fmt_metric(p,e,c): return '-' if c<=0 else f"{p:.2f}W/{e:.2f}J"
 def fmt_energy(e,c): return '-' if c<=0 else f"{e:.2f}J"
 def spinner(): return ["|","/","-","\\"][int(time.time()*4)%4]+' measuring'

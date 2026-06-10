@@ -21,7 +21,7 @@ spec:
                     operator: NotIn
                     values:
                       - matis-asus-expertbook-b1500ceaey-b1500ceae
-                      - server1-k3s-worker
+                      #- server1-k3s-worker
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:
@@ -29,7 +29,8 @@ spec:
                   - key: kubernetes.io/hostname
                     operator: In
                     values:
-                      - fedora
+                      #- fedora
+                      - server1-k3s-worker
       containers:
         - name: main
           image: kevinoulai/erctl:normalization
