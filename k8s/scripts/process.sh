@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 
 # process_cluster_v4_compact.sh
-# VERSION: v4-compact-aliases-vm-connector-in-vm
+# VERSION: v4-compact-aliases-vm-connector-in-vm-noscp
 # Run from one machine (for example server2-labo) and collect EcoFloc PID
 # measurements from multiple Kubernetes nodes.
 #
 # It works as a coordinator + remote/local agents:
 # - the coordinator runs on the machine where you execute this script;
 # - each agent scans local host processes with ps and /proc;
-# - remote agents are launched through SSH by streaming this same script to bash;
+# - remote agents are launched through SSH after copying this same script with ssh/cat;
 # - EcoFloc is always executed on the node where the target PID exists.
 #
 # Default nodes for your current setup:
@@ -750,8 +750,10 @@ start_agent_for_node() {
   local sudo_password_b64=""
 
   echo "[coordinator] copying agent script to $target:$remote_script" >&2
-  if ! scp -q -o ConnectTimeout=5 "$0" "$target:$remote_script" 2> "$agent_err"; then
-    echo "[coordinator] failed to copy agent script to $target. See $agent_err" >&2
+  # Use ssh + cat instead of scp. Some SSH aliases / ProxyJump setups allow
+  # interactive ssh but break scp/SFTP with "Connection closed".
+  if ! ssh -o ConnectTimeout=5 "$target" "cat > '$remote_script' && chmod +x '$remote_script'" < "$0" 2> "$agent_err"; then
+    echo "[coordinator] failed to copy agent script to $target through ssh/cat. See $agent_err" >&2
     return 1
   fi
 
