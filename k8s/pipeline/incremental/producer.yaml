@@ -12,18 +12,6 @@ spec:
         app: kafka-producer
     spec:
       restartPolicy: OnFailure
-      nodeSelector:
-        kubernetes.io/hostname: server2-labo
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: NotIn
-                    values:
-                      - matis-asus-expertbook-b1500ceaey-b1500ceae
-                      - server1-k3s-worker
       containers:
         - name: main
           image: kevinoulai/kafka:producer

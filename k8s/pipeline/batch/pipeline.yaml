@@ -4,18 +4,6 @@ metadata:
   generateName: pipeline-
   namespace: argo
 spec:
-  templateDefaults:
-    affinity:
-      nodeAffinity:
-        requiredDuringSchedulingIgnoredDuringExecution:
-          nodeSelectorTerms:
-            - matchExpressions:
-                - key: kubernetes.io/hostname
-                  operator: NotIn
-                  values:
-                    - matis-asus-expertbook-b1500ceaey-b1500ceae
-                    - server1-labo
-
   serviceAccountName: argo
   imagePullSecrets:
   - name: regcred
@@ -42,24 +30,6 @@ spec:
 
   templates:
     - name: normalization
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: NotIn
-                    values:
-                      - matis-asus-expertbook-b1500ceaey-b1500ceae
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values:
-                      - fedora
-                      - server1-k3s-worker
       inputs:
         parameters:
         - name: mode
@@ -129,8 +99,6 @@ spec:
           path: /tmp/processed_data
 
     - name: graph
-      nodeSelector:
-        kubernetes.io/hostname: server2-labo
       inputs:
         artifacts:
         - name: processed_data
@@ -205,8 +173,6 @@ spec:
           path: /tmp/sequences.json
 
     - name: embedding
-      nodeSelector:
-        kubernetes.io/hostname: server2-labo
       inputs:
         artifacts:
         - name: sequences
@@ -286,24 +252,6 @@ spec:
           path: /tmp/matching_pairs.json
 
     - name: cg-feature-extraction
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: NotIn
-                    values:
-                      - matis-asus-expertbook-b1500ceaey-b1500ceae
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values:
-                      - fedora
-                      - server1-k3s-worker
       inputs:
         parameters:
         - name: mode
@@ -373,24 +321,6 @@ spec:
           path: /tmp/cg_feature
 
     - name: feature-index
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: NotIn
-                    values:
-                      - matis-asus-expertbook-b1500ceaey-b1500ceae
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values:
-                      - fedora
-                      - server1-k3s-worker
       inputs:
         artifacts:
         - name: cg_feature
@@ -464,112 +394,7 @@ spec:
         - name: candidate_pairs
           path: /tmp/candidate_pairs.json
 
-    - name: prediction
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: NotIn
-                    values:
-                      - matis-asus-expertbook-b1500ceaey-b1500ceae
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values:
-                      - fedora
-                      - server1-k3s-worker
-      inputs:
-        parameters:
-        - name: mode
-        - name: function
-        artifacts:
-        - name: matching_pairs
-          path: /tmp/matching_pairs.json
-          optional: true
-      container:
-        name: main
-        image: kevinoulai/erctl:prediction
-        imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
-        args:
-        - --mode
-        - '{{inputs.parameters.mode}}'
-        - --matching_pairs
-        - '{{inputs.artifacts.matching_pairs.path}}'
-        - --function
-        - '{{inputs.parameters.function}}'
-        - --output
-        - /tmp/predicted_matching
-        env:
-        - name: WORKFLOW_NAME
-          value: '{{workflow.name}}'
-        - name: CODECARBON_REPORT_PATH
-          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
-        volumeMounts:
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
-        - name: decision-evaluation-distribution
-          mountPath: /app/distributions/decision_evaluation.py
-          subPath: decision_evaluation.py
-        - name: pipeline-data
-          mountPath: /app/Data_example
-        - name: pipeline-embedding-model-cache
-          mountPath: /app/data
-        - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
-        - name: pipeline-reports
-          mountPath: /app/reports
-        - name: pipeline-buffer-utils
-          mountPath: /app/utils/buffers.py
-          subPath: buffers.py
-        - name: codecarbon
-          mountPath: /app/utils/codecarbon.py
-          subPath: codecarbon.py
-      volumes:
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: decision-evaluation-distribution
-        configMap:
-          name: eaer-decision-evaluation
-      - name: pipeline-data
-        persistentVolumeClaim:
-          claimName: pipeline-data-claim
-      - name: pipeline-embedding-model-cache
-        persistentVolumeClaim:
-          claimName: pipeline-embedding-model-cache-claim
-      - name: pipeline-buffer-utils
-        configMap:
-          name: eaer-kafka-buffers
-      - name: pipeline-buffer-data
-        persistentVolumeClaim:
-          claimName: pipeline-buffer-data-claim
-      - name: pipeline-reports
-        persistentVolumeClaim:
-          claimName: pipeline-reports-claim
-      - name: codecarbon
-        configMap:
-          name: eaer-codecarbon
-      outputs:
-        parameters:
-        - name: predicted_matching
-          valueFrom:
-            path: /tmp/predicted_matching
-
     - name: bert
-      tolerations:
-      - key: "nvidia.com/gpu"
-        operator: "Equal"
-        value: "true"
-        effect: "NoSchedule"
-      podSpecPatch: |
-        runtimeClassName: nvidia
       inputs:
         artifacts:
         - name: processed_data
@@ -647,24 +472,6 @@ spec:
             path: /tmp/bert_output
 
     - name: pipeline-init
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: NotIn
-                    values:
-                      - matis-asus-expertbook-b1500ceaey-b1500ceae
-                      - server1-k3s-worker
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values:
-                      - fedora
       inputs:
         parameters:
         - name: fallback_mode
@@ -703,80 +510,6 @@ spec:
         artifacts:
         - name: config
           path: /tmp/config.yaml
-
-    - name: kafka-producer
-      nodeSelector:
-        kubernetes.io/hostname: server2-labo
-      daemon: true
-      container:
-        name: main
-        image: kevinoulai/kafka:producer
-        imagePullPolicy: Always
-        command: [python, /app/producer.py]
-        ports:
-        - containerPort: 9092
-        volumeMounts:
-        - name: pipeline-kafka-producer
-          mountPath: /app/producer.py
-          subPath: producer.py
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
-        - name: pipeline-data
-          mountPath: /app/Data_example
-      volumes:
-      - name: pipeline-kafka-producer
-        configMap:
-          name: eaer-kafka-producer
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: pipeline-data
-        persistentVolumeClaim:
-          claimName: pipeline-data-claim
-
-    - name: kafka-consumer
-      nodeSelector:
-        kubernetes.io/hostname: server2-labo
-      daemon: true
-      serviceAccountName: argo
-      container:
-        name: main
-        image: kevinoulai/kafka:python
-        imagePullPolicy: IfNotPresent
-        command: [python, /app/consumer.py]
-        ports:
-        - containerPort: 9092
-        volumeMounts:
-        - name: pipeline-kafka-consumer
-          mountPath: /app/consumer.py
-          subPath: consumer.py
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
-        - name: pipeline-data
-          mountPath: /app/Data_example
-        - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
-        - name: pipeline-buffer-utils
-          mountPath: /app/utils/buffers.py
-          subPath: buffers.py
-      volumes:
-      - name: pipeline-buffer-data
-        persistentVolumeClaim:
-          claimName: pipeline-buffer-data-claim
-      - name: pipeline-kafka-consumer
-        configMap:
-          name: eaer-kafka-consumer
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: pipeline-data
-        persistentVolumeClaim:
-          claimName: pipeline-data-claim
-      - name: pipeline-buffer-utils
-        configMap:
-          name: eaer-kafka-buffers
 
     - name: embedding-training-dag
       inputs:
@@ -882,7 +615,7 @@ spec:
             - name: fallback_mode
               value: '{{workflow.parameters.mode}}'
 
-        - name: embedding-training
+        - name: embedding-training-dag
           depends: pipeline-init.Succeeded
           when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
           template: embedding-training-dag

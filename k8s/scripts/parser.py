@@ -1,0 +1,745 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import copy
+import shutil
+import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+FIELDS = ("tags", "prefer", "fallback", "avoid")
+HOSTNAME_KEY = "kubernetes.io/hostname"
+
+GPU_TOLERATION = {
+    "key": "nvidia.com/gpu",
+    "operator": "Equal",
+    "value": "true",
+    "effect": "NoSchedule",
+}
+
+
+class LiteralString(str):
+    pass
+
+
+class NoAliasSafeDumper(yaml.SafeDumper):
+    def ignore_aliases(self, data):
+        return True
+
+
+def literal_str_representer(dumper: yaml.Dumper, data: LiteralString):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+
+
+NoAliasSafeDumper.add_representer(LiteralString, literal_str_representer)
+
+
+def slug(value: str) -> str:
+    return str(value).strip().lower().replace("_", "-").replace(" ", "-")
+
+
+def as_list(
+    value: Any,
+    path: str,
+    *,
+    null_means_override_empty: bool = False,
+) -> list[str] | None:
+    """
+    Defaults:
+      null / [] -> []
+
+    Template/task fields:
+      []      -> inherit defaults
+      null    -> explicit empty override, so do not inherit
+      value   -> [value]
+      [a, b]  -> [a, b]
+    """
+    if value is None:
+        if null_means_override_empty:
+            return None
+        return []
+
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    if isinstance(value, str):
+        value = value.strip()
+        return [value] if value else []
+
+    raise ValueError(f"{path} must be a list, a string, null, or []")
+
+
+def normalize_rule(
+    raw: dict[str, Any],
+    path: str,
+    *,
+    null_means_override_empty: bool = False,
+) -> dict[str, list[str] | None]:
+    return {
+        field: as_list(
+            raw.get(field, []),
+            f"{path}.{field}",
+            null_means_override_empty=null_means_override_empty,
+        )
+        for field in FIELDS
+    }
+
+
+def merge_rule(
+    defaults: dict[str, list[str] | None],
+    override: dict[str, list[str] | None],
+) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+
+    for field in FIELDS:
+        default_values = defaults[field] or []
+        override_values = override[field]
+
+        if override_values is None:
+            result[field] = []
+        elif override_values:
+            result[field] = list(override_values)
+        else:
+            result[field] = list(default_values)
+
+    return result
+
+
+def parse_group(group_name: str, group_content: Any) -> dict[str, dict[str, list[str]]]:
+    if group_content is None:
+        return {}
+
+    if not isinstance(group_content, dict):
+        raise ValueError(f"Group '{group_name}' must be a YAML object")
+
+    # Explicit format:
+    #
+    # batch:
+    #   defaults:
+    #     prefer: [server2-labo]
+    #   templates:
+    #     normalization:
+    #       prefer: null
+    if "templates" in group_content or "defaults" in group_content:
+        defaults_raw = group_content.get("defaults", {}) or {}
+        templates_raw = group_content.get("templates", {}) or {}
+
+        if not isinstance(defaults_raw, dict):
+            raise ValueError(f"{group_name}.defaults must be a YAML object")
+
+        if not isinstance(templates_raw, dict):
+            raise ValueError(f"{group_name}.templates must be a YAML object")
+
+        defaults = normalize_rule(
+            defaults_raw,
+            f"{group_name}.defaults",
+            null_means_override_empty=False,
+        )
+
+        template_items = templates_raw.items()
+
+    # Compact format:
+    #
+    # batch:
+    #   tags: []
+    #   prefer: [server2-labo]
+    #   fallback: [fedora]
+    #   avoid: [server1-k3s-worker]
+    #
+    #   normalization:
+    #     prefer: null
+    else:
+        defaults_raw = {
+            field: group_content.get(field, [])
+            for field in FIELDS
+        }
+
+        defaults = normalize_rule(
+            defaults_raw,
+            f"{group_name}.defaults",
+            null_means_override_empty=False,
+        )
+
+        template_items = (
+            (name, value)
+            for name, value in group_content.items()
+            if name not in FIELDS
+        )
+
+    rules: dict[str, dict[str, list[str]]] = {}
+
+    for template_name, template_content in template_items:
+        if template_content is None:
+            template_content = {}
+
+        if not isinstance(template_content, dict):
+            raise ValueError(f"{group_name}.{template_name} must be a YAML object")
+
+        raw_rule = normalize_rule(
+            template_content,
+            f"{group_name}.{template_name}",
+            null_means_override_empty=True,
+        )
+
+        effective_rule = merge_rule(defaults, raw_rule)
+
+        rules[slug(template_name)] = effective_rule
+
+    return rules
+
+
+def load_scheduling_config(path: Path) -> dict[str, dict[str, dict[str, list[str]]]]:
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    with path.open("r", encoding="utf-8") as file:
+        data = yaml.safe_load(file) or {}
+
+    if not isinstance(data, dict):
+        raise ValueError("scheduling.yaml root must be a YAML object")
+
+    parsed: dict[str, dict[str, dict[str, list[str]]]] = {}
+
+    for group_name, group_content in data.items():
+        parsed[slug(group_name)] = parse_group(group_name, group_content)
+
+    return parsed
+
+
+def build_node_affinity(rule: dict[str, list[str]]) -> dict[str, Any] | None:
+    preferred_terms: list[dict[str, Any]] = []
+
+    if rule["prefer"]:
+        preferred_terms.append({
+            "weight": 100,
+            "preference": {
+                "matchExpressions": [{
+                    "key": HOSTNAME_KEY,
+                    "operator": "In",
+                    "values": list(rule["prefer"]),
+                }]
+            }
+        })
+
+    if rule["fallback"]:
+        preferred_terms.append({
+            "weight": 50,
+            "preference": {
+                "matchExpressions": [{
+                    "key": HOSTNAME_KEY,
+                    "operator": "In",
+                    "values": list(rule["fallback"]),
+                }]
+            }
+        })
+
+    if rule["avoid"]:
+        preferred_terms.append({
+            "weight": 10,
+            "preference": {
+                "matchExpressions": [{
+                    "key": HOSTNAME_KEY,
+                    "operator": "NotIn",
+                    "values": list(rule["avoid"]),
+                }]
+            }
+        })
+
+    if not preferred_terms:
+        return None
+
+    return {
+        "nodeAffinity": {
+            "preferredDuringSchedulingIgnoredDuringExecution": preferred_terms
+        }
+    }
+
+
+def has_gpu_tag(rule: dict[str, list[str]]) -> bool:
+    return "gpu" in [slug(tag) for tag in rule["tags"]]
+
+
+def ensure_gpu_toleration(pod_spec_or_argo_template: dict[str, Any]) -> None:
+    tolerations = pod_spec_or_argo_template.setdefault("tolerations", [])
+
+    if not isinstance(tolerations, list):
+        raise ValueError("Existing tolerations field must be a list")
+
+    already_present = any(
+        isinstance(item, dict)
+        and item.get("key") == GPU_TOLERATION["key"]
+        and item.get("operator") == GPU_TOLERATION["operator"]
+        and item.get("value") == GPU_TOLERATION["value"]
+        and item.get("effect") == GPU_TOLERATION["effect"]
+        for item in tolerations
+    )
+
+    if not already_present:
+        tolerations.append(copy.deepcopy(GPU_TOLERATION))
+
+
+def apply_rule_to_argo_template(
+    template: dict[str, Any],
+    rule: dict[str, list[str]],
+) -> None:
+    affinity = build_node_affinity(rule)
+
+    if affinity:
+        existing_affinity = template.setdefault("affinity", {})
+
+        if not isinstance(existing_affinity, dict):
+            raise ValueError(
+                f"Template '{template.get('name')}' affinity must be a YAML object"
+            )
+
+        existing_affinity["nodeAffinity"] = affinity["nodeAffinity"]
+
+    if has_gpu_tag(rule):
+        ensure_gpu_toleration(template)
+
+        existing_patch = str(template.get("podSpecPatch", "") or "")
+
+        if "runtimeClassName" not in existing_patch:
+            if existing_patch.strip():
+                existing_patch = existing_patch.rstrip() + "\n"
+
+            existing_patch += "runtimeClassName: nvidia\n"
+
+        template["podSpecPatch"] = LiteralString(existing_patch)
+
+
+def apply_rule_to_kubernetes_job(
+    job: dict[str, Any],
+    rule: dict[str, list[str]],
+) -> None:
+    try:
+        pod_spec = job["spec"]["template"]["spec"]
+    except KeyError as error:
+        raise ValueError("Kubernetes Job does not contain spec.template.spec") from error
+
+    affinity = build_node_affinity(rule)
+
+    if affinity:
+        existing_affinity = pod_spec.setdefault("affinity", {})
+
+        if not isinstance(existing_affinity, dict):
+            raise ValueError(
+                f"Job '{job.get('metadata', {}).get('name')}' affinity must be a YAML object"
+            )
+
+        existing_affinity["nodeAffinity"] = affinity["nodeAffinity"]
+
+    if has_gpu_tag(rule):
+        ensure_gpu_toleration(pod_spec)
+        pod_spec["runtimeClassName"] = "nvidia"
+
+
+def load_yaml_file(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as file:
+        return yaml.safe_load(file)
+
+
+def write_yaml_file(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", encoding="utf-8") as file:
+        yaml.dump(
+            data,
+            file,
+            Dumper=NoAliasSafeDumper,
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True,
+        )
+
+
+def get_argo_templates_container(workflow: dict[str, Any]) -> list[dict[str, Any]]:
+    kind = workflow.get("kind")
+
+    if kind in ("Workflow", "WorkflowTemplate"):
+        spec = workflow.get("spec", {})
+    elif kind == "CronWorkflow":
+        spec = workflow.get("spec", {}).get("workflowSpec", {})
+    else:
+        raise ValueError(
+            f"Unsupported Argo kind '{kind}'. "
+            "Expected Workflow, WorkflowTemplate, or CronWorkflow"
+        )
+
+    templates = spec.get("templates", [])
+
+    if not isinstance(templates, list):
+        raise ValueError("Argo spec.templates must be a list")
+
+    return templates
+
+
+def collect_argo_dag_tasks(
+    templates: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    tasks_by_name: dict[str, list[dict[str, Any]]] = {}
+
+    for template in templates:
+        if not isinstance(template, dict):
+            continue
+
+        dag = template.get("dag")
+
+        if not isinstance(dag, dict):
+            continue
+
+        tasks = dag.get("tasks", [])
+
+        if not isinstance(tasks, list):
+            continue
+
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+
+            task_name = task.get("name")
+
+            if not task_name:
+                continue
+
+            tasks_by_name.setdefault(slug(task_name), []).append(task)
+
+    return tasks_by_name
+
+
+def resolve_argo_template_from_rule(
+    rule_name: str,
+    templates_by_slug: dict[str, dict[str, Any]],
+    tasks_by_slug: dict[str, list[dict[str, Any]]],
+    warnings: list[str],
+) -> tuple[str, dict[str, Any]] | None:
+    """
+    Batch behavior:
+
+    1. Try to resolve the scheduling key as a DAG task name.
+       If found, retrieve task.template and modify that referenced template.
+
+    2. If no DAG task matches, try to resolve the key directly as a template name.
+
+    This means the config can be written by task name while the generated
+    YAML only modifies templates.
+    """
+    matching_tasks = tasks_by_slug.get(rule_name, [])
+
+    if matching_tasks:
+        referenced_template_names = {
+            slug(str(task.get("template")))
+            for task in matching_tasks
+            if task.get("template")
+        }
+
+        if not referenced_template_names:
+            warnings.append(
+                f"Task scheduling key '{rule_name}' matched DAG task(s), "
+                "but no referenced template was found"
+            )
+            return None
+
+        if len(referenced_template_names) > 1:
+            warnings.append(
+                f"Task scheduling key '{rule_name}' matches multiple DAG tasks "
+                f"referencing different templates: {sorted(referenced_template_names)}. "
+                "Skipping because this is ambiguous."
+            )
+            return None
+
+        template_slug = next(iter(referenced_template_names))
+        template = templates_by_slug.get(template_slug)
+
+        if not template:
+            warnings.append(
+                f"Task scheduling key '{rule_name}' references unknown template "
+                f"'{template_slug}'"
+            )
+            return None
+
+        if "container" not in template:
+            warnings.append(
+                f"Task scheduling key '{rule_name}' references template "
+                f"'{template.get('name')}', but it is not a container template"
+            )
+            return None
+
+        return template_slug, template
+
+    direct_template = templates_by_slug.get(rule_name)
+
+    if direct_template:
+        if "container" not in direct_template:
+            warnings.append(
+                f"Scheduling key '{rule_name}' matches template "
+                f"'{direct_template.get('name')}', but it is not a container template"
+            )
+            return None
+
+        return rule_name, direct_template
+
+    warnings.append(
+        f"No matching Argo DAG task or container template found for scheduling key "
+        f"'{rule_name}'"
+    )
+
+    return None
+
+
+def apply_batch_rules(
+    batch_pipeline_path: Path,
+    output_path: Path,
+    rules: dict[str, dict[str, list[str]]],
+) -> list[str]:
+    workflow = load_yaml_file(batch_pipeline_path)
+
+    if not isinstance(workflow, dict):
+        raise ValueError(f"{batch_pipeline_path} root must be a YAML object")
+
+    templates = get_argo_templates_container(workflow)
+
+    templates_by_slug = {
+        slug(template.get("name", "")): template
+        for template in templates
+        if isinstance(template, dict) and template.get("name")
+    }
+
+    tasks_by_slug = collect_argo_dag_tasks(templates)
+
+    warnings: list[str] = []
+
+    modified_templates: dict[str, dict[str, Any]] = {}
+    modified_templates_source: dict[str, str] = {}
+
+    for rule_name, rule in rules.items():
+        resolved = resolve_argo_template_from_rule(
+            rule_name,
+            templates_by_slug,
+            tasks_by_slug,
+            warnings,
+        )
+
+        if not resolved:
+            continue
+
+        template_slug, template = resolved
+        template_display_name = template.get("name", template_slug)
+
+        if template_slug in modified_templates:
+            previous_rule = modified_templates[template_slug]
+            previous_source = modified_templates_source[template_slug]
+
+            if previous_rule == rule:
+                continue
+
+            warnings.append(
+                f"Scheduling key '{rule_name}' wants to modify template "
+                f"'{template_display_name}', but it was already modified by "
+                f"'{previous_source}'. Keeping the first rule and skipping "
+                f"'{rule_name}'."
+            )
+            continue
+
+        apply_rule_to_argo_template(template, rule)
+
+        modified_templates[template_slug] = copy.deepcopy(rule)
+        modified_templates_source[template_slug] = rule_name
+
+    write_yaml_file(output_path, workflow)
+
+    return warnings
+
+
+def job_candidate_names(path: Path, job: dict[str, Any]) -> set[str]:
+    names = {slug(path.stem)}
+
+    metadata_name = job.get("metadata", {}).get("name")
+
+    if metadata_name:
+        names.add(slug(metadata_name))
+
+    expanded = set(names)
+
+    for name in names:
+        if name.startswith("kafka-"):
+            expanded.add(name.removeprefix("kafka-"))
+
+    return expanded
+
+
+def apply_incremental_rules(
+    input_dir: Path,
+    output_dir: Path,
+    rules: dict[str, dict[str, list[str]]],
+) -> list[str]:
+    warnings: list[str] = []
+    applied_rules: set[str] = set()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for source_path in sorted(input_dir.glob("*.yaml")):
+        document = load_yaml_file(source_path)
+
+        if not isinstance(document, dict):
+            warnings.append(f"Skipping '{source_path.name}': YAML root is not an object")
+            continue
+
+        if document.get("kind") != "Job":
+            shutil.copy2(source_path, output_dir / source_path.name)
+            continue
+
+        candidates = job_candidate_names(source_path, document)
+        matching_rule_name = next(
+            (name for name in candidates if name in rules),
+            None,
+        )
+
+        if matching_rule_name:
+            apply_rule_to_kubernetes_job(document, rules[matching_rule_name])
+            applied_rules.add(matching_rule_name)
+
+        write_yaml_file(output_dir / source_path.name, document)
+
+    for rule_name in sorted(rules):
+        if rule_name not in applied_rules:
+            warnings.append(
+                f"No matching Kubernetes Job manifest found for scheduling key "
+                f"'{rule_name}'"
+            )
+
+    return warnings
+
+
+def print_rules(title: str, rules: dict[str, dict[str, list[str]]]) -> None:
+    print(title)
+
+    if not rules:
+        print("  No rules")
+        return
+
+    for name, rule in rules.items():
+        print(f"  {name}")
+
+        for field in FIELDS:
+            values = ", ".join(rule[field]) if rule[field] else ""
+            print(f"    {field:<8}: [{values}]")
+
+
+def main() -> int:
+    script_dir = Path(__file__).resolve().parent
+    k8s_dir = script_dir.parent
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate scheduled Argo/Kubernetes manifests into "
+            "k8s/pipeline/exec without modifying source manifests."
+        )
+    )
+
+    parser.add_argument(
+        "--config",
+        default=str(script_dir / "scheduling.yaml"),
+        help="Path to scheduling.yaml",
+    )
+
+    parser.add_argument(
+        "--batch-input",
+        default=str(k8s_dir / "pipeline" / "batch" / "pipeline.yaml"),
+        help="Path to batch Argo pipeline.yaml",
+    )
+
+    parser.add_argument(
+        "--incremental-input",
+        default=str(k8s_dir / "pipeline" / "incremental"),
+        help="Path to incremental manifests directory",
+    )
+
+    parser.add_argument(
+        "--output",
+        default=str(k8s_dir / "pipeline" / "exec"),
+        help="Output directory",
+    )
+
+    parser.add_argument(
+        "--mode",
+        choices=("batch", "incremental", "all"),
+        default="all",
+        help="Which manifests to generate",
+    )
+
+    parser.add_argument(
+        "--print-rules",
+        action="store_true",
+        help="Print parsed scheduling rules",
+    )
+
+    args = parser.parse_args()
+
+    try:
+        config = load_scheduling_config(Path(args.config).resolve())
+
+        warnings: list[str] = []
+
+        known_top_level_keys = {"batch", "incremental"}
+        unknown_top_level_keys = set(config.keys()) - known_top_level_keys
+
+        for key in sorted(unknown_top_level_keys):
+            warnings.append(
+                f"Unknown top-level scheduling key '{key}'. "
+                "Expected 'batch' or 'incremental'."
+            )
+
+        batch_rules = config.get("batch", {})
+        incremental_rules = config.get("incremental", {})
+
+        if args.print_rules:
+            print_rules("Batch rules:", batch_rules)
+            print()
+            print_rules("Incremental rules:", incremental_rules)
+            print()
+
+        output_dir = Path(args.output).resolve()
+
+        if args.mode in ("batch", "all"):
+            if batch_rules:
+                warnings += apply_batch_rules(
+                    Path(args.batch_input).resolve(),
+                    output_dir / "batch" / "pipeline.yaml",
+                    batch_rules,
+                )
+            else:
+                warnings.append("No 'batch' section found in scheduling.yaml")
+
+        if args.mode in ("incremental", "all"):
+            if incremental_rules:
+                warnings += apply_incremental_rules(
+                    Path(args.incremental_input).resolve(),
+                    output_dir / "incremental",
+                    incremental_rules,
+                )
+            else:
+                warnings.append("No 'incremental' section found in scheduling.yaml")
+
+        print(f"Generated manifests in: {output_dir}")
+
+        if warnings:
+            print()
+            print("Warnings:")
+
+            for warning in warnings:
+                print(f"  - {warning}")
+
+    except Exception as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
