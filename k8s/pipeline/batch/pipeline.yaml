@@ -594,17 +594,6 @@ spec:
             - name: function
               value: feature_index_construction
 
-        - name: evaluation
-          depends: feature-index-construction.Succeeded && embedding-training.Succeeded
-          when: "'{{inputs.parameters.mode}}' =~ '.*evaluation.*' && !('{{inputs.parameters.mode}}' =~ '.*inference.*')"
-          template: prediction
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: evaluation
-
     - name: main
       dag:
         tasks:
@@ -623,17 +612,6 @@ spec:
             parameters:
             - name: mode
               value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-
-        - name: evaluation
-          depends: pipeline-init.Succeeded && embedding-training-dag.Skipped
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*'"
-          template: prediction
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-            - name: function
-              value: evaluation
 
         - name: bert-normalization-training
           depends: pipeline-init.Succeeded
