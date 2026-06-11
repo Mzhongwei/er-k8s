@@ -18,6 +18,7 @@ PIPELINE_CONFIG_DIR="$ROOT_DIR/code/Energy-Aware-Entity-Resolution/config/exampl
 NAMESPACE="argo"
 NODE=server2-labo
 PIPELINE_MODE="embedding"
+SCHEDULING_CONFIG_PATH="$K8S_DIR/scripts/scheduling.yaml"
 
 usage() {
     cat << 'EOF'
@@ -73,6 +74,9 @@ start_pipeline() {
 
     config_path="$PIPELINE_CONFIG_DIR/config-${PIPELINE_MODE}.yaml"
     script_start_time=$(date +%s)
+
+    nano "$SCHEDULING_CONFIG_PATH"
+    "$SCRIPT_DIR/erctl.sh" compile
 
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs kubectl delete -n "$NAMESPACE" || true
         kubectl delete -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
