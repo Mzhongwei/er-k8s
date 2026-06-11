@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "pipeline" "parse" "help")
+ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "pipeline" "compile" "help")
 
 print_help() {
     cat << 'EOF'
@@ -23,7 +23,7 @@ COMMANDS:
     dataset     Sync Data_example/bert files into the Argo PVC
     process     Get the PID of processes running in the Argo workflow
     pipeline    Manage the Argo pipeline workflow and its storage
-    parse       Parse the node scheduling configuration
+    compile     Compile the node scheduling configuration
     help        Display this help message
 
 OPTIONS:
@@ -173,8 +173,8 @@ EOF
         run_script "pipeline.sh" "$@"
         ;;
 
-    parse)
-        run_script "parser.py" "$@"
+    compile)
+        run_script "compiler.py" "$@"
         ;;
     *)
         echo "Invalid command: $COMMAND. Use one of the following: ${ACTIONS[*]}."
