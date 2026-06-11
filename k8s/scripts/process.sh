@@ -712,11 +712,11 @@ start_agent_for_node() {
   agent_err="$COORD_LOG_DIR/agent-${name}.err"
   : > "$agent_err"
 
-  echo "[coordinator] starting agent: node=$name kind=$kind sudo=$sudo_mode target=${target:-local}" >&2
+  echo "[INFO] starting agent: node=$name kind=$kind sudo=$sudo_mode target=${target:-local}" >&2
 
   if [ "$kind" = "local" ]; then
     if [ "$mode" != "get" ]; then
-      echo "[coordinator] validating local sudo for $name..." >&2
+      echo "[INFO] validating local sudo for $name..." >&2
       sudo -v
     fi
 
@@ -734,30 +734,30 @@ start_agent_for_node() {
     local sudo_password=""
     local sudo_password_b64=""
 
-    echo "[coordinator] copying agent script to $target:$remote_script" >&2
+    echo "[INFO] copying agent script to $target:$remote_script" >&2
     if ! ssh -o ConnectTimeout=5 "$target" "cat > '$remote_script' && chmod +x '$remote_script'" < "$0" 2> "$agent_err"; then
-      echo "[coordinator] failed to copy agent script to $target through ssh/cat. See $agent_err" >&2
+      echo "[ERROR] failed to copy agent script to $target through ssh/cat. See $agent_err" >&2
       return 1
     fi
 
     if [ "$mode" != "get" ] && [ "$sudo_mode" = "execute" ]; then
-      printf "[coordinator] sudo password for %s: " "$target" >&2
+      printf "[INFO] sudo password for %s: " "$target" >&2
       stty -echo 2>/dev/null || true
       IFS= read -r sudo_password
       stty echo 2>/dev/null || true
       printf "\n" >&2
 
       if ! printf '%s\n' "$sudo_password" | ssh -o ConnectTimeout=5 "$target" "sudo -S -p '' -v" >/dev/null 2> "$agent_err"; then
-        echo "[coordinator] remote sudo validation failed for $target. See $agent_err" >&2
+        echo "[ERROR] remote sudo validation failed for $target. See $agent_err" >&2
         return 1
       fi
 
       sudo_password_b64="$(printf '%s' "$sudo_password" | base64 | tr -d '\n')"
       unset sudo_password
     elif [ "$mode" != "get" ] && [ "$sudo_mode" = "direct" ]; then
-      echo "[coordinator] validating remote direct sudo for $target without password..." >&2
+      echo "[INFO] validating remote direct sudo for $target without password..." >&2
       if ! ssh -o ConnectTimeout=5 "$target" 'tmp_log="/tmp/erctl-ecofloc-remote-sudo-test.log"; sleep 10 & test_pid=$!; sudo -n /usr/local/bin/ecofloc --cpu -p "$test_pid" -i 1000 -t 1 > "$tmp_log" 2>&1; rc=$?; kill "$test_pid" 2>/dev/null || true; if [ "$rc" -ne 0 ]; then cat "$tmp_log" >&2; fi; exit "$rc"' 2> "$agent_err"; then
-        echo "[coordinator] remote direct sudo validation failed for $target. Check sudoers for /usr/local/bin/ecofloc. See $agent_err" >&2
+        echo "[ERROR] remote direct sudo validation failed for $target. Check sudoers for /usr/local/bin/ecofloc. See $agent_err" >&2
         return 1
       fi
     fi
@@ -775,30 +775,30 @@ start_agent_for_node() {
     local remote_script="/tmp/process_cluster_${USER:-user}.sh"
     local vm_connector_script="${ERCTL_VM_CONNECTOR_SCRIPT:-/home/vagrant/update_freq.sh}"
 
-    echo "[coordinator] copying agent script to VM $vm_target through host $vm_host:$remote_script" >&2
+    echo "[INFO] copying agent script to VM $vm_target through host $vm_host:$remote_script" >&2
     if ! ssh -o ConnectTimeout=5 "$vm_host" "ssh '$vm_target' \"cat > '$remote_script' && chmod +x '$remote_script'\"" < "$0" 2> "$agent_err"; then
-      echo "[coordinator] failed to copy agent script to VM $vm_target through host $vm_host. See $agent_err" >&2
+      echo "[ERROR] failed to copy agent script to VM $vm_target through host $vm_host. See $agent_err" >&2
       return 1
     fi
 
     if [ "$mode" != "get" ] && [ "$sudo_mode" = "direct" ]; then
-      echo "[coordinator] validating VM direct sudo on $vm_target through $vm_host without password..." >&2
+      echo "[INFO] validating VM direct sudo on $vm_target through $vm_host without password..." >&2
       if ! ssh -o ConnectTimeout=5 "$vm_host" "ssh '$vm_target' 'tmp_log=\"/tmp/erctl-ecofloc-vm-sudo-test.log\"; sleep 10 & test_pid=\$!; sudo -n /usr/local/bin/ecofloc --cpu -p \"\$test_pid\" -i 1000 -t 1 > \"\$tmp_log\" 2>&1; rc=\$?; kill \"\$test_pid\" 2>/dev/null || true; if [ \"\$rc\" -ne 0 ]; then cat \"\$tmp_log\" >&2; fi; exit \"\$rc\"'" 2> "$agent_err"; then
-        echo "[coordinator] VM direct sudo validation failed on $vm_target through $vm_host. Check sudoers for /usr/local/bin/ecofloc. See $agent_err" >&2
+        echo "[ERROR] VM direct sudo validation failed on $vm_target through $vm_host. Check sudoers for /usr/local/bin/ecofloc. See $agent_err" >&2
         return 1
       fi
     elif [ "$mode" != "get" ] && [ "$sudo_mode" = "execute" ]; then
-      echo "[coordinator] VM execute sudo mode is not supported without an interactive remote sudo implementation. Use direct mode." >&2
+      echo "[ERROR] VM execute sudo mode is not supported without an interactive remote sudo implementation. Use direct mode." >&2
       return 1
     fi
 
-    echo "[coordinator] starting VM agent on $vm_target through $vm_host; connector=$vm_connector_script" >&2
+    echo "[INFO] starting VM agent on $vm_target through $vm_host; connector=$vm_connector_script" >&2
     ssh -o ConnectTimeout=5 "$vm_host" \
       "ssh '$vm_target' \"ERCTL_VM_CONNECTOR_SCRIPT='$vm_connector_script' ERCTL_ECOFLOC_DIRECT_BIN='/usr/local/bin/ecofloc' exec bash '$remote_script' __agent__ --vm --node-name '$name' --sudo-mode '$sudo_mode' --mode '$mode' --scan-interval '$SCAN_INTERVAL' --ecofloc-interval '$ECOFLOC_INTERVAL' --metrics '$ECOFLOC_METRICS' --export '$ECOFLOC_EXPORT_PATH'\"" \
       > "$COORD_FIFO" 2> "$agent_err" &
 
   else
-    echo "[coordinator] unsupported node kind: $kind" >&2
+    echo "[ERROR] unsupported node kind: $kind" >&2
     return 1
   fi
 
@@ -1030,18 +1030,18 @@ coord_main() {
   local agent_mode="watch"
   [ "$CMD" = "get" ] && agent_mode="get"
 
-  echo "[coordinator] starting with ${#NODES[@]} configured node(s)" >&2
+  echo "[INFO] starting with ${#NODES[@]} configured node(s)" >&2
   if [ "${#NODES[@]}" -eq 0 ]; then
-    echo "[coordinator] no nodes configured; using built-in defaults" >&2
+    echo "[INFO] no nodes configured; using built-in defaults" >&2
     NODES=("server2-labo=local:execute" "fedora=ssh:fedora:direct" "server1-k3s-worker=vm:server1:direct")
   fi
 
   for spec in "${NODES[@]}"; do
     if [ -z "${spec:-}" ]; then
-      echo "[coordinator] skipped empty node spec" >&2
+      echo "[INFO] skipped empty node spec" >&2
       continue
     fi
-    echo "[coordinator] node spec: $spec" >&2
+    echo "[INFO] node spec: $spec" >&2
     start_agent_for_node "$spec" "$agent_mode"
   done
 
