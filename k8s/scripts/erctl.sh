@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "pipeline" "compile" "help")
+ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "pipeline" "compile" "move" "help")
 
 print_help() {
     cat << 'EOF'
@@ -24,6 +24,7 @@ COMMANDS:
     process     Get the PID of processes running in the Argo workflow
     pipeline    Manage the Argo pipeline workflow and its storage
     compile     Compile the node scheduling configuration
+    move        Move pods between nodes during execution
     help        Display this help message
 
 OPTIONS:
@@ -51,7 +52,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [images|configmaps|dataset|fetch-report|process|pipeline|help] [options]"
+    echo "Usage: $0 [images|configmaps|dataset|fetch-report|process|pipeline|compile|move|help] [options]"
     exit 1
 fi
 
@@ -175,6 +176,9 @@ EOF
 
     compile)
         run_script "compiler.py" "$@"
+        ;;
+    move)
+        run_script "move.py" "$@"
         ;;
     *)
         echo "Invalid command: $COMMAND. Use one of the following: ${ACTIONS[*]}."
