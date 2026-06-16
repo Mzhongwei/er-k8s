@@ -19,7 +19,7 @@ spec:
           command: [sh, -c]
           args:
             - |
-              /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode embedding-inference-inc --function normalization --raw_data Data_example/fodors_zagats-tableA.csv --data_source_A Data_example/fodors_zagats-tableA.csv --data_source_B Data_example/fodors_zagats-tableB.csv
+              /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode embedding-inference-inc --function normalization --raw_data Data_example/tableA.csv --data_source_A Data_example/tableA.csv --data_source_B Data_example/tableB.csv
           env:
             - name: CODECARBON_REPORT_PATH
               value: /app/reports/codecarbon/result/emissions.csv

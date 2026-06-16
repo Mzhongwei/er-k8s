@@ -14,8 +14,8 @@ NAMESPACE="${EAER_DATA_NAMESPACE:-argo}"
 PVC_NAME="${EAER_BERT_DATA_PVC:-pipeline-data-claim}"
 LOCAL_BERT_DATA_DIR="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/bert"
 GROUND_TRUTH_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-matches.txt"
-FODORS_TABLE_A_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableA.csv"
-FODORS_TABLE_B_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableB.csv"
+FODORS_TABLE_A_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/tableA.csv"
+FODORS_TABLE_B_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/tableB.csv"
 PVC_MANIFEST="${ROOT_DIR}/k8s/pvc-manifests/pvc-bert-data.yaml"
 SYNC_POD="data-sync-$$"
 
@@ -93,9 +93,9 @@ kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'mkdir -p /data/bert'
 kubectl cp "$LOCAL_BERT_DATA_DIR/." "$NAMESPACE/$SYNC_POD:/data/bert"
 kubectl cp "$GROUND_TRUTH_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-matches.txt"
 kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-matches.txt /data/fodors_zagat-matches.txt'
-kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-tableA.csv"
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-tableA.csv /data/fodors_zagat-tableA.csv'
-kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-tableB.csv"
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-tableB.csv /data/fodors_zagat-tableB.csv'
+kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:/data/tableA.csv"
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/tableA.csv /data/tableA.csv'
+kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:/data/tableB.csv"
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/tableB.csv /data/tableB.csv'
 
 echo "Synced BERT and Fodors CSV files to PVC ${PVC_NAME} in namespace ${NAMESPACE}."

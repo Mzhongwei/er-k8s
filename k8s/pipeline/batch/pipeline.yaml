@@ -21,11 +21,11 @@ spec:
     - name: mode
       value: embedding-evaluation
     - name: raw_data
-      value: Data_example/fodors_zagats-tableA.csv
+      value: Data_example/tableA.csv
     - name: data_source_A
-      value: Data_example/fodors_zagats-tableA.csv
+      value: Data_example/tableA.csv
     - name: data_source_B
-      value: Data_example/fodors_zagats-tableB.csv
+      value: Data_example/tableB.csv
   entrypoint: main
 
   templates:
