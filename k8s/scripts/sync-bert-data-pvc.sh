@@ -8,7 +8,7 @@ fi
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+ROOT_DIR=""
 
 NAMESPACE="${EAER_DATA_NAMESPACE:-argo}"
 PVC_NAME="${EAER_BERT_DATA_PVC:-pipeline-data-claim}"
