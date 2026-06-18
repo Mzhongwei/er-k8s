@@ -15,7 +15,7 @@ PVC_NAME="${EAER_BERT_DATA_PVC:-pipeline-data-claim}"
 LOCAL_BERT_DATA_DIR="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm"
 GROUND_TRUTH_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/matches.txt"
 FODORS_TABLE_A_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv"
-FODORS_TABLE_B_FILE="$/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
+FODORS_TABLE_B_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
 PVC_MANIFEST="${ROOT_DIR}/k8s/pvc-manifests/pvc-bert-data.yaml"
 SYNC_POD="data-sync-$$"
 
