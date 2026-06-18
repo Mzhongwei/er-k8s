@@ -12,10 +12,10 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 NAMESPACE="${EAER_DATA_NAMESPACE:-argo}"
 PVC_NAME="${EAER_BERT_DATA_PVC:-pipeline-data-claim}"
-LOCAL_BERT_DATA_DIR="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/bert"
-GROUND_TRUTH_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-matches.txt"
-FODORS_TABLE_A_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/tableA.csv"
-FODORS_TABLE_B_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/tableB.csv"
+LOCAL_BERT_DATA_DIR="${ROOT_DIR}/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm"
+GROUND_TRUTH_FILE="${ROOT_DIR}/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/matches.txt"
+FODORS_TABLE_A_FILE="${ROOT_DIR}/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv"
+FODORS_TABLE_B_FILE="${ROOT_DIR}/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
 PVC_MANIFEST="${ROOT_DIR}/k8s/pvc-manifests/pvc-bert-data.yaml"
 SYNC_POD="data-sync-$$"
 
@@ -89,13 +89,10 @@ EOF
 
 kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${SYNC_POD}" --timeout=120s >/dev/null
 kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'rm -rf /data/*'
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'mkdir -p /data/bert'
-kubectl cp "$LOCAL_BERT_DATA_DIR/." "$NAMESPACE/$SYNC_POD:/data/bert"
-kubectl cp "$GROUND_TRUTH_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-matches.txt"
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-matches.txt /data/fodors_zagat-matches.txt'
-kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:/data/tableA.csv"
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/tableA.csv /data/tableA.csv'
-kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:/data/tableB.csv"
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/tableB.csv /data/tableB.csv'
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'mkdir -p /srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/'
+kubectl cp "$LOCAL_BERT_DATA_DIR/." "$NAMESPACE/$SYNC_POD:/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm"
+kubectl cp "$GROUND_TRUTH_FILE" "$NAMESPACE/$SYNC_POD:/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/matches.txt"
+kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv"
+kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
 
 echo "Synced BERT and Fodors CSV files to PVC ${PVC_NAME} in namespace ${NAMESPACE}."
