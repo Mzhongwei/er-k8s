@@ -16,7 +16,7 @@ LOCAL_BERT_DATA_DIR="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm"
 GROUND_TRUTH_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/matches.txt"
 FODORS_TABLE_A_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv"
 FODORS_TABLE_B_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
-PVC_MANIFEST="${ROOT_DIR}/k8s/pvc-manifests/pvc-bert-data.yaml"
+PVC_MANIFEST="${ROOT_DIR}/k8s/pvc-manifests/pvc-data.yaml"
 SYNC_POD="data-sync-$$"
 
 require_cmd() {
