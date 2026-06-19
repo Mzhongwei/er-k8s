@@ -21,11 +21,11 @@ spec:
     - name: mode
       value: embedding-evaluation
     - name: raw_data
-      value: data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv
+      value: /data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv
     - name: data_source_A
-      value: data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv
+      value: /data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv
     - name: data_source_B
-      value: data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv
+      value: /data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv
   entrypoint: main
 
   templates:

@@ -19,7 +19,7 @@ spec:
           command: [sh, -c]
           args:
             - |
-              /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode embedding-inference-inc --function normalization --raw_data data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv --data_source_A data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv --data_source_B data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv
+              /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode embedding-inference-inc --function normalization --raw_data /data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv --data_source_A /data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv --data_source_B /data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv
           env:
             - name: CODECARBON_REPORT_PATH
               value: /app/reports/codecarbon/result/emissions.csv

@@ -89,10 +89,10 @@ EOF
 
 kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${SYNC_POD}" --timeout=120s >/dev/null
 kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'rm -rf /data/*'
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'mkdir -p data/exp_datasets/4-1_dirty_dblp_acm/'
-kubectl cp "$LOCAL_BERT_DATA_DIR/." "$NAMESPACE/$SYNC_POD:data/exp_datasets/4-1_dirty_dblp_acm"
-kubectl cp "$GROUND_TRUTH_FILE" "$NAMESPACE/$SYNC_POD:data/exp_datasets/4-1_dirty_dblp_acm/matches.txt"
-kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv"
-kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'mkdir -p /data/exp_datasets/4-1_dirty_dblp_acm/'
+kubectl cp "$LOCAL_BERT_DATA_DIR/." "$NAMESPACE/$SYNC_POD:/data/exp_datasets/4-1_dirty_dblp_acm"
+kubectl cp "$GROUND_TRUTH_FILE" "$NAMESPACE/$SYNC_POD:/data/exp_datasets/4-1_dirty_dblp_acm/matches.txt"
+kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:/data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv"
+kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:/data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
 
 echo "Synced BERT and Fodors CSV files to PVC ${PVC_NAME} in namespace ${NAMESPACE}."
