@@ -42,7 +42,7 @@ spec:
               mountPath: /app/distributions/decision_evaluation.py
               subPath: decision_evaluation.py
             - name: pipeline-data
-              mountPath: /app/Data_example
+              mountPath: /data
             - name: pipeline-embedding-model-cache
               mountPath: /app/data
             - name: pipeline-buffer-data

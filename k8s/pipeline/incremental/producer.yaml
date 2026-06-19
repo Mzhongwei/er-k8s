@@ -34,7 +34,7 @@ spec:
               mountPath: /app/config/examples/config-embedding.yaml
               subPath: config.yaml
             - name: pipeline-data
-              mountPath: /app/Data_example
+              mountPath: /data
       volumes:
         - name: pipeline-kafka-producer
           configMap:

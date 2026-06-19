@@ -60,7 +60,7 @@ spec:
           mountPath: /app/distributions/normalization_distribution.py
           subPath: normalization_distribution.py
         - name: pipeline-data
-          mountPath: /app/Data_example
+          mountPath: /data
         - name: pipeline-buffer-data
           mountPath: /app/data/buffers
         - name: pipeline-reports
@@ -439,7 +439,7 @@ spec:
         - name: pipeline-reports
           mountPath: /app/reports
         - name: pipeline-data
-          mountPath: /app/Data_example
+          mountPath: /data
         - name: codecarbon
           mountPath: /app/utils/codecarbon.py
           subPath: codecarbon.py

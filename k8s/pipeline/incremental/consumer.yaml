@@ -35,7 +35,7 @@ spec:
               mountPath: /app/config/examples/config-embedding.yaml
               subPath: config.yaml
             - name: pipeline-data
-              mountPath: /app/Data_example
+              mountPath: /data
             - name: pipeline-buffer-data
               mountPath: /app/data/buffers
             - name: pipeline-buffer-utils
