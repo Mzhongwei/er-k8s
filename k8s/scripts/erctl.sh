@@ -159,7 +159,7 @@ EOF
             esac
         done
 
-        run_script "sync-bert-data-pvc.sh"
+        run_script "sync-data-pvc.sh"
         ;;
     fetch-report)
         # forward all args to the helper script
