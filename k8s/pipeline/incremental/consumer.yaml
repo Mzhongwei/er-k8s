@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-consumer
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: kafka-consumer
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: argo
+      containers:
+        - name: main
+          image: kevinoulai/kafka:python
+          imagePullPolicy: IfNotPresent
+          command: [python, /app/consumer.py]
+          ports:
+            - containerPort: 9092
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: pipeline-kafka-consumer
+              mountPath: /app/consumer.py
+              subPath: consumer.py
+            - name: pipeline-config
+              mountPath: /app/config/examples/config-embedding.yaml
+              subPath: config.yaml
+            - name: pipeline-data
+              mountPath: /data
+            - name: pipeline-buffer-data
+              mountPath: /app/data/buffers
+            - name: pipeline-buffer-utils
+              mountPath: /app/utils/buffers.py
+              subPath: buffers.py
+      volumes:
+        - name: pipeline-buffer-data
+          persistentVolumeClaim:
+            claimName: pipeline-buffer-data-claim
+        - name: pipeline-kafka-consumer
+          configMap:
+            name: eaer-kafka-consumer
+        - name: pipeline-config
+          configMap:
+            name: er-pipeline-config
+        - name: pipeline-data
+          persistentVolumeClaim:
+            claimName: pipeline-data-claim
+        - name: pipeline-buffer-utils
+          configMap:
+            name: eaer-kafka-buffers

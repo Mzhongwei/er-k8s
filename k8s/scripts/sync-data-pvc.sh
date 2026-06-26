@@ -12,11 +12,11 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 NAMESPACE="${EAER_DATA_NAMESPACE:-argo}"
 PVC_NAME="${EAER_BERT_DATA_PVC:-pipeline-data-claim}"
-LOCAL_BERT_DATA_DIR="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/bert"
-GROUND_TRUTH_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-matches.txt"
-FODORS_TABLE_A_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableA.csv"
-FODORS_TABLE_B_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/Data_example/fodors_zagats-tableB.csv"
-PVC_MANIFEST="${ROOT_DIR}/k8s/argo/pvc-manifests/pvc-bert-data.yaml"
+LOCAL_BERT_DATA_DIR="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm"
+GROUND_TRUTH_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/matches.txt"
+FODORS_TABLE_A_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv"
+FODORS_TABLE_B_FILE="/srv/shared/data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
+PVC_MANIFEST="${ROOT_DIR}/k8s/pvc-manifests/pvc-data.yaml"
 SYNC_POD="data-sync-$$"
 
 require_cmd() {
@@ -72,6 +72,7 @@ spec:
                 operator: NotIn
                 values:
                   - matis-asus-expertbook-b1500ceaey-b1500ceae
+                  - server1-labo
   restartPolicy: Never
   containers:
   - name: ${SYNC_POD}
@@ -88,13 +89,10 @@ EOF
 
 kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${SYNC_POD}" --timeout=120s >/dev/null
 kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'rm -rf /data/*'
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'mkdir -p /data/bert'
-kubectl cp "$LOCAL_BERT_DATA_DIR/." "$NAMESPACE/$SYNC_POD:/data/bert"
-kubectl cp "$GROUND_TRUTH_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-matches.txt"
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-matches.txt /data/fodors_zagat-matches.txt'
-kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-tableA.csv"
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-tableA.csv /data/fodors_zagat-tableA.csv'
-kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:/data/fodors_zagats-tableB.csv"
-kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'cp /data/fodors_zagats-tableB.csv /data/fodors_zagat-tableB.csv'
+kubectl -n "$NAMESPACE" exec "$SYNC_POD" -- sh -c 'mkdir -p /data/exp_datasets/4-1_dirty_dblp_acm/'
+kubectl cp "$LOCAL_BERT_DATA_DIR/." "$NAMESPACE/$SYNC_POD:/data/exp_datasets/4-1_dirty_dblp_acm"
+kubectl cp "$GROUND_TRUTH_FILE" "$NAMESPACE/$SYNC_POD:/data/exp_datasets/4-1_dirty_dblp_acm/matches.txt"
+kubectl cp "$FODORS_TABLE_A_FILE" "$NAMESPACE/$SYNC_POD:/data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv"
+kubectl cp "$FODORS_TABLE_B_FILE" "$NAMESPACE/$SYNC_POD:/data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv"
 
 echo "Synced BERT and Fodors CSV files to PVC ${PVC_NAME} in namespace ${NAMESPACE}."

@@ -1,0 +1,133 @@
+# Node Scheduling Configuration
+
+batch:
+    # Defaults values
+    tags: []
+    prefer: [server2-labo]
+    fallback: [fedora]
+    avoid: [server1-k3s-worker, matis-asus-expertbook-b1500ceaey-b1500ceae]
+
+    # Bert model tasks
+    bert:
+        tags: [gpu]
+        prefer: [server2-labo]
+        fallback: [fedora]
+        avoid: []
+
+    # Embedding model tasks
+    normalization:
+        tags: []
+        prefer: [server1-k3s-worker]
+        fallback: [fedora, server2-labo]
+        avoid: [matis-asus-expertbook-b1500ceaey-b1500ceae]
+
+    graph-construction:
+        tags: []
+        prefer: []
+        fallback: []
+        avoid: []
+
+    random-walk:
+        tags: []
+        prefer: []
+        fallback: []
+        avoid: []
+
+    embedding-training:
+        tags: []
+        prefer: []
+        fallback: []
+        avoid: []
+
+    cg-feature-extraction:
+        tags: []
+        prefer: [fedora]
+        fallback: [server2-labo]
+        avoid: []
+
+    feature-index-construction:
+        tags: []
+        prefer: [fedora]
+        fallback: [server2-labo]
+        avoid: []
+
+
+incremental:
+    # Defaults values
+    tags: []
+    prefer: [server2-labo]
+    fallback: [fedora]
+    avoid: [server1-k3s-worker, matis-asus-expertbook-b1500ceaey-b1500ceae]
+
+    # Embedding model tasks
+    normalization:
+        tags: []
+        prefer: [server1-k3s-worker]
+        fallback: [fedora, server2-labo]
+        avoid: [matis-asus-expertbook-b1500ceaey-b1500ceae]
+
+    graph-construction:
+        tags: []
+        prefer: []
+        fallback: []
+        avoid: []
+
+    random-walk:
+        tags: []
+        prefer: []
+        fallback: []
+        avoid: []
+
+    embedding-training:
+        tags: []
+        prefer: []
+        fallback: []
+        avoid: []
+
+    cg-feature-extraction:
+        tags: []
+        prefer: [fedora]
+        fallback: [server2-labo]
+        avoid: []
+
+    feature-index-construction:
+        tags: []
+        prefer: [fedora]
+        fallback: [server2-labo]
+        avoid: []
+
+    candidate-enumeration:
+        tags: []
+        prefer: [fedora]
+        fallback: [server2-labo]
+        avoid: []
+
+    calculating-similarity:
+        tags: []
+        prefer: [fedora]
+        fallback: [server2-labo]
+        avoid: []
+
+    decision-making:
+        tags: []
+        prefer: [fedora]
+        fallback: [server2-labo]
+        avoid: []
+
+    evaluation:
+        tags: []
+        prefer: [fedora]
+        fallback: [server2-labo]
+        avoid: []
+
+    producer:
+        tags: []
+        prefer: []
+        fallback: []
+        avoid: []
+
+    consumer:
+        tags: []
+        prefer: []
+        fallback: []
+        avoid: []

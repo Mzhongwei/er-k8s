@@ -8,11 +8,17 @@ fi
 
 set -euo pipefail
 
-PIPELINE_PATH=/home/kevin/k8s-python-llm/k8s/argo/pipeline.yaml
-NODE=server2-labo
-PVC_MANIFESTS=/home/kevin/k8s-python-llm/k8s/argo/pvc-manifests/
-PIPELINE_MODE="embedding"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+K8S_DIR="$ROOT_DIR/k8s"
+PIPELINE_BATCH_PATH="$K8S_DIR/pipeline/exec/batch/pipeline.yaml"
+PIPELINE_INCREMENTAL_DIR="$K8S_DIR/pipeline/exec/incremental"
+PVC_MANIFESTS="$K8S_DIR/pvc-manifests"
+PIPELINE_CONFIG_DIR="$ROOT_DIR/code/Energy-Aware-Entity-Resolution/config/examples"
+NAMESPACE="argo"
+NODE=server2-labo
+PIPELINE_MODE="embedding"
+SCHEDULING_CONFIG_PATH="$K8S_DIR/scripts/scheduling.yaml"
 
 usage() {
     cat << 'EOF'
@@ -43,21 +49,95 @@ latest_pipeline_workflow() {
         | cut -f1
 }
 
+wait_for_job_completion() {
+    local job_name="$1"
+
+    kubectl wait -n "$NAMESPACE" --for=condition=complete "job/$job_name" --timeout=30m
+}
+
+extract_mode_from_config() {
+    local config_path="$1"
+
+    awk -F': *' '
+        /^[[:space:]]*mode[[:space:]]*:/ {
+            mode = $2
+            gsub(/^"|"$/, "", mode)
+            print mode
+            exit
+        }
+    ' "$config_path"
+}
+
 start_pipeline() {
-    CONFIG_PATH=/home/kevin/k8s-python-llm/code/Energy-Aware-Entity-Resolution/config/examples/config-${PIPELINE_MODE}.yaml
-    timeout 5 kubectl get po -n argo -o name | grep '^pod/pipeline-' | xargs kubectl delete -n argo || true
-    timeout 5 kubectl delete pv -n argo --all || true
-    timeout 5 kubectl delete pvc -n argo --all || true
-    timeout 5 kubectl get po -n argo -o name | grep '^pod/kafka-server' | xargs kubectl delete -n argo || true
-    kubectl apply -n argo -f $PVC_MANIFESTS
-    kubectl patch pvc pipeline-kafka-data-claim -n argo \
+    local config_path
+    local config_mode
+
+    config_path="$PIPELINE_CONFIG_DIR/config-${PIPELINE_MODE}.yaml"
+    script_start_time=$(date +%s)
+
+    nano "$SCHEDULING_CONFIG_PATH"
+    "$SCRIPT_DIR/erctl.sh" compile
+
+    timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs kubectl delete -n "$NAMESPACE" || true
+        kubectl delete -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
+    timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
+    timeout 5 kubectl delete pv --all || true
+    timeout 5 kubectl delete pvc -n "$NAMESPACE" --all || true
+    timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/kafka-server' | xargs kubectl delete -n "$NAMESPACE" || true
+
+    kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFESTS"
+    kubectl patch pvc pipeline-kafka-data-claim -n "$NAMESPACE" \
         -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
-    $SCRIPT_DIR/erctl.sh dataset
-    nano $CONFIG_PATH
-    kubectl get cm -n argo -o name | grep '^configmap/eaer-' | xargs kubectl delete -n argo
-    kubectl delete cm -n argo er-pipeline-config
-    $SCRIPT_DIR/erctl.sh configmaps $PIPELINE_MODE
-    argo submit -n argo $PIPELINE_PATH
+
+    "$SCRIPT_DIR/erctl.sh" dataset
+
+    nano "$config_path"
+    config_mode="$(extract_mode_from_config "$config_path")"
+    if [ -z "$config_mode" ]; then
+        echo "Unable to read mode from config file: $config_path"
+        exit 1
+    fi
+
+    kubectl get cm -n "$NAMESPACE" -o name | grep '^configmap/eaer-' | xargs kubectl delete -n "$NAMESPACE" || true
+    kubectl delete cm -n "$NAMESPACE" er-pipeline-config || true
+    "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
+
+    pipeline_start_time=$(date +%s)
+    executed_pipeline=false
+    if [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
+        argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" --watch
+        if [[ "$config_mode" == *b_evaluation* ]]; then
+            argo logs -n "$NAMESPACE" @latest | grep -F '[RESULT]'
+        fi
+        executed_pipeline=true
+    fi
+    if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
+        mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED"
+        kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
+        mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
+        if [[ "$config_mode" == *evaluation* ]]; then
+            echo "Waiting for decision-making job to complete before starting evaluation..."
+            wait_for_job_completion decision-making
+            kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
+            wait_for_job_completion evaluation
+            kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]'
+        fi
+        executed_pipeline=true
+    fi
+    if [[ ! "$executed_pipeline" ]]; then
+        echo "Unsupported mode in $config_path: $config_mode"
+        exit 1
+    fi
+
+    end_time=$(date +%s)
+    pipeline_duration=$((end_time - pipeline_start_time))
+    pipeline_min=$((pipeline_duration/60))
+    pipeline_sec=$((pipeline_duration%60))
+    printf "Pipeline completed in %dm %02ds.\n" "$pipeline_min" "$pipeline_sec"
+    script_duration=$((end_time - script_start_time))
+    script_min=$((script_duration/60))
+    script_sec=$((script_duration%60))
+    printf "Total script execution time: %dm %02ds.\n" "$script_min" "$script_sec"
 }
 
 stop_pipeline() {
@@ -86,6 +166,8 @@ terminate_pipeline() {
     delete_pipeline_storage true
 }
 
+
+
 ACTION="start"
 RANDOM_VERSION_NAME=false
 CREATE_CONFIGMAPS=false
@@ -109,7 +191,7 @@ if [ "$ACTION" = "start" ]; then
     while [ $# -gt 0 ]; do
         case "$1" in
             -m|--mode)
-                if [ $# -lt 1 ]; then
+                if [ $# -lt 2 ]; then
                     echo "Missing value for $1. Expected 'embedding' or 'bert'."
                     exit 1
                 fi
@@ -168,4 +250,3 @@ else
     echo "Unknown pipeline action: $ACTION"
     exit 1
 fi
-

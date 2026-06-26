@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-producer
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: kafka-producer
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: main
+          image: kevinoulai/kafka:producer
+          imagePullPolicy: Always
+          command: [python, /app/producer.py]
+          ports:
+            - containerPort: 9092
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: pipeline-kafka-producer
+              mountPath: /app/producer.py
+              subPath: producer.py
+            - name: pipeline-config
+              mountPath: /app/config/examples/config-embedding.yaml
+              subPath: config.yaml
+            - name: pipeline-data
+              mountPath: /data
+      volumes:
+        - name: pipeline-kafka-producer
+          configMap:
+            name: eaer-kafka-producer
+        - name: pipeline-config
+          configMap:
+            name: er-pipeline-config
+        - name: pipeline-data
+          persistentVolumeClaim:
+            claimName: pipeline-data-claim

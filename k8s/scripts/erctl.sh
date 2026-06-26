@@ -6,7 +6,7 @@ fi
 
 set -euo pipefail
 
-ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "pipeline" "help")
+ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "pipeline" "compile" "move" "help")
 
 print_help() {
     cat << 'EOF'
@@ -23,6 +23,8 @@ COMMANDS:
     dataset     Sync Data_example/bert files into the Argo PVC
     process     Get the PID of processes running in the Argo workflow
     pipeline    Manage the Argo pipeline workflow and its storage
+    compile     Compile the node scheduling configuration
+    move        Move pods between nodes during execution
     help        Display this help message
 
 OPTIONS:
@@ -50,7 +52,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [images|configmaps|dataset|fetch-report|process|pipeline|help] [options]"
+    echo "Usage: $0 [images|configmaps|dataset|fetch-report|process|pipeline|compile|move|help] [options]"
     exit 1
 fi
 
@@ -70,7 +72,15 @@ fi
 run_script() {
     local script_name="$1"
     shift
-    bash "${SCRIPT_DIR}/${script_name}" "$@"
+    if [ ! -f "${SCRIPT_DIR}/${script_name}" ]; then
+        echo "Error: Script ${SCRIPT_DIR}/${script_name} not found."
+        exit 1
+    fi
+    if [[ "${script_name}" == *.py ]]; then
+        python3 "${SCRIPT_DIR}/${script_name}" "$@"
+    else
+        bash "${SCRIPT_DIR}/${script_name}" "$@"
+    fi
 }
 
 case "$COMMAND" in
@@ -149,7 +159,7 @@ EOF
             esac
         done
 
-        run_script "sync-bert-data-pvc.sh"
+        run_script "sync-data-pvc.sh"
         ;;
     fetch-report)
         # forward all args to the helper script
@@ -164,6 +174,12 @@ EOF
         run_script "pipeline.sh" "$@"
         ;;
 
+    compile)
+        run_script "compiler.py" "$@"
+        ;;
+    move)
+        run_script "move.py" "$@"
+        ;;
     *)
         echo "Invalid command: $COMMAND. Use one of the following: ${ACTIONS[*]}."
         exit 1
