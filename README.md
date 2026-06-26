@@ -1,106 +1,320 @@
-# Energy-Aware Entity Resolution on Kubernetes
+Energy-Aware Entity Resolution on Kubernetes
 
-This repository contains a Kubernetes and Argo Workflows deployment of the Energy-Aware Entity Resolution pipeline. It also includes the Python code for the pipeline itself, container build files, and helper scripts for image builds, ConfigMaps, datasets, and workflow report retrieval.
+<p align="center">
+  <img alt="Kubernetes" src="https://img.shields.io/badge/Kubernetes-orchestration-326CE5?logo=kubernetes&logoColor=white">
+  <img alt="Argo Workflows" src="https://img.shields.io/badge/Argo-Workflows-FB6D3A?logo=argo&logoColor=white">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.x-3776AB?logo=python&logoColor=white">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-images-2496ED?logo=docker&logoColor=white">
+  <img alt="Bash" src="https://img.shields.io/badge/Bash-scripts-4EAA25?logo=gnubash&logoColor=white">
+</p>
 
-## What This Repo Does
+<p align="center">
+  <img alt="MinIO" src="https://img.shields.io/badge/MinIO-object%20storage-C72E49?logo=minio&logoColor=white">
+  <img alt="Redpanda Kafka" src="https://img.shields.io/badge/Redpanda%20%2F%20Kafka-streaming-D71920?logo=apachekafka&logoColor=white">
+  <img alt="NVIDIA GPU" src="https://img.shields.io/badge/NVIDIA-GPU%20optional-76B900?logo=nvidia&logoColor=white">
+  <img alt="YAML" src="https://img.shields.io/badge/YAML-manifests-CB171E?logo=yaml&logoColor=white">
+  <img alt="Status" src="https://img.shields.io/badge/status-research%20prototype-lightgrey">
+</p>
 
-- Builds container images for the EAER pipeline stages.
-- Deploys the cluster-side services and workloads used by the pipeline.
-- Runs the Argo workflow defined in `k8s/argo/pipeline.yaml`.
-- Tracks CodeCarbon emissions per pod and aggregates them into a shared CSV report.
-- Fetches the report back to your local machine with `erctl fetch-report`.
+This repository contains the Kubernetes deployment of an Energy-Aware Entity Resolution pipeline.
 
-Pipeline schema illustrating the main components and data flow:
+The original Python pipeline is split into multiple containerized tasks and orchestrated with Argo Workflows. The goal is to execute the entity resolution workflow on a Kubernetes cluster while keeping track of execution time, resource placement, and energy consumption through Ecofloc.
 
-![Pipeline Schema](architecture.png)
+![](architecture.png)Architecture overview
 
-## Repository Map
+Table of contents
 
-- `code/Energy-Aware-Entity-Resolution/` - main EAER Python project.
-- `k8s/argo/` - Argo workflow and PVC manifests.
-- `k8s/deployments/` - Kubernetes Deployment manifests.
-- `k8s/services/` - Kubernetes Service manifests.
-- `k8s/scripts/` - helper scripts and the `erctl` wrapper.
-- `docker/` - Dockerfiles for the pipeline images.
-- `archive/` - legacy manifests and earlier proof-of-concept material.
+- Overview
+- Main features
+- Repository structure
+- Prerequisites
+- Installation
+- Usage
+- Scheduling configuration
+- Process monitoring
+- Useful commands
+- Troubleshooting
 
-## Prerequisites
+# Overview
 
-- `kubectl`
-- `argo` CLI if you submit workflows directly
-- `docker`
-- `bash`
+The project adapts an entity resolution pipeline to a distributed Kubernetes environment. Each major step of the pipeline is isolated into its own container or Kubernetes job, allowing the workflow to be scheduled, monitored, restarted, and measured more easily than in a single local Python execution.
 
-If you are working locally with Minikube, the helper scripts also expect a running Minikube profile and the PVCs defined under `k8s/argo/pvc-manifests/`.
+The pipeline includes stages such as:
 
-## Common Workflows
+- data normalization;
+- graph construction;
+- random walks;
+- embedding training;
+- candidate enumeration;
+- similarity calculation;
+- collective graph feature extraction;
+- decision making;
+- evaluation;
+- optional BERT-based processing on GPU-capable nodes.
 
-### 1. Generate or refresh ConfigMaps
+Argo Workflows is used for batch execution, while a set of incremental Kubernetes manifests can be applied for inference-oriented executions.
+
+# Main features
+
+- Kubernetes-native execution of an entity resolution pipeline.
+- Argo Workflow DAG for batch pipeline orchestration.
+- Incremental execution manifests for inference and evaluation workflows.
+- Dedicated Docker images for the different pipeline components.
+- Persistent storage through PVC manifests for datasets, models, buffers, Kafka data, and reports.
+- ConfigMap generation for Python distribution scripts and runtime configuration.
+- Node scheduling compiler based on a readable YAML file.
+- Ecofloc and process monitoring for energy and emissions reporting.
+- Helper CLI wrapper through k8s/scripts/erctl.sh.
+
+Repository structure
+
+```text
+.
+├── architecture.png
+├── code/
+│   └── Energy-Aware-Entity-Resolution/   # Original EAER Python project as a Git submodule
+├── docker/                               # Dockerfiles for pipeline components
+├── k8s/
+│   ├── kafka/                            # Kafka / Redpanda-related manifests
+│   ├── pipeline/
+│   │   ├── batch/                        # Source Argo Workflow manifest
+│   │   ├── incremental/                  # Source incremental Kubernetes job manifests
+│   │   └── exec/                         # Generated manifests, created by the compiler
+│   ├── pvc-manifests/                    # PersistentVolumeClaim manifests
+│   ├── scripts/                          # Helper scripts and scheduling compiler
+│   ├── svc-manifests/                    # Service manifests
+│   └── rbac-configmaps.yaml              # RBAC resources for ConfigMap handling
+├── archive/                              # Legacy / experimental files
+└── README.md
+```
+
+# Prerequisites
+
+The project assumes access to a working Kubernetes cluster.
+
+Required tools:
+
+- kubectl
+- argo CLI
+- docker
+- bash
+- python3
+
+Cluster-side requirements:
+
+- Argo Workflows installed in the argo namespace;
+- a working storage provisioner for the PVCs;
+- access to the Docker images referenced by the manifests;
+- optional NVIDIA GPU support for BERT-related tasks.
+
+When using the Git submodule, clone the repository recursively:
+
+```bash
+git clone --recurse-submodules https://github.com/kevin-oulai/k8s-python-llm.git
+cd k8s-python-llm
+```
+
+If the repository was already cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+# Installation
+
+Create or select the Argo namespace:
+
+```bash
+kubectl create namespace argo --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Apply the RBAC resources used by the helper scripts:
+
+```bash
+kubectl apply -n argo -f k8s/rbac-configmaps.yaml
+```
+
+Generate the scheduled execution manifests:
+
+```bash
+bash k8s/scripts/erctl.sh compile
+```
+
+# Usage
+
+Run with the helper script
+
+The erctl wrapper can manage the pipeline from a single entry point:
+
+```bash
+bash k8s/scripts/erctl.sh pipeline start -m embedding
+```
+
+For BERT mode:
+
+```bash
+bash k8s/scripts/erctl.sh pipeline start -m bert
+```
+
+The helper script can also stop or terminate the latest workflow:
+
+```bash
+bash k8s/scripts/erctl.sh pipeline stop
+bash k8s/scripts/erctl.sh pipeline terminate
+```
+
+> Warning
+> The pipeline helper is designed for an experimental cluster workflow. It may delete and recreate pipeline-related pods, workflows, PVCs, and PVs before starting a new run. Review k8s/scripts/pipeline.sh before using it on a shared or production cluster.
+
+# Scheduling configuration
+
+Node placement is configured in:
+
+```text
+k8s/scripts/scheduling.yaml
+```
+
+The file defines scheduling rules for both batch and incremental executions. Each task can use the following fields:
+
+```yaml
+tags: []       # Logical task tags, for example GPU-related tasks
+prefer: []     # Preferred Kubernetes nodes
+fallback: []   # Fallback nodes if preferred nodes are unavailable
+avoid: []      # Nodes to avoid
+```
+
+Compile the scheduling configuration into executable manifests with:
+
+```bash
+bash k8s/scripts/erctl.sh compile
+```
+
+To inspect the parsed rules:
+
+```bash
+bash k8s/scripts/erctl.sh compile --print-rules
+```
+
+The compiler writes generated manifests into:
+
+```text
+k8s/pipeline/exec/
+```
+
+The source manifests in k8s/pipeline/batch/ and k8s/pipeline/incremental/ are kept unchanged.
+
+# Process monitoring with EcoFloc
+
+The repository provides a process-level monitoring command through erctl:
+
+bash k8s/scripts/erctl.sh process ecofloc
+
+This command detects Python processes running pipeline scripts from /app/... on the configured Kubernetes nodes, then launches EcoFloc on the node where each target PID is running. This is useful when the objective is to observe the actual processes executed by the Argo workflow instead of relying only on workflow-level reports.
+
+The process helper has two main modes:
+
+bash k8s/scripts/erctl.sh process get
+bash k8s/scripts/erctl.sh process ecofloc
+get lists the detected Python PIDs and their commands.
+ecofloc monitors the detected PIDs with EcoFloc.
+
+# Useful commands
+
+Display available erctl commands:
+
+```bash
+bash k8s/scripts/erctl.sh help
+```
+
+Build, load, or push Docker images:
+
+```bash
+bash k8s/scripts/erctl.sh images --build
+bash k8s/scripts/erctl.sh images --load
+bash k8s/scripts/erctl.sh images --push
+```
+
+Check Argo workflows:
+
+```bash
+kubectl get wf -n argo
+argo list -n argo
+```
+
+Check pods and logs:
+
+```bash
+kubectl get pods -n argo
+argo logs -n argo @latest
+kubectl logs -n argo <pod-name>
+```
+
+Check persistent volumes and claims:
+
+```bash
+kubectl get pvc -n argo
+kubectl get pv
+```
+
+# Troubleshooting
+
+The submodule directory is empty
+
+Run:
+
+```bash
+git submodule update --init --recursive
+```
+
+Pods stay pending because of PVC errors
+
+Check that the PVCs exist and that the cluster has a working storage provisioner:
+
+```bash
+kubectl get pvc -n argo
+kubectl describe pvc -n argo <pvc-name>
+```
+
+Then reapply the manifests if needed:
+
+```bash
+kubectl apply -n argo -f k8s/pvc-manifests/
+```
+
+Argo cannot find ConfigMaps
+
+Regenerate the ConfigMaps:
 
 ```bash
 bash k8s/scripts/erctl.sh configmaps embedding
 ```
 
-Use `bert` instead of `embedding` if you are updating the BERT-oriented config set.
-
-### 2. Sync the BERT dataset PVC
+or, for BERT mode:
 
 ```bash
-bash k8s/scripts/erctl.sh dataset
+bash k8s/scripts/erctl.sh configmaps bert
 ```
 
-### 3. Build images (should not be needed)
+GPU/BERT tasks stay pending
+
+Check that the target node exposes GPU resources:
 
 ```bash
-bash k8s/scripts/erctl.sh images --build
+kubectl describe node <node-name> | grep -i nvidia
 ```
 
-### 4. Submit an Argo workflow
+Also verify the scheduling rules in:
+
+```text
+k8s/scripts/scheduling.yaml
+```
+
+Then regenerate the execution manifests:
 
 ```bash
-argo submit k8s/argo/pipeline.yaml -n argo --watch
+bash k8s/scripts/erctl.sh compile
 ```
 
-### 5. Fetch the CodeCarbon report
+Notes
 
-```bash
-bash k8s/scripts/erctl.sh fetch-report --workflow <workflow-name>
-```
-
-By default the helper writes the file into `./reports/` as `emissions-<workflow-name>.csv`. Use `--dest <path>` if you want the CSV in a different location.
-
-## Emissions Reporting
-
-Each decorated pipeline stage writes CodeCarbon output into shared storage and the repository aggregates that data into a per-workflow CSV report. The CSV includes:
-
-- emissions
-- total energy consumed
-- CPU, GPU, and RAM energy
-- CPU, GPU, and RAM power
-- per-pod metadata and timestamps
-
-The current report path is mounted under `/app/reports/codecarbon/<workflow-name>/` in the workflow pods, and the fetch helper copies the final CSV from there.
-
-## Helpful Commands
-
-```bash
-bash k8s/scripts/erctl.sh help
-bash k8s/scripts/erctl.sh configmaps --help
-bash k8s/scripts/erctl.sh dataset --help
-```
-
-```bash
-kubectl get wf -n argo
-kubectl get pods -n argo
-kubectl get pvc -n argo | grep reports
-```
-
-## Troubleshooting
-
-- If a workflow report is missing, verify the workflow completed and that the `pipeline-reports-claim` PVC exists.
-- If you need to refresh the helpers after editing the Python code, rerun the ConfigMap generation step.
-- If Argo cannot mount the report path, check the workflow template mounts in `k8s/argo/pipeline.yaml`.
-
-## Code
-
-For the pipeline implementation itself, see the submodule [Energy-Aware-Entity-Resolution](https://github.com/kevin-oulai/Energy-Aware-Entity-Resolution/tree/distribution-kubernetes)
+This repository is an experimental deployment and orchestration layer around the Energy-Aware Entity Resolution pipeline. It is intended for research, testing, and infrastructure experimentation rather than direct production use.
