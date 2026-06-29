@@ -18,8 +18,6 @@ spec:
           image: kevinoulai/kafka:python
           imagePullPolicy: IfNotPresent
           command: [python, /app/consumer.py]
-          ports:
-            - containerPort: 9092
           resources:
             requests:
               cpu: 50m

@@ -318,3 +318,8 @@ bash k8s/scripts/erctl.sh compile
 Notes
 
 This repository is an experimental deployment and orchestration layer around the Energy-Aware Entity Resolution pipeline. It is intended for research, testing, and infrastructure experimentation rather than direct production use.
+
+## Acknowledgements
+
+This project builds on an initial implementation developed by
+[Kevin OULAI](https://github.com/kevin-oulai/k8s-python-llm/). The repository contains subsequent modifications, extensions, and maintenance work.

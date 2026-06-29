@@ -83,11 +83,11 @@ start_pipeline() {
     timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
     timeout 5 kubectl delete pv --all || true
     timeout 5 kubectl delete pvc -n "$NAMESPACE" --all || true
-    timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/kafka-server' | xargs kubectl delete -n "$NAMESPACE" || true
+    # timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/kafka-server' | xargs kubectl delete -n "$NAMESPACE" || true
 
     kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFESTS"
-    kubectl patch pvc pipeline-kafka-data-claim -n "$NAMESPACE" \
-        -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
+    # kubectl patch pvc pipeline-kafka-data-claim -n "$NAMESPACE" \
+    #     -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
 
     "$SCRIPT_DIR/erctl.sh" dataset
 

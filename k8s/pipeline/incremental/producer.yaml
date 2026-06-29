@@ -2,11 +2,11 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kafka-producer
-spec:
+spec:     # Job 的 spec
   completions: 1
   parallelism: 1
   backoffLimit: 3
-  template:
+  template:    # Pod template
     metadata:
       labels:
         app: kafka-producer
@@ -17,8 +17,6 @@ spec:
           image: kevinoulai/kafka:producer
           imagePullPolicy: Always
           command: [python, /app/producer.py]
-          ports:
-            - containerPort: 9092
           resources:
             requests:
               cpu: 50m
