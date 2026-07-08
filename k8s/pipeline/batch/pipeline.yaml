@@ -37,6 +37,7 @@ spec:
         - name: data_source_A
         - name: data_source_B
         - name: function
+        - name: output_path
       container:
         name: main
         image: kevinoulai/erctl:normalization
@@ -44,14 +45,12 @@ spec:
         command: [sh, -c]
         args:
         - |
-          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode '{{inputs.parameters.mode}}' --function '{{inputs.parameters.function}}' --raw_data '{{inputs.parameters.raw_data}}' --data_source_A '{{inputs.parameters.data_source_A}}' --data_source_B '{{inputs.parameters.data_source_B}}' > /tmp/processed_data
+          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode '{{inputs.parameters.mode}}' --function '{{inputs.parameters.function}}' --raw_data '{{inputs.parameters.raw_data}}' --data_source_A '{{inputs.parameters.data_source_A}}' --data_source_B '{{inputs.parameters.data_source_B}}' --output '{{inputs.parameters.output_path}}'
         env:
         - name: MODE
           value: '{{inputs.parameters.mode}}'
         - name: WORKFLOW_NAME
           value: '{{workflow.name}}'
-        - name: CODECARBON_REPORT_PATH
-          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -68,9 +67,9 @@ spec:
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
-        - name: codecarbon
-          mountPath: /app/utils/codecarbon.py
-          subPath: codecarbon.py
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -90,23 +89,17 @@ spec:
       - name: pipeline-buffer-utils
         configMap:
           name: eaer-kafka-buffers
-      - name: codecarbon
+      - name: pipeline-io
         configMap:
-          name: eaer-codecarbon
-      outputs:
-        artifacts:
-        - name: processed_data
-          path: /tmp/processed_data
+          name: eaer-pipeline-io
 
     - name: graph
       inputs:
-        artifacts:
-        - name: processed_data
-          path: /tmp/processed_data
-          optional: true
         parameters:
         - name: mode
         - name: function
+        - name: processed_data
+        - name: output_path
       container:
         name: main
         image: kevinoulai/erctl:graph
@@ -114,18 +107,16 @@ spec:
         command: [/opt/venv/bin/python, /app/distributions/graph_randomwalk.py]
         args:
         - --processed_data
-        - /tmp/processed_data
+        - '{{inputs.parameters.processed_data}}'
         - --mode
         - '{{inputs.parameters.mode}}'
         - --function
         - '{{inputs.parameters.function}}'
         - --output
-        - /tmp/sequences.json
+        - '{{inputs.parameters.output_path}}'
         env:
         - name: WORKFLOW_NAME
           value: '{{workflow.name}}'
-        - name: CODECARBON_REPORT_PATH
-          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -142,9 +133,9 @@ spec:
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
-        - name: codecarbon
-          mountPath: /app/utils/codecarbon.py
-          subPath: codecarbon.py
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -164,54 +155,43 @@ spec:
       - name: pipeline-buffer-utils
         configMap:
           name: eaer-kafka-buffers
-      - name: codecarbon
+      - name: pipeline-io
         configMap:
-          name: eaer-codecarbon
-      outputs:
-        artifacts:
-        - name: sequences
-          path: /tmp/sequences.json
+          name: eaer-pipeline-io
 
     - name: embedding
       inputs:
-        artifacts:
-        - name: sequences
-          path: /tmp/sequences.json
-          optional: true
-        - name: candidate_pairs
-          path: /tmp/candidate_pairs.json
-          optional: true
         parameters:
         - name: mode
         - name: function
+        - name: sequences
+        - name: candidate_pairs
+        - name: output_path
       container:
         name: main
         image: kevinoulai/erctl:embedding
         imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
+        command: [/opt/venv/bin/python, /app/distributions/embedding_training_entry.py]
         args:
         - --mode
         - '{{inputs.parameters.mode}}'
         - --sequences
-        - '{{inputs.artifacts.sequences.path}}'
-        - --candidate_pairs
-        - '{{inputs.artifacts.candidate_pairs.path}}'
-        - --function
-        - '{{inputs.parameters.function}}'
+        - '{{inputs.parameters.sequences}}'
         - --output
-        - /tmp/matching_pairs.json
+        - '{{inputs.parameters.output_path}}'
         env:
         - name: WORKFLOW_NAME
           value: '{{workflow.name}}'
-        - name: CODECARBON_REPORT_PATH
-          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
-        - name: embedding-distribution
-          mountPath: /app/distributions/embedding_calculating.py
-          subPath: embedding_calculating.py
+        - name: embedding-training-entry
+          mountPath: /app/distributions/embedding_training_entry.py
+          subPath: embedding_training_entry.py
+        - name: embedding-common
+          mountPath: /app/distributions/embedding_common.py
+          subPath: embedding_common.py
         - name: pipeline-embedding-model-cache
           mountPath: /app/data
         - name: pipeline-buffer-data
@@ -221,16 +201,24 @@ spec:
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
-        - name: codecarbon
-          mountPath: /app/utils/codecarbon.py
-          subPath: codecarbon.py
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
+        - name: config-io
+          mountPath: /app/utils/config_io.py
+          subPath: config_io.py
+        - name: embedding-state
+          mountPath: /app/state_io
       volumes:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: embedding-distribution
+      - name: embedding-training-entry
         configMap:
-          name: eaer-embedding-calculating
+          name: eaer-embedding-training-entry
+      - name: embedding-common
+        configMap:
+          name: eaer-embedding-common
       - name: pipeline-embedding-model-cache
         persistentVolumeClaim:
           claimName: pipeline-embedding-model-cache-claim
@@ -240,26 +228,26 @@ spec:
       - name: pipeline-buffer-utils
         configMap:
           name: eaer-kafka-buffers
+      - name: pipeline-io
+        configMap:
+          name: eaer-pipeline-io
+      - name: config-io
+        configMap:
+          name: eaer-config-io
+      - name: embedding-state
+        configMap:
+          name: eaer-embedding-state
       - name: pipeline-reports
         persistentVolumeClaim:
           claimName: pipeline-reports-claim
-      - name: codecarbon
-        configMap:
-          name: eaer-codecarbon
-      outputs:
-        artifacts:
-        - name: matching_pairs
-          path: /tmp/matching_pairs.json
 
     - name: cg-feature-extraction
       inputs:
         parameters:
         - name: mode
         - name: function
-        artifacts:
         - name: processed_data
-          path: /tmp/processed_data
-          optional: true
+        - name: output_path
       container:
         name: main
         image: kevinoulai/erctl:cgfeature
@@ -269,16 +257,14 @@ spec:
         - --mode
         - '{{inputs.parameters.mode}}'
         - --processed_data
-        - /tmp/processed_data
+        - '{{inputs.parameters.processed_data}}'
         - --output
-        - /tmp/cg_feature
+        - '{{inputs.parameters.output_path}}'
         - --function
         - '{{inputs.parameters.function}}'
         env:
         - name: WORKFLOW_NAME
           value: '{{workflow.name}}'
-        - name: CODECARBON_REPORT_PATH
-          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -289,13 +275,13 @@ spec:
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
         - name: pipeline-buffer-data
           mountPath: /app/data/buffers
         - name: pipeline-reports
           mountPath: /app/reports
-        - name: codecarbon
-          mountPath: /app/utils/codecarbon.py
-          subPath: codecarbon.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -306,29 +292,23 @@ spec:
       - name: pipeline-buffer-utils
         configMap:
           name: eaer-kafka-buffers
+      - name: pipeline-io
+        configMap:
+          name: eaer-pipeline-io
       - name: pipeline-buffer-data
         persistentVolumeClaim:
           claimName: pipeline-buffer-data-claim
       - name: pipeline-reports
         persistentVolumeClaim:
           claimName: pipeline-reports-claim
-      - name: codecarbon
-        configMap:
-          name: eaer-codecarbon
-      outputs:
-        artifacts:
-        - name: cg_feature
-          path: /tmp/cg_feature
 
     - name: feature-index
       inputs:
-        artifacts:
-        - name: cg_feature
-          path: /tmp/cg_feature
-          optional: true
         parameters:
         - name: mode
         - name: function
+        - name: cg_feature
+        - name: output_path
       container:
         name: main
         image: kevinoulai/erctl:featureindex
@@ -336,18 +316,16 @@ spec:
         command: [/opt/venv/bin/python, /app/distributions/featureindex_candidate.py]
         args:
         - --cg_feature
-        - /tmp/cg_feature
+        - '{{inputs.parameters.cg_feature}}'
         - --mode
         - '{{inputs.parameters.mode}}'
         - --function
         - '{{inputs.parameters.function}}'
         - --output
-        - /tmp/candidate_pairs.json
+        - '{{inputs.parameters.output_path}}'
         env:
         - name: WORKFLOW_NAME
           value: '{{workflow.name}}'
-        - name: CODECARBON_REPORT_PATH
-          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
@@ -364,9 +342,9 @@ spec:
         - name: pipeline-buffer-utils
           mountPath: /app/utils/buffers.py
           subPath: buffers.py
-        - name: codecarbon
-          mountPath: /app/utils/codecarbon.py
-          subPath: codecarbon.py
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -380,28 +358,23 @@ spec:
       - name: pipeline-buffer-utils
         configMap:
           name: eaer-kafka-buffers
+      - name: pipeline-io
+        configMap:
+          name: eaer-pipeline-io
       - name: pipeline-buffer-data
         persistentVolumeClaim:
           claimName: pipeline-buffer-data-claim
       - name: pipeline-reports
         persistentVolumeClaim:
           claimName: pipeline-reports-claim
-      - name: codecarbon
-        configMap:
-          name: eaer-codecarbon
-      outputs:
-        artifacts:
-        - name: candidate_pairs
-          path: /tmp/candidate_pairs.json
 
     - name: bert
       inputs:
-        artifacts:
-        - name: processed_data
-          path: /tmp/processed_data
         parameters:
         - name: mode
         - name: function
+        - name: processed_data
+        - name: output_path
       container:
         name: main
         image: kevinoulai/erctl:bert
@@ -414,16 +387,14 @@ spec:
         - --mode
         - '{{inputs.parameters.mode}}'
         - --processed_data
-        - /tmp/processed_data
+        - '{{inputs.parameters.processed_data}}'
         - --output
-        - /tmp/bert_output
+        - '{{inputs.parameters.output_path}}'
         - --function
         - '{{inputs.parameters.function}}'
         env:
         - name: WORKFLOW_NAME
           value: '{{workflow.name}}'
-        - name: CODECARBON_REPORT_PATH
-          value: /app/reports/codecarbon/{{workflow.name}}/emissions.csv
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-bert.yaml
@@ -440,9 +411,9 @@ spec:
           mountPath: /app/reports
         - name: pipeline-data
           mountPath: /data
-        - name: codecarbon
-          mountPath: /app/utils/codecarbon.py
-          subPath: codecarbon.py
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
       volumes:
       - name: pipeline-config
         configMap:
@@ -462,15 +433,9 @@ spec:
       - name: pipeline-reports
         persistentVolumeClaim:
           claimName: pipeline-reports-claim
-      - name: codecarbon
+      - name: pipeline-io
         configMap:
-          name: eaer-codecarbon
-      outputs:
-        parameters:
-        - name: bert_output
-          valueFrom:
-            path: /tmp/bert_output
-
+          name: eaer-pipeline-io
     - name: pipeline-init
       inputs:
         parameters:
@@ -531,6 +496,8 @@ spec:
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: normalization
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/processed_data.json
 
         - name: graph-construction
           template: graph
@@ -541,9 +508,10 @@ spec:
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: graph_construction
-            artifacts:
             - name: processed_data
-              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/processed_data.json
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/graph.json
 
         - name: random-walk
           template: graph
@@ -554,19 +522,26 @@ spec:
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: random_walk
+            - name: processed_data
+              value: ""
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/sequences.json
 
         - name: embedding-training
           template: embedding
           depends: random-walk.Succeeded
           arguments:
-            artifacts:
-            - name: sequences
-              from: '{{tasks.random-walk.outputs.artifacts.sequences}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: embedding_training
+            - name: sequences
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/sequences.json
+            - name: candidate_pairs
+              value: ""
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/embedding_training.json
 
         - name: cg-feature-extraction
           template: cg-feature-extraction
@@ -577,22 +552,24 @@ spec:
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: cg_feature_extraction
-            artifacts:
             - name: processed_data
-              from: '{{tasks.normalization.outputs.artifacts.processed_data}}'
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/processed_data.json
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/cg_feature.json
 
         - name: feature-index-construction
           template: feature-index
           depends: cg-feature-extraction.Succeeded
           arguments:
-            artifacts:
-            - name: cg_feature
-              from: '{{tasks.cg-feature-extraction.outputs.artifacts.cg_feature}}'
             parameters:
             - name: mode
               value: '{{inputs.parameters.mode}}'
             - name: function
               value: feature_index_construction
+            - name: cg_feature
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/cg_feature.json
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/embedding/candidate_pairs.json
 
     - name: main
       dag:
@@ -629,19 +606,22 @@ spec:
               value: bert-training
             - name: function
               value: normalization
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/training_processed_data.json
 
         - name: bert-training
           depends: bert-normalization-training.Succeeded
           template: bert
           arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.bert-normalization-training.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
               value: bert-training
             - name: function
               value: bert_training
+            - name: processed_data
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/training_processed_data.json
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/training_output.json
 
         - name: bert-normalization-inference
           depends: "pipeline-init.Succeeded && (bert-training.Succeeded || bert-training.Omitted)"
@@ -659,19 +639,22 @@ spec:
               value: bert-inference
             - name: function
               value: normalization
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/inference_processed_data.json
 
         - name: bert-inference
           depends: bert-normalization-inference.Succeeded
           template: bert
           arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.bert-normalization-inference.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
               value: bert-inference
             - name: function
               value: bert_inference
+            - name: processed_data
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/inference_processed_data.json
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/inference_output.json
 
         - name: bert-normalization-b-evaluation
           depends: "pipeline-init.Succeeded && (bert-inference.Succeeded || bert-inference.Omitted) && (bert-training.Succeeded || bert-training.Omitted)"
@@ -689,16 +672,19 @@ spec:
               value: bert-b_evaluation
             - name: function
               value: normalization
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/evaluation_processed_data.json
 
         - name: bert-evaluation
           depends: bert-normalization-b-evaluation.Succeeded
           template: bert
           arguments:
-            artifacts:
-            - name: processed_data
-              from: '{{tasks.bert-normalization-b-evaluation.outputs.artifacts.processed_data}}'
             parameters:
             - name: mode
               value: bert-b_evaluation
             - name: function
               value: bert_evaluation
+            - name: processed_data
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/evaluation_processed_data.json
+            - name: output_path
+              value: /app/data/buffers/{{workflow.name}}/batch/bert/evaluation_output.json

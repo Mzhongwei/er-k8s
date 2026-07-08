@@ -25,8 +25,6 @@ spec:
             - --function
             - evaluation
           env:
-            - name: CODECARBON_REPORT_PATH
-              value: /app/reports/codecarbon/result/emissions.csv
           resources:
             requests:
               cpu: 100m
@@ -52,9 +50,9 @@ spec:
             - name: pipeline-buffer-utils
               mountPath: /app/utils/buffers.py
               subPath: buffers.py
-            - name: codecarbon
-              mountPath: /app/utils/codecarbon.py
-              subPath: codecarbon.py
+            - name: pipeline-io
+              mountPath: /app/utils/pipeline_io.py
+              subPath: pipeline_io.py
       volumes:
         - name: pipeline-config
           configMap:
@@ -71,12 +69,12 @@ spec:
         - name: pipeline-buffer-utils
           configMap:
             name: eaer-kafka-buffers
+        - name: pipeline-io
+          configMap:
+            name: eaer-pipeline-io
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim
         - name: pipeline-reports
           persistentVolumeClaim:
             claimName: pipeline-reports-claim
-        - name: codecarbon
-          configMap:
-            name: eaer-codecarbon

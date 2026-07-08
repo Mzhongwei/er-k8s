@@ -4,9 +4,13 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exec bash "$0" "$@"
 fi
 
+# -e: Immediately terminate the script if any command returns a non-zero status. 
+# -u: Immediately report an error and terminate the script if an undefined variable is used. 
+# -o pipefail: If any command in the pipeline fails, the entire pipeline is considered a failure.
 set -euo pipefail
 
-ACTIONS=("images" "configmaps" "dataset" "fetch-report" "process" "pipeline" "compile" "move" "help")
+# Defines all top-level commands supported by the current management tool.
+ACTIONS=("images" "configmaps" "dataset" "process" "pipeline" "compile" "move" "help")
 
 print_help() {
     cat << 'EOF'
@@ -49,13 +53,17 @@ EXAMPLES:
 EOF
 }
 
+# Get the absolute path of the directory where the current script is located.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# $# ：The number of parameters provided by the user. If no parameters are provided, display the basic usage and exit.
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [images|configmaps|dataset|fetch-report|process|pipeline|compile|move|help] [options]"
+    # $0 ：Indicates the name or path of the current script.
+    echo "Usage: $0 [images|configmaps|dataset|process|pipeline|compile|move|help] [options]"
     exit 1
 fi
 
+# get the first command and analyze
 COMMAND="$1"
 shift
 
@@ -161,11 +169,6 @@ EOF
 
         run_script "sync-data-pvc.sh"
         ;;
-    fetch-report)
-        # forward all args to the helper script
-        run_script "fetch-codecarbon.sh" "$@"
-        ;;
-
     process)
         run_script "process.sh" "$@"
         ;;

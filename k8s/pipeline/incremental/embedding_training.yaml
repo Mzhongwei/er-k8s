@@ -16,15 +16,11 @@ spec:
         - name: main
           image: kevinoulai/erctl:embedding
           imagePullPolicy: Always
-          command: [/opt/venv/bin/python, /app/distributions/embedding_calculating.py]
+          command: [/opt/venv/bin/python, /app/distributions/embedding_training_entry.py]
           args:
             - --mode
             - embedding-inference
-            - --function
-            - embedding_training
           env:
-            - name: CODECARBON_REPORT_PATH
-              value: /app/reports/codecarbon/result/emissions.csv
           resources:
             requests:
               cpu: 100m
@@ -36,9 +32,12 @@ spec:
             - name: pipeline-config
               mountPath: /app/config/examples/config-embedding.yaml
               subPath: config.yaml
-            - name: embedding-distribution
-              mountPath: /app/distributions/embedding_calculating.py
-              subPath: embedding_calculating.py
+            - name: embedding-training-entry
+              mountPath: /app/distributions/embedding_training_entry.py
+              subPath: embedding_training_entry.py
+            - name: embedding-common
+              mountPath: /app/distributions/embedding_common.py
+              subPath: embedding_common.py
             - name: pipeline-embedding-model-cache
               mountPath: /app/data
             - name: pipeline-buffer-data
@@ -48,16 +47,24 @@ spec:
             - name: pipeline-buffer-utils
               mountPath: /app/utils/buffers.py
               subPath: buffers.py
-            - name: codecarbon
-              mountPath: /app/utils/codecarbon.py
-              subPath: codecarbon.py
+            - name: pipeline-io
+              mountPath: /app/utils/pipeline_io.py
+              subPath: pipeline_io.py
+            - name: config-io
+              mountPath: /app/utils/config_io.py
+              subPath: config_io.py
+            - name: embedding-state
+              mountPath: /app/state_io
       volumes:
         - name: pipeline-config
           configMap:
             name: er-pipeline-config
-        - name: embedding-distribution
+        - name: embedding-training-entry
           configMap:
-            name: eaer-embedding-calculating
+            name: eaer-embedding-training-entry
+        - name: embedding-common
+          configMap:
+            name: eaer-embedding-common
         - name: pipeline-embedding-model-cache
           persistentVolumeClaim:
             claimName: pipeline-embedding-model-cache-claim
@@ -67,9 +74,15 @@ spec:
         - name: pipeline-buffer-utils
           configMap:
             name: eaer-kafka-buffers
+        - name: pipeline-io
+          configMap:
+            name: eaer-pipeline-io
+        - name: config-io
+          configMap:
+            name: eaer-config-io
+        - name: embedding-state
+          configMap:
+            name: eaer-embedding-state
         - name: pipeline-reports
           persistentVolumeClaim:
             claimName: pipeline-reports-claim
-        - name: codecarbon
-          configMap:
-            name: eaer-codecarbon

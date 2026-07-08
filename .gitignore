@@ -2,4 +2,6 @@ k8s/scripts/pipeline-version-names.txt
 logs/
 reports/
 .vscode/
+.codex/
+.agents/
 k8s/pipeline/exec/
