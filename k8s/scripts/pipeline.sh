@@ -3,6 +3,26 @@
 # Manage the Kubernetes/Argo pipeline lifecycle.
 # This script is normally called through:
 #   k8s/scripts/erctl.sh pipeline ...
+#
+# Lifecycle overview:
+#   start     Full setup + run. Compiles manifests, wipes prior Jobs/Workflows/PVCs for
+#             this namespace, recreates PVCs, syncs the dataset, (re)creates ConfigMaps,
+#             then dispatches on config-{embedding,bert}.yaml's `mode:` field:
+#               - embedding-training-inference-evaluation: runs the batch training Argo
+#                 Workflow to completion first (seeds graph/embedding/index models), then
+#                 applies the incremental worker Jobs (producer/consumer/normalization/.../
+#                 evaluation) as plain `kind: Job` manifests -- NOT part of any Argo
+#                 Workflow. These run concurrently and stream until the input exhausts.
+#               - bert-training-evaluation: runs entirely as one Argo Workflow (no
+#                 incremental phase).
+#   stop      Best-effort pause: finds the newest `pipeline-*` Argo Workflow and asks Argo
+#             to stop it. Only ever affects the batch training Workflow -- the incremental
+#             worker Jobs from an embedding run are plain Kubernetes Jobs, invisible to
+#             `argo stop`, and keep running. See the note in stop_pipeline().
+#   terminate Force-stops the Argo Workflow (if any), then hard-resets: deletes the EAER
+#             ConfigMaps and wipes+recreates the pipeline's PVCs -- this also clears out
+#             the incremental worker Jobs, since deleting $PIPELINE_INCREMENTAL_DIR is part
+#             of that PVC/Job cleanup. See terminate_pipeline() for the exact scope.
 
 # If this script is launched by sh or another non-Bash shell, re-exec it with bash.
 if [ -z "${BASH_VERSION:-}" ]; then
@@ -21,6 +41,8 @@ PIPELINE_BATCH_PATH="$K8S_DIR/pipeline/exec/batch/pipeline.yaml"
 
 # Generated Kubernetes Job manifests used for incremental mode.
 PIPELINE_INCREMENTAL_DIR="$K8S_DIR/pipeline/exec/incremental"
+PIPELINE_INCREMENTAL_INIT_PATH="$PIPELINE_INCREMENTAL_DIR/bootstrap/incremental_init.yaml"
+PIPELINE_INCREMENTAL_WORKERS_DIR="$PIPELINE_INCREMENTAL_DIR/workers"
 
 # Directory containing PVC manifests that must exist before jobs/workflows run.
 PVC_MANIFESTS="$K8S_DIR/pvc-manifests"
@@ -28,7 +50,13 @@ PVC_MANIFESTS="$K8S_DIR/pvc-manifests"
 # Directory containing config-embedding.yaml and config-bert.yaml.
 PIPELINE_CONFIG_DIR="$ROOT_DIR/code/Energy-Aware-Entity-Resolution/config/examples"
 
-# Kubernetes namespace used by Argo and the pipeline resources.
+# Kubernetes namespace used by Argo and the pipeline resources. All `kubectl`/`argo` calls
+# below are scoped to this namespace, including PVC create/delete -- PersistentVolumeClaims
+# are namespaced, so `kubectl delete pvc -n "$NAMESPACE" --all` only ever touches this
+# namespace's claims, never another namespace's. Note this value must match the hardcoded
+# `namespace: argo` in every k8s/pvc-manifests/*.yaml: `kubectl apply -n X -f file.yaml`
+# errors out if X differs from the namespace already set in the manifest, so changing this
+# variable alone is not enough to move the pipeline to a different namespace.
 NAMESPACE="argo"
 
 # Default node name kept for older/manual PVC patching logic.
@@ -37,6 +65,10 @@ NODE=server2-labo
 
 # Default config family. Can be overridden by `-m embedding` or `-m bert`.
 PIPELINE_MODE="embedding"
+
+# The pipeline intentionally supports exactly these two end-to-end business modes.
+EMBEDDING_PIPELINE_MODE="embedding-training-inference-evaluation"
+BERT_PIPELINE_MODE="bert-training-evaluation"
 
 # Human-editable scheduling source file. compiler.py reads this file.
 SCHEDULING_CONFIG_PATH="$K8S_DIR/scripts/scheduling.yaml"
@@ -84,7 +116,17 @@ wait_for_job_completion() {
     # Wait for a Kubernetes Job to finish successfully.
     local job_name="$1"
 
-    # Used in incremental evaluation mode, where evaluation starts after decision-making.
+    # Used to gate incremental-init (buffer cleanup must finish before workers start) and
+    # to know when the evaluation worker has fully drained the decision-making stream.
+    #
+    # KNOWN LIMITATION: the same flat 30m timeout is used for both callers, even though
+    # they have very different expected durations -- incremental-init only clears buffer
+    # directories (seconds), while evaluation blocks on the entire incremental stream
+    # (producer/consumer/normalization/.../decision-making) finishing, which has no upper
+    # bound. A genuinely long-running stream makes this `kubectl wait` time out and abort
+    # start_pipeline even though decision-making/evaluation are still legitimately working.
+    # Left as-is for now (30m accepted as a stopgap); a real fix would need separate,
+    # per-caller timeouts.
     kubectl wait -n "$NAMESPACE" --for=condition=complete "job/$job_name" --timeout=30m
 }
 
@@ -107,6 +149,40 @@ extract_mode_from_config() {
     ' "$config_path"
 }
 
+delete_pipeline_configmaps() {
+    # Delete the EAER script ConfigMaps and the pipeline config ConfigMap, so the next
+    # `start` (or a `terminate` cleanup) doesn't leave stale mounted code/config behind.
+    kubectl get cm -n "$NAMESPACE" -o name | grep '^configmap/eaer-' | xargs -r kubectl delete -n "$NAMESPACE" || true
+    kubectl delete cm -n "$NAMESPACE" er-pipeline-config --ignore-not-found=true
+}
+
+delete_pipeline_storage() {
+    # Delete pipeline pods, incremental Jobs, Argo workflows and PVCs in this namespace.
+    # PersistentVolumes are cluster-scoped (no namespace), so they are deliberately NOT
+    # deleted here -- `kubectl delete pv --all` would remove every PV in the cluster,
+    # including ones bound to unrelated namespaces. Deleting the PVCs below is enough:
+    # dynamically-provisioned PVs follow the storage class's reclaim policy (nfs-client
+    # defaults to Delete), so they get cleaned up as a consequence of their PVC going away,
+    # scoped correctly to just this namespace's claims.
+    #
+    # recreate=true also re-applies the PVC manifests afterward, leaving empty PVCs ready
+    # for immediate reuse (start_pipeline's own cleanup pass wants this); recreate=false
+    # (the default, used by terminate_pipeline) just tears down and stops there.
+    local recreate="${1:-false}"
+
+    # `timeout 5` prevents cleanup from blocking the whole run; `|| true` makes it
+    # best-effort under `set -e`; `xargs -r` skips running kubectl at all when nothing
+    # matched, instead of invoking it with no resource name.
+    timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs -r kubectl delete -n "$NAMESPACE" || true
+    kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
+    timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
+    timeout 5 kubectl delete pvc -n "$NAMESPACE" --all || true
+
+    if [ "$recreate" = true ]; then
+        kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFESTS"
+    fi
+}
+
 start_pipeline() {
     # Start either the batch Argo workflow or the incremental Kubernetes Jobs.
     local config_path
@@ -124,29 +200,22 @@ start_pipeline() {
     # Compile 
     "$SCRIPT_DIR/erctl.sh" compile
 
-    # Delete old pipeline pods if any are still present.
-    # `timeout 5` prevents cleanup from blocking the whole run.
-    # `|| true` makes cleanup best-effort under `set -e`.
-    timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs kubectl delete -n "$NAMESPACE" || true
-
-    # Delete old Jobs, Argo workflows, PersistentVolumes and PVCs
-    kubectl delete -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
-    timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
-    timeout 5 kubectl delete pv --all || true
-    timeout 5 kubectl delete pvc -n "$NAMESPACE" --all || true
+    # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty
+    # PVCs ready for this one. See delete_pipeline_storage() for exactly what this deletes.
+    delete_pipeline_storage true
 
     # Optional Kafka cleanup, currently disabled.
     # timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/kafka-server' | xargs kubectl delete -n "$NAMESPACE" || true
-
-    # Recreate PVCs needed by the pipeline.
-    kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFESTS"
 
     # Optional manual node pinning for a Kafka PVC, currently disabled.
     # kubectl patch pvc pipeline-kafka-data-claim -n "$NAMESPACE" \
     #     -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
 
-    # Sync static dataset files into the data PVC.
-    "$SCRIPT_DIR/erctl.sh" dataset
+    # Sync static dataset files into the data PVC. Pass PIPELINE_MODE (embedding/bert,
+    # already known from -m/--mode) so sync-data-pvc.sh only requires the file group this
+    # run actually needs (tableA/tableB/matches.txt for embedding, train/test/valid.csv
+    # for bert) instead of demanding both regardless of which mode is about to run.
+    "$SCRIPT_DIR/erctl.sh" dataset "$PIPELINE_MODE"
 
     # Let the user edit the selected pipeline config before creating ConfigMaps.
     nano "$config_path"
@@ -160,9 +229,34 @@ start_pipeline() {
         exit 1
     fi
 
-    # Delete old EAER script ConfigMaps to avoid stale mounted code, and the previous pipeline config ConfigMap.
-    kubectl get cm -n "$NAMESPACE" -o name | grep '^configmap/eaer-' | xargs kubectl delete -n "$NAMESPACE" || true
-    kubectl delete cm -n "$NAMESPACE" er-pipeline-config || true
+    # Guard against PIPELINE_MODE (from -m/--mode) and config_mode (the mode: string just
+    # read back out of the file the user may have hand-edited above) disagreeing. The
+    # dataset sync (erctl dataset "$PIPELINE_MODE" above) and the ConfigMap family
+    # (erctl configmaps "$PIPELINE_MODE" below) are both already prepared for
+    # PIPELINE_MODE, so a mismatch here (e.g. `-m embedding` but the file's mode: was
+    # hand-edited to a bert-* value) would otherwise only surface later, as a confusing
+    # failure deep inside whichever worker first needs a field the wrong dataset doesn't
+    # have -- catch it here instead, before ConfigMaps/workloads are touched.
+    case "$PIPELINE_MODE" in
+        embedding)
+            if [[ "$config_mode" != embedding-* ]]; then
+                echo "config_mode '$config_mode' in $config_path doesn't match -m embedding" \
+                     "(the dataset and ConfigMaps were already prepared for embedding)."
+                exit 1
+            fi
+            ;;
+        bert)
+            if [[ "$config_mode" != bert-* ]]; then
+                echo "config_mode '$config_mode' in $config_path doesn't match -m bert" \
+                     "(the dataset and ConfigMaps were already prepared for bert)."
+                exit 1
+            fi
+            ;;
+    esac
+
+    # Delete old EAER script ConfigMaps to avoid stale mounted code, and the previous
+    # pipeline config ConfigMap.
+    delete_pipeline_configmaps
 
     # ConfigMaps
     "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
@@ -170,63 +264,45 @@ start_pipeline() {
     # Measure only the actual workload execution time from this point.
     pipeline_start_time=$(date +%s)
 
-    # Track whether any supported execution branch was selected.
-    executed_pipeline=false
+    case "$config_mode" in
+        "$EMBEDDING_PIPELINE_MODE")
+            # 1. Clear stale incremental buffers before either phase starts.
+            echo "Running incremental-init (buffer cleanup)..."
+            kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_INIT_PATH"
+            wait_for_job_completion incremental-init
 
-    # Batch branch:
-    # - embedding-training modes run through Argo
-    # - all bert modes run through Argo
-    if [[ "$config_mode" == *training* || "$config_mode" == *bert* ]]; then
-        # Submit the generated Argo Workflow and stream status until completion.
-        argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" --watch
+            # 2. Build the graph, embedding model and feature index in Argo.
+            argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" --watch
 
-        # For BERT evaluation, print result lines from the latest workflow logs.
-        if [[ "$config_mode" == *b_evaluation* ]]; then
-            argo logs -n "$NAMESPACE" @latest | grep -F '[RESULT]'
-        fi
+            # 3. Start producer, consumer and all processing workers together, including
+            # evaluation. decision_making.py writes a per-window predicted-matching
+            # snapshot and references it in its buffer event, so evaluation.py -- running
+            # concurrently -- evaluates the exact graph produced for that window instead of
+            # whatever a shared path happens to hold, matching the business design (evaluate
+            # after every decision, report overwritten so only the latest is kept). It exits
+            # on its own once it sees decision-making's EOS.
+            for worker_manifest in "$PIPELINE_INCREMENTAL_WORKERS_DIR"/*.yaml; do
+                kubectl apply -n "$NAMESPACE" -f "$worker_manifest"
+            done
 
-        # Mark that a valid execution branch was used.
-        executed_pipeline=true
-    fi
-
-    # Incremental branch:
-    # - embedding inference runs as long-lived/worker-like Kubernetes Jobs
-    if [[ "$config_mode" == *embedding* && "$config_mode" == *inference* ]]; then
-        # Temporarily disable evaluation so the main incremental chain starts first.
-        mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED"
-
-        # Apply all incremental Job manifests except evaluation.yaml.
-        kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR"
-
-        # Restore the evaluation manifest locally after applying the other jobs.
-        mv "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml.DISABLED" "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
-
-        # If the mode asks for evaluation, run it after decision-making completes.
-        if [[ "$config_mode" == *evaluation* ]]; then
-            echo "Waiting for decision-making job to complete before starting evaluation..."
-
-            # Wait for decision-making to finish before launching evaluation.
-            wait_for_job_completion decision-making
-
-            # Start the evaluation Job separately.
-            kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_DIR/evaluation.yaml"
-
-            # Wait for evaluation to finish.
+            echo "Waiting for evaluation job to complete..."
             wait_for_job_completion evaluation
+            kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]' | tail -n 1
+            ;;
 
-            # Print final evaluation result lines.
-            kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]'
-        fi
+        "$BERT_PIPELINE_MODE")
+            # The Argo main DAG routes every bert mode to the fixed
+            # bert-training-evaluation-dag sequence.
+            argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" --watch
+            argo logs -n "$NAMESPACE" @latest | grep -F '[RESULT]' | tail -n 1
+            ;;
 
-        # Mark that a valid execution branch was used.
-        executed_pipeline=true
-    fi
-
-    # Reject unknown or unsupported mode values.
-    if [[ ! "$executed_pipeline" ]]; then
-        echo "Unsupported mode in $config_path: $config_mode"
-        exit 1
-    fi
+        *)
+            echo "Unsupported mode in $config_path: $config_mode"
+            echo "Supported modes: $EMBEDDING_PIPELINE_MODE, $BERT_PIPELINE_MODE"
+            exit 1
+            ;;
+    esac
 
     # Compute workload duration.
     end_time=$(date +%s)
@@ -244,6 +320,18 @@ start_pipeline() {
 
 stop_pipeline() {
     # Stop the latest Argo workflow created by this pipeline.
+    #
+    # BUG / KNOWN LIMITATION: latest_pipeline_workflow only looks at Argo Workflow objects
+    # (`kubectl get wf`), and `argo stop` only ever acts on those. In embedding mode, the
+    # incremental worker Jobs (producer/consumer/normalization/.../evaluation) are plain
+    # `kind: Job` manifests applied directly via `kubectl apply` in start_pipeline -- they
+    # are never registered with Argo at all. By the time those workers are running, the
+    # batch training Workflow they depended on has usually already completed (step 2 in
+    # start_pipeline blocks on `argo submit --watch` before step 3 applies the workers), so
+    # there is nothing left for `argo stop` to act on. In practice this command does not
+    # stop a running embedding/incremental pipeline; use `kubectl delete job -n "$NAMESPACE"
+    # -l app=<job-name>` (or delete the whole $PIPELINE_INCREMENTAL_DIR) to actually stop
+    # the incremental workers.
     local workflow_name
 
     # Find the newest pipeline-* workflow. Ignore errors so the empty case can be handled.
@@ -260,7 +348,16 @@ stop_pipeline() {
 }
 
 terminate_pipeline() {
-    # Terminate the latest Argo workflow and then clean up related resources.
+    # Force-stop the latest Argo workflow (if any), then hard-reset: delete the EAER
+    # ConfigMaps and wipe+recreate the pipeline's PVCs, regardless of whether a workflow
+    # was found. Leaves the namespace ready for another `start` with no stale ConfigMaps,
+    # Jobs, or PVC contents left over from this run.
+    #
+    # KNOWN LIMITATION: `argo terminate` only affects the Argo Workflow object. In
+    # embedding mode the incremental worker Jobs are plain `kind: Job` manifests, not part
+    # of any Workflow -- delete_pipeline_storage below does clean those up (it deletes
+    # everything under $PIPELINE_INCREMENTAL_DIR), so terminate does fully tear down a
+    # running incremental pipeline; it just doesn't go through Argo to do it.
     local workflow_name
 
     # Find the newest pipeline-* workflow. Ignore errors so the empty case can be handled.
@@ -273,8 +370,6 @@ terminate_pipeline() {
         echo "No pipeline workflow found in namespace $NAMESPACE."
     fi
 
-    # These cleanup functions are referenced here but are not defined in this file.
-    # If terminate is used, they must exist in the runtime environment or be added.
     delete_pipeline_configmaps
     delete_pipeline_storage true
 }
@@ -356,9 +451,6 @@ if [ "$ACTION" = "start" ]; then
 
     # Required by helper functions in this script.
     require_cmd awk
-
-    # Currently not used in this file, but kept as a legacy requirement.
-    require_cmd shuf
 
     # Execute the full start workflow.
     start_pipeline

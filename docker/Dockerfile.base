@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-COPY code/Energy-Aware-Entity-Resolution/requirements-min.txt /app/requirements.txt
+COPY code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-base.txt \
+     /app/requirements/for_entries/requirements-base.txt
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -13,9 +14,8 @@ RUN apt-get update \
         python3-dev \
     && python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt \
-    && /opt/venv/bin/pip install --no-cache-dir kafka-python \
-    && /opt/venv/bin/pip install --no-cache-dir pylint \
+    && /opt/venv/bin/pip install --no-cache-dir \
+        -r /app/requirements/for_entries/requirements-base.txt \
     && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
 FROM python:3.10-slim

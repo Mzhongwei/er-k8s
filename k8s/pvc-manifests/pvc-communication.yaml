@@ -1,0 +1,19 @@
+# Backs get_transfer_data_directory (/app/data/{workload}/communication/{type}): the
+# step-to-step handoff data for every entries/batch script (EmbTrai-*/BertTrai-*/BertEva-*
+# processed data, intermediate JSON/CSV, final b_evaluation results) plus the incremental
+# evaluation report (entries/worker/evaluation.py). Mounted at /app/data/communication for
+# incremental jobs (workload="") and at /app/data for batch tasks (workload={{workflow.name}},
+# a dynamic segment that can't be a static subPath, so batch tasks mount the parent and let
+# the script create /app/data/<workflow.name>/communication/... underneath).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pipeline-communication-claim
+  namespace: argo
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 50Mi

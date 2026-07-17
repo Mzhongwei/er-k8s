@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: graph-construction
+  name: embedding-training
 spec:
   completions: 1
   parallelism: 1
@@ -9,19 +9,17 @@ spec:
   template:
     metadata:
       labels:
-        app: graph-construction
+        app: embedding-training
     spec:
       restartPolicy: OnFailure
       containers:
         - name: main
-          image: kevinoulai/erctl:graph
-          imagePullPolicy: Always
-          command: [/opt/venv/bin/python, /app/distributions/graph_randomwalk.py]
+          image: kevinoulai/erctl:embedding
+          imagePullPolicy: IfNotPresent
+          command: [/opt/venv/bin/python, /app/entries/worker/embedding_training.py]
           args:
-            - --mode
-            - embedding-inference
-            - --function
-            - graph_construction
+            - --workload
+            - ""
           env:
           resources:
             requests:
@@ -34,18 +32,13 @@ spec:
             - name: pipeline-config
               mountPath: /app/config/examples/config-embedding.yaml
               subPath: config.yaml
-            - name: graph-distribution
-              mountPath: /app/distributions/graph_randomwalk.py
-              subPath: graph_randomwalk.py
-            - name: pipeline-graph-cache
-              mountPath: /app/data
+            - name: worker-embedding-training
+              mountPath: /app/entries/worker/embedding_training.py
+              subPath: embedding_training.py
+            - name: pipeline-embedding-model-cache
+              mountPath: /app/data/embedding
             - name: pipeline-buffer-data
               mountPath: /app/data/buffers
-            - name: pipeline-reports
-              mountPath: /app/reports
-            - name: pipeline-buffer-utils
-              mountPath: /app/utils/buffers.py
-              subPath: buffers.py
             - name: pipeline-io
               mountPath: /app/utils/pipeline_io.py
               subPath: pipeline_io.py
@@ -53,21 +46,15 @@ spec:
         - name: pipeline-config
           configMap:
             name: er-pipeline-config
-        - name: graph-distribution
+        - name: worker-embedding-training
           configMap:
-            name: eaer-graph-distribution
-        - name: pipeline-graph-cache
+            name: eaer-worker-embedding-training
+        - name: pipeline-embedding-model-cache
           persistentVolumeClaim:
-            claimName: pipeline-graph-cache-claim
+            claimName: pipeline-embedding-model-cache-claim
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim
-        - name: pipeline-reports
-          persistentVolumeClaim:
-            claimName: pipeline-reports-claim
-        - name: pipeline-buffer-utils
-          configMap:
-            name: eaer-kafka-buffers
         - name: pipeline-io
           configMap:
             name: eaer-pipeline-io

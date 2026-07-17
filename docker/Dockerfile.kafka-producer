@@ -1,4 +1,4 @@
-FROM kevinoulai/kafka:python
+FROM kevinoulai/erctl:kafka
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
@@ -6,7 +6,8 @@ RUN apt-get update \
 		maven \
 	&& rm -rf /var/lib/apt/lists/*
 
-COPY code/Energy-Aware-Entity-Resolution/services /app/services
+COPY code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator \
+     /app/services/dataStreamSimulator
 
 WORKDIR /app/services/dataStreamSimulator
 

@@ -1,3 +1,6 @@
+# Backs state_management.predicted_match-dir (/app/data/predicted, see
+# config/examples/config-embedding.yaml). Mounted by decision-making (writes the predicted
+# matching graph) and evaluation (reads it) in k8s/pipeline/incremental/.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pipeline-init
+  name: kafka-consumer
 spec:
   completions: 1
   parallelism: 1
@@ -9,40 +9,38 @@ spec:
   template:
     metadata:
       labels:
-        app: pipeline-init
+        app: kafka-consumer
     spec:
       restartPolicy: OnFailure
+      serviceAccountName: argo
       containers:
         - name: main
-          image: kevinoulai/erctl:config
+          image: kevinoulai/erctl:kafka
           imagePullPolicy: IfNotPresent
-          command: [sh, /app/init.sh]
-          env:
-            - name: FALLBACK_MODE
-              value: embedding-inference
+          command: [python, /app/consumer.py]
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 50m
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: 200m
+              memory: 256Mi
           volumeMounts:
+            - name: pipeline-kafka-consumer
+              mountPath: /app/consumer.py
+              subPath: consumer.py
             - name: pipeline-config
               mountPath: /app/config/examples/config-embedding.yaml
               subPath: config.yaml
-            - name: pipeline-init-script
-              mountPath: /app/init.sh
-              subPath: init.sh
             - name: pipeline-buffer-data
               mountPath: /app/data/buffers
       volumes:
-        - name: pipeline-config
-          configMap:
-            name: er-pipeline-config
-        - name: pipeline-init-script
-          configMap:
-            name: eaer-pipeline-init
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim
+        - name: pipeline-kafka-consumer
+          configMap:
+            name: eaer-kafka-consumer
+        - name: pipeline-config
+          configMap:
+            name: er-pipeline-config

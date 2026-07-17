@@ -1,4 +1,4 @@
-FROM kevinoulai/erctl:min
+FROM kevinoulai/erctl:base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1

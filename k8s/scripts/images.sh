@@ -1,88 +1,166 @@
-#!/bin/bash
-# This script builds the Docker images for the EAER components.
+#!/usr/bin/env bash
+# Build and publish the images used by the active EAER Kubernetes pipelines.
+
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
+
 set -euo pipefail
 
-IMAGES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/docker"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+IMAGES_DIR="$ROOT_DIR/docker"
+IMAGE_REPOSITORY="kevinoulai/erctl"
+MINIKUBE_PROFILE="${EAER_MINIKUBE_PROFILE:-domolandes}"
+
+# These are the images used by the active batch and incremental manifests. base is built
+# first because every Python component inherits from it; kafka-producer is built last
+# because it inherits from kafka.
+RUNTIME_IMAGE_TAGS=(
+    normalization
+    graph
+    cgfeature
+    embedding
+    featureindex
+    prediction
+    bert
+    config
+    kafka
+    kafka-producer
+)
+
+INCLUDE_KAFKA_SERVER=false
+DO_BUILD=false
+DO_PUSH=false
+DO_LOAD=false
+TEMP_IMAGE_ARCHIVE=""
+
+cleanup() {
+    if [ -n "$TEMP_IMAGE_ARCHIVE" ]; then
+        rm -f "$TEMP_IMAGE_ARCHIVE"
+    fi
+}
+
+trap cleanup EXIT
 
 usage() {
     cat << 'EOF'
 Usage: erctl images [options]
-Manage the Docker images for EAER components.
+Manage the Docker images used by the active EAER pipelines.
+
 Options:
-  -b, --build               Build the Docker images for EAER components
-  -l, --load                Load the Docker images into Minikube (if using Minikube)
-  -p, --push                Push the Docker images to Docker Hub
-  -h, --help, -help, help   Show this help
+  -b, --build               Build base and all runtime images
+  -p, --push                Push the exact EAER image set to Docker Hub
+  -l, --load                Load the exact EAER image set into Minikube
+      --with-kafka-server   Also manage the optional Redpanda server image
+  -h, --help                Show this help
+
+Options can be combined, for example: erctl images --build --push
 EOF
 }
 
-PREFIX=""
-# If on linux, sudo
-if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    PREFIX="sudo"
-fi
-
-build() {
-    echo "Building Docker images for EAER components..."
-    # Build the images in the required order
-    ${PREFIX} docker build -t erctl:min -f "${IMAGES_DIR}/Dockerfile.min" "${IMAGES_DIR}/.."
-    ${PREFIX} docker build -t erctl:full -f "${IMAGES_DIR}/Dockerfile.full" "${IMAGES_DIR}/.."
-
-    # Build the remaining images
-    shopt -s nullglob
-    dockerfiles=("${IMAGES_DIR}"/Dockerfile.*)
-    for dockerfile in "${dockerfiles[@]}"; do
-        image_name=$(basename "$dockerfile" | cut -d. -f2)
-        if [[ "$image_name" == "min" || "$image_name" == "full" || "$image_name" == *"kafka"* ]]; then
-            continue
-        fi
-        ${PREFIX} docker build -t "kevinoulai/erctl:${image_name}" -f "$dockerfile" "${IMAGES_DIR}/.."
-    done
+docker_cmd() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        sudo docker "$@"
+    else
+        docker "$@"
+    fi
 }
 
-push() {
-    echo "Pushing Docker images to Docker Hub..."
-    images=($($PREFIX docker images --format "{{.Repository}}:{{.Tag}}" | grep "^kevinoulai/erctl:"))
-    for image in "${images[@]}"; do
-        ${PREFIX} docker push "$image"
-        echo "Pushed $image to Docker Hub"
-    done
+all_image_tags() {
+    printf '%s\n' base
+    printf '%s\n' "${RUNTIME_IMAGE_TAGS[@]}"
+    if [ "$INCLUDE_KAFKA_SERVER" = true ]; then
+        printf '%s\n' kafka-server
+    fi
 }
 
-load() {
-    if ! command -v minikube &> /dev/null; then
-        echo "Minikube is not installed. Please install Minikube to use the --load option."
+build_image() {
+    local tag="$1"
+    local dockerfile="$2"
+
+    echo "Building ${IMAGE_REPOSITORY}:${tag} from ${dockerfile}..."
+    docker_cmd build \
+        --tag "${IMAGE_REPOSITORY}:${tag}" \
+        --file "$IMAGES_DIR/$dockerfile" \
+        "$ROOT_DIR"
+}
+
+build_images() {
+    echo "Building EAER base and runtime images..."
+
+    build_image base Dockerfile.base
+
+    build_image normalization Dockerfile.normalization
+    build_image graph Dockerfile.graph
+    build_image cgfeature Dockerfile.cgfeature
+    build_image embedding Dockerfile.embedding
+    build_image featureindex Dockerfile.featureindex
+    build_image prediction Dockerfile.prediction
+    build_image bert Dockerfile.bert
+    build_image config Dockerfile.config
+
+    build_image kafka Dockerfile.kafka
+    build_image kafka-producer Dockerfile.kafka-producer
+
+    if [ "$INCLUDE_KAFKA_SERVER" = true ]; then
+        build_image kafka-server Dockerfile.kafka-server
+    fi
+}
+
+push_images() {
+    local tag=""
+
+    echo "Pushing the EAER image set to Docker Hub..."
+    while IFS= read -r tag; do
+        docker_cmd image inspect "${IMAGE_REPOSITORY}:${tag}" >/dev/null
+        docker_cmd push "${IMAGE_REPOSITORY}:${tag}"
+        echo "Pushed ${IMAGE_REPOSITORY}:${tag}"
+    done < <(all_image_tags)
+}
+
+load_images() {
+    local tag=""
+
+    if ! command -v minikube >/dev/null 2>&1; then
+        echo "Minikube is not installed. Please install Minikube to use --load."
         exit 1
     fi
 
-    if ! minikube status --profile="${EAER_MINIKUBE_PROFILE:-domolandes}" &> /dev/null; then
-        echo "Minikube profile '${EAER_MINIKUBE_PROFILE:-domolandes}' is not running. Please start Minikube to use the --load option."
+    if ! minikube status --profile="$MINIKUBE_PROFILE" >/dev/null 2>&1; then
+        echo "Minikube profile '$MINIKUBE_PROFILE' is not running."
         exit 1
     fi
 
-    echo "Loading Docker images into Minikube..."
-    images=($(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^kevinoulai/erctl:"))
-    for image in "${images[@]}"; do
-        minikube image pull "$image" --profile="${EAER_MINIKUBE_PROFILE:-domolandes}"
-        minikube image load "$image" --profile="${EAER_MINIKUBE_PROFILE:-domolandes}"
-        echo "Loaded $image into Minikube"
-    done
+    echo "Loading the EAER image set into Minikube profile '$MINIKUBE_PROFILE'..."
+    while IFS= read -r tag; do
+        docker_cmd image inspect "${IMAGE_REPOSITORY}:${tag}" >/dev/null
+        TEMP_IMAGE_ARCHIVE="$(mktemp)"
+        docker_cmd save --output "$TEMP_IMAGE_ARCHIVE" "${IMAGE_REPOSITORY}:${tag}"
+        minikube image load "$TEMP_IMAGE_ARCHIVE" --overwrite=true --profile="$MINIKUBE_PROFILE"
+        rm -f "$TEMP_IMAGE_ARCHIVE"
+        TEMP_IMAGE_ARCHIVE=""
+        echo "Loaded ${IMAGE_REPOSITORY}:${tag}"
+    done < <(all_image_tags)
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        -b|--build)
+            DO_BUILD=true
+            ;;
+        -p|--push)
+            DO_PUSH=true
+            ;;
+        -l|--load)
+            DO_LOAD=true
+            ;;
+        --with-kafka-server)
+            INCLUDE_KAFKA_SERVER=true
+            ;;
         -h|--help|-help|help)
             usage
             exit 0
-            ;;
-        -b|--build)
-            build
-            ;;
-        -l|--load)
-            load
-            ;;
-        -p|--push)
-            push
             ;;
         *)
             echo "Unknown option: $1"
@@ -92,3 +170,18 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+if [ "$DO_BUILD" = false ] && [ "$DO_PUSH" = false ] && [ "$DO_LOAD" = false ]; then
+    usage
+    exit 1
+fi
+
+if [ "$DO_BUILD" = true ]; then
+    build_images
+fi
+if [ "$DO_PUSH" = true ]; then
+    push_images
+fi
+if [ "$DO_LOAD" = true ]; then
+    load_images
+fi

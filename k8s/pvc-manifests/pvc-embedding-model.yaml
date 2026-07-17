@@ -1,3 +1,6 @@
+# Backs state_management.embedding-dir (/app/data/embedding). Shared by the batch training
+# DAG (EmbTrai-embedding_training.py seeds/persists it) and the incremental
+# embedding-training/decision-making workers, which keep training it further from the seed.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

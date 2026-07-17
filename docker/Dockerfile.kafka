@@ -1,32 +1,15 @@
-FROM python:3.10-slim AS builder
+FROM kevinoulai/erctl:base AS builder
 
-ENV PIP_NO_CACHE_DIR=1
-ENV PYTHONDONTWRITEBYTECODE=1
+COPY ./code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-base.txt \
+     ./code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-kafka.txt \
+     /app/requirements/for_entries/
 
-WORKDIR /app
+RUN /opt/venv/bin/pip install --no-cache-dir \
+        -r /app/requirements/for_entries/requirements-kafka.txt \
+    && rm -rf /root/.cache/pip
 
-COPY ./code/Energy-Aware-Entity-Resolution/requirements-kafka.txt /app/requirements.txt
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        python3-dev \
-        tar \
-    && python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt \
-    && rm -rf /var/lib/apt/lists/* /root/.cache/pip
-
-
-FROM python:3.10-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-ENV PYTHONPATH=/app
+FROM kevinoulai/erctl:base
 
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
-COPY ./code/Energy-Aware-Entity-Resolution/utils /app/utils

@@ -23,8 +23,8 @@ USAGE:
 
 COMMANDS:
     images      Manage the Docker images for EAER components
-    configmaps  Create or update the distribution ConfigMaps
-    dataset     Sync Data_example/bert files into the Argo PVC
+    configmaps  Create batch, worker, simulator and embedding/BERT config ConfigMaps
+    dataset     Sync the selected embedding or BERT dataset into the data PVC
     process     Get the PID of processes running in the Argo workflow
     pipeline    Manage the Argo pipeline workflow and its storage
     compile     Compile the node scheduling configuration
@@ -36,20 +36,25 @@ OPTIONS:
         -b --build           Build the Docker images for EAER components
         -l --load            Load the Docker images into Minikube (if using Minikube)
         -p --push            Push the Docker images to Docker Hub
+        --with-kafka-server  Include the optional Redpanda server image
         -h --help            Show help for images command
 
 EXAMPLES:
 
-  # Create or update distribution ConfigMaps without starting workloads
+  # Create embedding ConfigMaps (embedding is the default)
   erctl configmaps
 
-  # Sync local BERT CSV fixtures to the PVC used by Argo
+  # Sync only the embedding dataset (embedding is the default)
   erctl dataset
+
+  # Select BERT explicitly
+  erctl configmaps bert
+  erctl dataset bert
 
   # Show command-specific help
   erctl configmaps --help
   erctl dataset --help
-    erctl pipeline --help
+  erctl pipeline --help
 EOF
 }
 
@@ -58,8 +63,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # $# ：The number of parameters provided by the user. If no parameters are provided, display the basic usage and exit.
 if [ $# -eq 0 ]; then
-    # $0 ：Indicates the name or path of the current script.
-    echo "Usage: $0 [images|configmaps|dataset|process|pipeline|compile|move|help] [options]"
+    print_help
     exit 1
 fi
 
@@ -101,13 +105,16 @@ case "$COMMAND" in
                     exit 0
                     ;;
                 -b|--build)
-                    images_args=("--build")
+                    images_args+=("--build")
                     ;;
                 -l|--load)
-                    images_args=("--load")
+                    images_args+=("--load")
                     ;;
                 -p|--push)
-                    images_args=("--push")
+                    images_args+=("--push")
+                    ;;
+                --with-kafka-server)
+                    images_args+=("--with-kafka-server")
                     ;;
                 *)
                     echo "Unknown option for images: $1"
@@ -122,52 +129,60 @@ case "$COMMAND" in
         ;;
 
     configmaps)
-        while [ $# -gt 0 ]; do
-            case "$1" in
-                -h|--help|-help|help)
-                    cat << 'EOF'
-Usage: erctl configmaps
+        if [ $# -gt 1 ]; then
+            echo "Usage: erctl configmaps [embedding|bert]"
+            exit 1
+        fi
 
-Create or update the ConfigMaps that provide the distribution Python scripts.
+        config_type="${1:-embedding}"
+        case "$config_type" in
+            -h|--help|-help|help)
+                cat << 'EOF'
+Usage: erctl configmaps [embedding|bert]
+
+Create or update the ConfigMaps that provide the batch, worker, and simulator entry scripts.
+The default mode is embedding.
 EOF
-                    exit 0
-                    ;;
-                embedding|bert)
-                    run_script "configmaps.sh" "$1"
-                    exit 0
-                    ;;
-                *)
-                    echo "Unknown option for configmaps: $1"
-                    echo "Use '$0 help' for usage information."
-                    exit 1
-                    ;;
-            esac
-            shift
-        done
-
-        run_script "configmaps.sh"
+                exit 0
+                ;;
+            embedding|bert)
+                run_script "configmaps.sh" "$config_type"
+                ;;
+            *)
+                echo "Unknown mode for configmaps: $config_type"
+                echo "Expected 'embedding' or 'bert'."
+                exit 1
+                ;;
+        esac
         ;;
 
     dataset)
-        while [ $# -gt 0 ]; do
-            case "$1" in
-                -h|--help|-help|help)
-                    cat << 'EOF'
-Usage: erctl dataset
+        if [ $# -gt 1 ]; then
+            echo "Usage: erctl dataset [embedding|bert]"
+            exit 1
+        fi
 
-Create/apply the Argo PVC and sync local Data_example/bert CSV files into it.
+        dataset_mode="${1:-embedding}"
+        case "$dataset_mode" in
+            -h|--help|-help|help)
+                cat << 'EOF'
+Usage: erctl dataset [embedding|bert]
+
+Create/apply the data PVC, clear its previous contents, and sync exactly one dataset family.
+embedding (default): tableA.csv, tableB.csv, matches.txt
+bert:                train.csv, test.csv, valid.csv
 EOF
-                    exit 0
-                    ;;
-                *)
-                    echo "Unknown option for dataset: $1"
-                    echo "Use '$0 help' for usage information."
-                    exit 1
-                    ;;
-            esac
-        done
-
-        run_script "sync-data-pvc.sh"
+                exit 0
+                ;;
+            embedding|bert)
+                run_script "sync-data-pvc.sh" "$dataset_mode"
+                ;;
+            *)
+                echo "Unknown mode for dataset: $dataset_mode"
+                echo "Expected 'embedding' or 'bert'."
+                exit 1
+                ;;
+        esac
         ;;
     process)
         run_script "process.sh" "$@"
@@ -182,9 +197,5 @@ EOF
         ;;
     move)
         run_script "move.py" "$@"
-        ;;
-    *)
-        echo "Invalid command: $COMMAND. Use one of the following: ${ACTIONS[*]}."
-        exit 1
         ;;
 esac

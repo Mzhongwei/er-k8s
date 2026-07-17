@@ -580,17 +580,24 @@ def apply_incremental_rules(
     warnings: list[str] = []
     applied_rules: set[str] = set()
 
+    # exec/incremental is generated output. Recreate it so manifests removed or moved in
+    # the source tree cannot survive as stale Jobs and be applied accidentally.
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for source_path in sorted(input_dir.glob("*.yaml")):
+    for source_path in sorted(input_dir.rglob("*.yaml")):
+        relative_path = source_path.relative_to(input_dir)
+        destination_path = output_dir / relative_path
         document = load_yaml_file(source_path)
 
         if not isinstance(document, dict):
-            warnings.append(f"Skipping '{source_path.name}': YAML root is not an object")
+            warnings.append(f"Skipping '{relative_path}': YAML root is not an object")
             continue
 
         if document.get("kind") != "Job":
-            shutil.copy2(source_path, output_dir / source_path.name)
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, destination_path)
             continue
 
         candidates = job_candidate_names(source_path, document)
@@ -603,7 +610,7 @@ def apply_incremental_rules(
             apply_rule_to_kubernetes_job(document, rules[matching_rule_name])
             applied_rules.add(matching_rule_name)
 
-        write_yaml_file(output_dir / source_path.name, document)
+        write_yaml_file(destination_path, document)
 
     for rule_name in sorted(rules):
         if rule_name not in applied_rules:

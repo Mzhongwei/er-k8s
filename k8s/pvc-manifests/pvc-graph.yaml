@@ -1,3 +1,6 @@
+# Backs state_management.graph-dir (/app/data/graph). Shared by the batch training DAG
+# (EmbTrai-graph_construction.py seeds/persists it) and the incremental graph-construction
+# and random-walk workers, which grow it further from the same seed.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: cg-feature-extraction
+  name: candidate-enumeration
 spec:
   completions: 1
   parallelism: 1
@@ -9,19 +9,17 @@ spec:
   template:
     metadata:
       labels:
-        app: cg-feature-extraction
+        app: candidate-enumeration
     spec:
       restartPolicy: OnFailure
       containers:
         - name: main
-          image: kevinoulai/erctl:cgfeature
+          image: kevinoulai/erctl:featureindex
           imagePullPolicy: IfNotPresent
-          command: [/opt/venv/bin/python, /app/distributions/cg_feature_distribution.py]
+          command: [/opt/venv/bin/python, /app/entries/worker/candidate_enumeration.py]
           args:
-            - --mode
-            - embedding-inference
-            - --function
-            - cg_feature_extraction
+            - --workload
+            - ""
           env:
           resources:
             requests:
@@ -34,35 +32,29 @@ spec:
             - name: pipeline-config
               mountPath: /app/config/examples/config-embedding.yaml
               subPath: config.yaml
-            - name: cg-feature-distribution
-              mountPath: /app/distributions/cg_feature_distribution.py
-              subPath: cg_feature_distribution.py
-            - name: pipeline-buffer-utils
-              mountPath: /app/utils/buffers.py
-              subPath: buffers.py
+            - name: worker-candidate-enumeration
+              mountPath: /app/entries/worker/candidate_enumeration.py
+              subPath: candidate_enumeration.py
+            - name: pipeline-feature-index-cache
+              mountPath: /app/data/index
+            - name: pipeline-buffer-data
+              mountPath: /app/data/buffers
             - name: pipeline-io
               mountPath: /app/utils/pipeline_io.py
               subPath: pipeline_io.py
-            - name: pipeline-buffer-data
-              mountPath: /app/data/buffers
-            - name: pipeline-reports
-              mountPath: /app/reports
       volumes:
         - name: pipeline-config
           configMap:
             name: er-pipeline-config
-        - name: cg-feature-distribution
+        - name: worker-candidate-enumeration
           configMap:
-            name: eaer-cg-feature-distribution
-        - name: pipeline-buffer-utils
-          configMap:
-            name: eaer-kafka-buffers
+            name: eaer-worker-candidate-enumeration
+        - name: pipeline-feature-index-cache
+          persistentVolumeClaim:
+            claimName: pipeline-feature-index-cache-claim
         - name: pipeline-io
           configMap:
             name: eaer-pipeline-io
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim
-        - name: pipeline-reports
-          persistentVolumeClaim:
-            claimName: pipeline-reports-claim

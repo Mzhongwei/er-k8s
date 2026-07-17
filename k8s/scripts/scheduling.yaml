@@ -8,7 +8,13 @@ batch:
     avoid: [server1-k3s-worker, matis-asus-expertbook-b1500ceaey-b1500ceae]
 
     # Bert model tasks
-    bert:
+    bert-training:
+        tags: [gpu]
+        prefer: [server2-labo]
+        fallback: [fedora]
+        avoid: []
+
+    bert-evaluation:
         tags: [gpu]
         prefer: [server2-labo]
         fallback: [fedora]
@@ -85,12 +91,6 @@ incremental:
         avoid: []
 
     cg-feature-extraction:
-        tags: []
-        prefer: [fedora]
-        fallback: [server2-labo]
-        avoid: []
-
-    feature-index-construction:
         tags: []
         prefer: [fedora]
         fallback: [server2-labo]

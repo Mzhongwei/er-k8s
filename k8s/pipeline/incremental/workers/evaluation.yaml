@@ -17,13 +17,11 @@ spec:
       containers:
         - name: main
           image: kevinoulai/erctl:prediction
-          imagePullPolicy: Always
-          command: [/opt/venv/bin/python, /app/distributions/decision_evaluation.py]
+          imagePullPolicy: IfNotPresent
+          command: [/opt/venv/bin/python, /app/entries/worker/evaluation.py]
           args:
-            - --mode
-            - embedding-evaluation
-            - --function
-            - evaluation
+            - --workload
+            - ""
           env:
           resources:
             requests:
@@ -36,20 +34,16 @@ spec:
             - name: pipeline-config
               mountPath: /app/config/examples/config-embedding.yaml
               subPath: config.yaml
-            - name: decision-evaluation-distribution
-              mountPath: /app/distributions/decision_evaluation.py
-              subPath: decision_evaluation.py
+            - name: worker-evaluation
+              mountPath: /app/entries/worker/evaluation.py
+              subPath: evaluation.py
             - name: pipeline-data
               mountPath: /data
-            - name: pipeline-embedding-model-cache
-              mountPath: /app/data
+              readOnly: true
+            - name: pipeline-communication
+              mountPath: /app/data/communication
             - name: pipeline-buffer-data
               mountPath: /app/data/buffers
-            - name: pipeline-reports
-              mountPath: /app/reports
-            - name: pipeline-buffer-utils
-              mountPath: /app/utils/buffers.py
-              subPath: buffers.py
             - name: pipeline-io
               mountPath: /app/utils/pipeline_io.py
               subPath: pipeline_io.py
@@ -57,24 +51,18 @@ spec:
         - name: pipeline-config
           configMap:
             name: er-pipeline-config
-        - name: decision-evaluation-distribution
+        - name: worker-evaluation
           configMap:
-            name: eaer-decision-evaluation
+            name: eaer-worker-evaluation
         - name: pipeline-data
           persistentVolumeClaim:
             claimName: pipeline-data-claim
-        - name: pipeline-embedding-model-cache
+        - name: pipeline-communication
           persistentVolumeClaim:
-            claimName: pipeline-embedding-model-cache-claim
-        - name: pipeline-buffer-utils
-          configMap:
-            name: eaer-kafka-buffers
+            claimName: pipeline-communication-claim
         - name: pipeline-io
           configMap:
             name: eaer-pipeline-io
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim
-        - name: pipeline-reports
-          persistentVolumeClaim:
-            claimName: pipeline-reports-claim

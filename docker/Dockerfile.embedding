@@ -1,10 +1,21 @@
-FROM kevinoulai/erctl:min
+FROM kevinoulai/erctl:base AS builder
+
+COPY code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-base.txt \
+     code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-embedding.txt \
+     /app/requirements/for_entries/
+
+RUN /opt/venv/bin/pip install --no-cache-dir \
+    -r /app/requirements/for_entries/requirements-embedding.txt
+
+FROM kevinoulai/erctl:base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
 
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/embedding_training.py /app/pipeline/embedding_training.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/calculating_similarity.py /app/pipeline/calculating_similarity.py

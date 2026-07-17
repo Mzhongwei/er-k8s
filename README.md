@@ -232,6 +232,29 @@ Build, load, or push Docker images:
 bash k8s/scripts/erctl.sh images --build
 bash k8s/scripts/erctl.sh images --load
 bash k8s/scripts/erctl.sh images --push
+# Actions can be combined; base is built before its component images.
+bash k8s/scripts/erctl.sh images --build --push
+```
+
+The active image hierarchy is `kevinoulai/erctl:base` followed by the
+component images (`normalization`, `graph`, `cgfeature`, `embedding`,
+`featureindex`, `prediction`, `bert`, `config`, `kafka`, and
+`kafka-producer`). The legacy `min`/`full` distinction is no longer used.
+The external Kafka deployment does not require a broker image; add
+`--with-kafka-server` only when the optional local Redpanda image is needed.
+
+Create ConfigMaps and sync the dataset for the selected pipeline family. Both commands
+default to `embedding`; dataset synchronization clears the data PVC and copies only the
+three files required by that family.
+
+```bash
+# Embedding: tableA.csv, tableB.csv, matches.txt
+bash k8s/scripts/erctl.sh configmaps
+bash k8s/scripts/erctl.sh dataset
+
+# BERT: train.csv, test.csv, valid.csv
+bash k8s/scripts/erctl.sh configmaps bert
+bash k8s/scripts/erctl.sh dataset bert
 ```
 
 Check Argo workflows:

@@ -1,3 +1,8 @@
+# Backs state_management.bert-dir (/app/data/bert). Written by BertTrai_training.py, read
+# by BertEva-b_evaluation.py (via pipeline/bert_evaluation.py's from_pretrained load).
+# Sized for the actual checkpoints saved here (models/bert_model.py chooses between
+# bert-base-uncased, ~420-440Mi, and distilbert-base-uncased, ~260-270Mi, plus tokenizer
+# files), with headroom for more than one version_name's checkpoint to coexist.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -9,4 +14,4 @@ spec:
   storageClassName: nfs-client
   resources:
     requests:
-      storage: 100Mi
+      storage: 2Gi

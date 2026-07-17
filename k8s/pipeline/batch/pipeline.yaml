@@ -19,54 +19,37 @@ spec:
   arguments:
     parameters:
     - name: mode
-      value: embedding-evaluation
-    - name: raw_data
-      value: /data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv
-    - name: data_source_A
-      value: /data/exp_datasets/4-1_dirty_dblp_acm/tableA.csv
-    - name: data_source_B
-      value: /data/exp_datasets/4-1_dirty_dblp_acm/tableB.csv
+      value: embedding-training
+    # Dataset paths are intentionally not workflow parameters. The active entries/batch
+    # scripts read data_source_A/trainset_path/evalset_path/testset_path from config.yaml.
   entrypoint: main
 
   templates:
-    - name: normalization
-      inputs:
-        parameters:
-        - name: mode
-        - name: raw_data
-        - name: data_source_A
-        - name: data_source_B
-        - name: function
-        - name: output_path
+    # --- entries/batch: embedding-training-dag (EmbTrai-*) and bert training/evaluation
+    # (BertTrai-*/BertEva-*). Each script is single-purpose (no --mode/--function), reads
+    # its input and writes its output via get_transfer_data_directory using a fixed data
+    # type/filename, so no explicit --processed_data/--output wiring is needed between
+    # tasks -- only --workload, shared as the workflow name so runs don't collide. ---
+    - name: embtrai-normalization
       container:
         name: main
         image: kevinoulai/erctl:normalization
-        imagePullPolicy: Always
-        command: [sh, -c]
+        imagePullPolicy: IfNotPresent
+        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-normalization.py]
         args:
-        - |
-          /opt/venv/bin/python /app/distributions/normalization_distribution.py --mode '{{inputs.parameters.mode}}' --function '{{inputs.parameters.function}}' --raw_data '{{inputs.parameters.raw_data}}' --data_source_A '{{inputs.parameters.data_source_A}}' --data_source_B '{{inputs.parameters.data_source_B}}' --output '{{inputs.parameters.output_path}}'
-        env:
-        - name: MODE
-          value: '{{inputs.parameters.mode}}'
-        - name: WORKFLOW_NAME
-          value: '{{workflow.name}}'
+        - --workload
+        - '{{workflow.name}}'
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
-        - name: normalization-distribution
-          mountPath: /app/distributions/normalization_distribution.py
-          subPath: normalization_distribution.py
+        - name: embtrai-normalization
+          mountPath: /app/entries/batch/EmbTrai-normalization.py
+          subPath: EmbTrai-normalization.py
         - name: pipeline-data
           mountPath: /data
-        - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
-        - name: pipeline-reports
-          mountPath: /app/reports
-        - name: pipeline-buffer-utils
-          mountPath: /app/utils/buffers.py
-          subPath: buffers.py
+        - name: pipeline-communication
+          mountPath: /app/data
         - name: pipeline-io
           mountPath: /app/utils/pipeline_io.py
           subPath: pipeline_io.py
@@ -74,65 +57,39 @@ spec:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: normalization-distribution
+      - name: embtrai-normalization
         configMap:
-          name: eaer-normalization-distribution
+          name: eaer-batch-embtrai-normalization
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
-      - name: pipeline-buffer-data
+      - name: pipeline-communication
         persistentVolumeClaim:
-          claimName: pipeline-buffer-data-claim
-      - name: pipeline-reports
-        persistentVolumeClaim:
-          claimName: pipeline-reports-claim
-      - name: pipeline-buffer-utils
-        configMap:
-          name: eaer-kafka-buffers
+          claimName: pipeline-communication-claim
       - name: pipeline-io
         configMap:
           name: eaer-pipeline-io
 
-    - name: graph
-      inputs:
-        parameters:
-        - name: mode
-        - name: function
-        - name: processed_data
-        - name: output_path
+    - name: embtrai-graph-construction
       container:
         name: main
         image: kevinoulai/erctl:graph
-        imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/distributions/graph_randomwalk.py]
+        imagePullPolicy: IfNotPresent
+        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-graph_construction.py]
         args:
-        - --processed_data
-        - '{{inputs.parameters.processed_data}}'
-        - --mode
-        - '{{inputs.parameters.mode}}'
-        - --function
-        - '{{inputs.parameters.function}}'
-        - --output
-        - '{{inputs.parameters.output_path}}'
-        env:
-        - name: WORKFLOW_NAME
-          value: '{{workflow.name}}'
+        - --workload
+        - '{{workflow.name}}'
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
-        - name: graph-distribution
-          mountPath: /app/distributions/graph_randomwalk.py
-          subPath: graph_randomwalk.py
+        - name: embtrai-graph-construction
+          mountPath: /app/entries/batch/EmbTrai-graph_construction.py
+          subPath: EmbTrai-graph_construction.py
         - name: pipeline-graph-cache
+          mountPath: /app/data/graph
+        - name: pipeline-communication
           mountPath: /app/data
-        - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
-        - name: pipeline-reports
-          mountPath: /app/reports
-        - name: pipeline-buffer-utils
-          mountPath: /app/utils/buffers.py
-          subPath: buffers.py
         - name: pipeline-io
           mountPath: /app/utils/pipeline_io.py
           subPath: pipeline_io.py
@@ -140,208 +97,154 @@ spec:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: graph-distribution
+      - name: embtrai-graph-construction
         configMap:
-          name: eaer-graph-distribution
+          name: eaer-batch-embtrai-graph-construction
       - name: pipeline-graph-cache
         persistentVolumeClaim:
           claimName: pipeline-graph-cache-claim
-      - name: pipeline-buffer-data
+      - name: pipeline-communication
         persistentVolumeClaim:
-          claimName: pipeline-buffer-data-claim
-      - name: pipeline-reports
-        persistentVolumeClaim:
-          claimName: pipeline-reports-claim
-      - name: pipeline-buffer-utils
-        configMap:
-          name: eaer-kafka-buffers
+          claimName: pipeline-communication-claim
       - name: pipeline-io
         configMap:
           name: eaer-pipeline-io
 
-    - name: embedding
-      inputs:
-        parameters:
-        - name: mode
-        - name: function
-        - name: sequences
-        - name: candidate_pairs
-        - name: output_path
+    - name: embtrai-random-walk
       container:
         name: main
-        image: kevinoulai/erctl:embedding
-        imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/distributions/embedding_training_entry.py]
+        image: kevinoulai/erctl:graph
+        imagePullPolicy: IfNotPresent
+        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-random_walk.py]
         args:
-        - --mode
-        - '{{inputs.parameters.mode}}'
-        - --sequences
-        - '{{inputs.parameters.sequences}}'
-        - --output
-        - '{{inputs.parameters.output_path}}'
-        env:
-        - name: WORKFLOW_NAME
-          value: '{{workflow.name}}'
+        - --workload
+        - '{{workflow.name}}'
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
-        - name: embedding-training-entry
-          mountPath: /app/distributions/embedding_training_entry.py
-          subPath: embedding_training_entry.py
-        - name: embedding-common
-          mountPath: /app/distributions/embedding_common.py
-          subPath: embedding_common.py
-        - name: pipeline-embedding-model-cache
+        - name: embtrai-random-walk
+          mountPath: /app/entries/batch/EmbTrai-random_walk.py
+          subPath: EmbTrai-random_walk.py
+        - name: pipeline-graph-cache
+          mountPath: /app/data/graph
+        - name: pipeline-communication
           mountPath: /app/data
-        - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
-        - name: pipeline-reports
-          mountPath: /app/reports
-        - name: pipeline-buffer-utils
-          mountPath: /app/utils/buffers.py
-          subPath: buffers.py
         - name: pipeline-io
           mountPath: /app/utils/pipeline_io.py
           subPath: pipeline_io.py
-        - name: config-io
-          mountPath: /app/utils/config_io.py
-          subPath: config_io.py
-        - name: embedding-state
-          mountPath: /app/state_io
       volumes:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: embedding-training-entry
+      - name: embtrai-random-walk
         configMap:
-          name: eaer-embedding-training-entry
-      - name: embedding-common
-        configMap:
-          name: eaer-embedding-common
-      - name: pipeline-embedding-model-cache
+          name: eaer-batch-embtrai-random-walk
+      - name: pipeline-graph-cache
         persistentVolumeClaim:
-          claimName: pipeline-embedding-model-cache-claim
-      - name: pipeline-buffer-data
+          claimName: pipeline-graph-cache-claim
+      - name: pipeline-communication
         persistentVolumeClaim:
-          claimName: pipeline-buffer-data-claim
-      - name: pipeline-buffer-utils
-        configMap:
-          name: eaer-kafka-buffers
+          claimName: pipeline-communication-claim
       - name: pipeline-io
         configMap:
           name: eaer-pipeline-io
-      - name: config-io
-        configMap:
-          name: eaer-config-io
-      - name: embedding-state
-        configMap:
-          name: eaer-embedding-state
-      - name: pipeline-reports
-        persistentVolumeClaim:
-          claimName: pipeline-reports-claim
 
-    - name: cg-feature-extraction
-      inputs:
-        parameters:
-        - name: mode
-        - name: function
-        - name: processed_data
-        - name: output_path
+    - name: embtrai-cg-feature-extraction
       container:
         name: main
         image: kevinoulai/erctl:cgfeature
         imagePullPolicy: IfNotPresent
-        command: [/opt/venv/bin/python, /app/distributions/cg_feature_distribution.py]
+        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-cg_feature_extraction.py]
         args:
-        - --mode
-        - '{{inputs.parameters.mode}}'
-        - --processed_data
-        - '{{inputs.parameters.processed_data}}'
-        - --output
-        - '{{inputs.parameters.output_path}}'
-        - --function
-        - '{{inputs.parameters.function}}'
-        env:
-        - name: WORKFLOW_NAME
-          value: '{{workflow.name}}'
+        - --workload
+        - '{{workflow.name}}'
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
-        - name: cg-feature-distribution
-          mountPath: /app/distributions/cg_feature_distribution.py
-          subPath: cg_feature_distribution.py
-        - name: pipeline-buffer-utils
-          mountPath: /app/utils/buffers.py
-          subPath: buffers.py
+        - name: embtrai-cg-feature-extraction
+          mountPath: /app/entries/batch/EmbTrai-cg_feature_extraction.py
+          subPath: EmbTrai-cg_feature_extraction.py
+        - name: pipeline-communication
+          mountPath: /app/data
         - name: pipeline-io
           mountPath: /app/utils/pipeline_io.py
           subPath: pipeline_io.py
-        - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
-        - name: pipeline-reports
-          mountPath: /app/reports
       volumes:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: cg-feature-distribution
+      - name: embtrai-cg-feature-extraction
         configMap:
-          name: eaer-cg-feature-distribution
-      - name: pipeline-buffer-utils
-        configMap:
-          name: eaer-kafka-buffers
+          name: eaer-batch-embtrai-cg-feature-extraction
+      - name: pipeline-communication
+        persistentVolumeClaim:
+          claimName: pipeline-communication-claim
       - name: pipeline-io
         configMap:
           name: eaer-pipeline-io
-      - name: pipeline-buffer-data
-        persistentVolumeClaim:
-          claimName: pipeline-buffer-data-claim
-      - name: pipeline-reports
-        persistentVolumeClaim:
-          claimName: pipeline-reports-claim
 
-    - name: feature-index
-      inputs:
-        parameters:
-        - name: mode
-        - name: function
-        - name: cg_feature
-        - name: output_path
+    - name: embtrai-embedding-training
+      container:
+        name: main
+        image: kevinoulai/erctl:embedding
+        imagePullPolicy: IfNotPresent
+        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-embedding_training.py]
+        args:
+        - --workload
+        - '{{workflow.name}}'
+        volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-embedding.yaml
+          subPath: config.yaml
+        - name: embtrai-embedding-training
+          mountPath: /app/entries/batch/EmbTrai-embedding_training.py
+          subPath: EmbTrai-embedding_training.py
+        - name: pipeline-embedding-model-cache
+          mountPath: /app/data/embedding
+        - name: pipeline-communication
+          mountPath: /app/data
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
+      volumes:
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: embtrai-embedding-training
+        configMap:
+          name: eaer-batch-embtrai-embedding-training
+      - name: pipeline-embedding-model-cache
+        persistentVolumeClaim:
+          claimName: pipeline-embedding-model-cache-claim
+      - name: pipeline-communication
+        persistentVolumeClaim:
+          claimName: pipeline-communication-claim
+      - name: pipeline-io
+        configMap:
+          name: eaer-pipeline-io
+
+    - name: embtrai-feature-index-construction
       container:
         name: main
         image: kevinoulai/erctl:featureindex
         imagePullPolicy: IfNotPresent
-        command: [/opt/venv/bin/python, /app/distributions/featureindex_candidate.py]
+        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-feature_index_construction.py]
         args:
-        - --cg_feature
-        - '{{inputs.parameters.cg_feature}}'
-        - --mode
-        - '{{inputs.parameters.mode}}'
-        - --function
-        - '{{inputs.parameters.function}}'
-        - --output
-        - '{{inputs.parameters.output_path}}'
-        env:
-        - name: WORKFLOW_NAME
-          value: '{{workflow.name}}'
+        - --workload
+        - '{{workflow.name}}'
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
-        - name: feature-index-distribution
-          mountPath: /app/distributions/featureindex_candidate.py
-          subPath: featureindex_candidate.py
+        - name: embtrai-feature-index-construction
+          mountPath: /app/entries/batch/EmbTrai-feature_index_construction.py
+          subPath: EmbTrai-feature_index_construction.py
         - name: pipeline-feature-index-cache
+          mountPath: /app/data/index
+        - name: pipeline-communication
           mountPath: /app/data
-        - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
-        - name: pipeline-reports
-          mountPath: /app/reports
-        - name: pipeline-buffer-utils
-          mountPath: /app/utils/buffers.py
-          subPath: buffers.py
         - name: pipeline-io
           mountPath: /app/utils/pipeline_io.py
           subPath: pipeline_io.py
@@ -349,68 +252,39 @@ spec:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: feature-index-distribution
+      - name: embtrai-feature-index-construction
         configMap:
-          name: eaer-feature-index
+          name: eaer-batch-embtrai-feature-index-construction
       - name: pipeline-feature-index-cache
         persistentVolumeClaim:
           claimName: pipeline-feature-index-cache-claim
-      - name: pipeline-buffer-utils
-        configMap:
-          name: eaer-kafka-buffers
+      - name: pipeline-communication
+        persistentVolumeClaim:
+          claimName: pipeline-communication-claim
       - name: pipeline-io
         configMap:
           name: eaer-pipeline-io
-      - name: pipeline-buffer-data
-        persistentVolumeClaim:
-          claimName: pipeline-buffer-data-claim
-      - name: pipeline-reports
-        persistentVolumeClaim:
-          claimName: pipeline-reports-claim
 
-    - name: bert
-      inputs:
-        parameters:
-        - name: mode
-        - name: function
-        - name: processed_data
-        - name: output_path
+    - name: berttrai-normalization
       container:
         name: main
-        image: kevinoulai/erctl:bert
+        image: kevinoulai/erctl:normalization
         imagePullPolicy: IfNotPresent
-        command: [/opt/venv/bin/python, /app/distributions/bert_distribution.py]
-        resources:
-          limits:
-            nvidia.com/gpu: 1
+        command: [/opt/venv/bin/python, /app/entries/batch/BertTrai-normalization.py]
         args:
-        - --mode
-        - '{{inputs.parameters.mode}}'
-        - --processed_data
-        - '{{inputs.parameters.processed_data}}'
-        - --output
-        - '{{inputs.parameters.output_path}}'
-        - --function
-        - '{{inputs.parameters.function}}'
-        env:
-        - name: WORKFLOW_NAME
-          value: '{{workflow.name}}'
+        - --workload
+        - '{{workflow.name}}'
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-bert.yaml
           subPath: config.yaml
-        - name: pipeline-bert-model
-          mountPath: /app/data/bert
-        - name: bert-distribution
-          mountPath: /app/distributions/bert_distribution.py
-          subPath: bert_distribution.py
-        - name: bert-training
-          mountPath: /app/pipeline/bert_training.py
-          subPath: bert_training.py
-        - name: pipeline-reports
-          mountPath: /app/reports
+        - name: berttrai-normalization
+          mountPath: /app/entries/batch/BertTrai-normalization.py
+          subPath: BertTrai-normalization.py
         - name: pipeline-data
           mountPath: /data
+        - name: pipeline-communication
+          mountPath: /app/data
         - name: pipeline-io
           mountPath: /app/utils/pipeline_io.py
           subPath: pipeline_io.py
@@ -418,273 +292,215 @@ spec:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: pipeline-bert-model
-        persistentVolumeClaim:
-          claimName: pipeline-bert-model-claim
-      - name: bert-distribution
+      - name: berttrai-normalization
         configMap:
-          name: eaer-bert-distribution
-      - name: bert-training
-        configMap:
-          name: eaer-bert-training
+          name: eaer-batch-berttrai-normalization
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
-      - name: pipeline-reports
+      - name: pipeline-communication
         persistentVolumeClaim:
-          claimName: pipeline-reports-claim
+          claimName: pipeline-communication-claim
       - name: pipeline-io
         configMap:
           name: eaer-pipeline-io
-    - name: pipeline-init
-      inputs:
-        parameters:
-        - name: fallback_mode
+
+    - name: berttrai-training
       container:
         name: main
-        image: kevinoulai/erctl:config
+        image: kevinoulai/erctl:bert
         imagePullPolicy: IfNotPresent
-        command: [sh, /app/init.sh]
-        env:
-        - name: FALLBACK_MODE
-          value: '{{inputs.parameters.fallback_mode}}'
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+        command: [/opt/venv/bin/python, /app/entries/batch/BertTrai_training.py]
+        args:
+        - --workload
+        - '{{workflow.name}}'
         volumeMounts:
         - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
+          mountPath: /app/config/examples/config-bert.yaml
           subPath: config.yaml
-        - name: pipeline-init-script
-          mountPath: /app/init.sh
-          subPath: init.sh
-        - name: pipeline-buffer-data
-          mountPath: /app/data/buffers
+        - name: berttrai-training
+          mountPath: /app/entries/batch/BertTrai_training.py
+          subPath: BertTrai_training.py
+        - name: bert-training
+          mountPath: /app/pipeline/bert_training.py
+          subPath: bert_training.py
+        - name: pipeline-bert-model
+          mountPath: /app/data/bert
+        - name: pipeline-communication
+          mountPath: /app/data
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
       volumes:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: pipeline-init-script
+      - name: berttrai-training
         configMap:
-          name: eaer-pipeline-init
-      - name: pipeline-buffer-data
+          name: eaer-batch-berttrai-training
+      - name: bert-training
+        configMap:
+          name: eaer-bert-training
+      - name: pipeline-bert-model
         persistentVolumeClaim:
-          claimName: pipeline-buffer-data-claim
-      outputs:
-        parameters:
-        - name: mode
-          valueFrom:
-            path: /tmp/mode
-        artifacts:
-        - name: config
-          path: /tmp/config.yaml
+          claimName: pipeline-bert-model-claim
+      - name: pipeline-communication
+        persistentVolumeClaim:
+          claimName: pipeline-communication-claim
+      - name: pipeline-io
+        configMap:
+          name: eaer-pipeline-io
+
+    - name: berteva-normalization
+      container:
+        name: main
+        image: kevinoulai/erctl:normalization
+        imagePullPolicy: IfNotPresent
+        command: [/opt/venv/bin/python, /app/entries/batch/BertEva-normalization.py]
+        args:
+        - --workload
+        - '{{workflow.name}}'
+        volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-bert.yaml
+          subPath: config.yaml
+        - name: berteva-normalization
+          mountPath: /app/entries/batch/BertEva-normalization.py
+          subPath: BertEva-normalization.py
+        - name: pipeline-data
+          mountPath: /data
+        - name: pipeline-communication
+          mountPath: /app/data
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
+      volumes:
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: berteva-normalization
+        configMap:
+          name: eaer-batch-berteva-normalization
+      - name: pipeline-data
+        persistentVolumeClaim:
+          claimName: pipeline-data-claim
+      - name: pipeline-communication
+        persistentVolumeClaim:
+          claimName: pipeline-communication-claim
+      - name: pipeline-io
+        configMap:
+          name: eaer-pipeline-io
+
+    - name: berteva-b-evaluation
+      container:
+        name: main
+        image: kevinoulai/erctl:bert
+        imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+        command: [/opt/venv/bin/python, /app/entries/batch/BertEva-b_evaluation.py]
+        args:
+        - --workload
+        - '{{workflow.name}}'
+        volumeMounts:
+        - name: pipeline-config
+          mountPath: /app/config/examples/config-bert.yaml
+          subPath: config.yaml
+        - name: berteva-b-evaluation
+          mountPath: /app/entries/batch/BertEva-b_evaluation.py
+          subPath: BertEva-b_evaluation.py
+        - name: pipeline-bert-model
+          mountPath: /app/data/bert
+        - name: pipeline-communication
+          mountPath: /app/data
+        - name: pipeline-io
+          mountPath: /app/utils/pipeline_io.py
+          subPath: pipeline_io.py
+      volumes:
+      - name: pipeline-config
+        configMap:
+          name: er-pipeline-config
+      - name: berteva-b-evaluation
+        configMap:
+          name: eaer-batch-berteva-b-evaluation
+      - name: pipeline-bert-model
+        persistentVolumeClaim:
+          claimName: pipeline-bert-model-claim
+      - name: pipeline-communication
+        persistentVolumeClaim:
+          claimName: pipeline-communication-claim
+      - name: pipeline-io
+        configMap:
+          name: eaer-pipeline-io
 
     - name: embedding-training-dag
-      inputs:
-        parameters:
-        - name: mode
       dag:
         tasks:
         - name: normalization
-          template: normalization
-          arguments:
-            parameters:
-            - name: raw_data
-              value: '{{workflow.parameters.raw_data}}'
-            - name: data_source_A
-              value: '{{workflow.parameters.data_source_A}}'
-            - name: data_source_B
-              value: '{{workflow.parameters.data_source_B}}'
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: normalization
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/processed_data.json
+          template: embtrai-normalization
 
         - name: graph-construction
-          template: graph
+          template: embtrai-graph-construction
           depends: normalization.Succeeded
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: graph_construction
-            - name: processed_data
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/processed_data.json
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/graph.json
 
         - name: random-walk
-          template: graph
+          template: embtrai-random-walk
           depends: graph-construction.Succeeded
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: random_walk
-            - name: processed_data
-              value: ""
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/sequences.json
 
         - name: embedding-training
-          template: embedding
+          template: embtrai-embedding-training
           depends: random-walk.Succeeded
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: embedding_training
-            - name: sequences
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/sequences.json
-            - name: candidate_pairs
-              value: ""
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/embedding_training.json
 
         - name: cg-feature-extraction
-          template: cg-feature-extraction
+          template: embtrai-cg-feature-extraction
           depends: normalization.Succeeded
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: cg_feature_extraction
-            - name: processed_data
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/processed_data.json
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/cg_feature.json
 
         - name: feature-index-construction
-          template: feature-index
+          template: embtrai-feature-index-construction
           depends: cg-feature-extraction.Succeeded
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{inputs.parameters.mode}}'
-            - name: function
-              value: feature_index_construction
-            - name: cg_feature
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/cg_feature.json
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/embedding/candidate_pairs.json
 
-    - name: main
+    - name: bert-training-evaluation-dag
       dag:
         tasks:
-        - name: pipeline-init
-          template: pipeline-init
-          arguments:
-            parameters:
-            - name: fallback_mode
-              value: '{{workflow.parameters.mode}}'
-
-        - name: embedding-training-dag
-          depends: pipeline-init.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*embedding.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
-          template: embedding-training-dag
-          arguments:
-            parameters:
-            - name: mode
-              value: '{{tasks.pipeline-init.outputs.parameters.mode}}'
-
         - name: bert-normalization-training
-          depends: pipeline-init.Succeeded
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*training.*'"
-          template: normalization
-          arguments:
-            parameters:
-            - name: raw_data
-              value: '{{workflow.parameters.raw_data}}'
-            - name: data_source_A
-              value: '{{workflow.parameters.data_source_A}}'
-            - name: data_source_B
-              value: '{{workflow.parameters.data_source_B}}'
-            - name: mode
-              value: bert-training
-            - name: function
-              value: normalization
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/training_processed_data.json
+          template: berttrai-normalization
 
         - name: bert-training
           depends: bert-normalization-training.Succeeded
-          template: bert
-          arguments:
-            parameters:
-            - name: mode
-              value: bert-training
-            - name: function
-              value: bert_training
-            - name: processed_data
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/training_processed_data.json
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/training_output.json
-
-        - name: bert-normalization-inference
-          depends: "pipeline-init.Succeeded && (bert-training.Succeeded || bert-training.Omitted)"
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*inference.*'"
-          template: normalization
-          arguments:
-            parameters:
-            - name: raw_data
-              value: '{{workflow.parameters.raw_data}}'
-            - name: data_source_A
-              value: '{{workflow.parameters.data_source_A}}'
-            - name: data_source_B
-              value: '{{workflow.parameters.data_source_B}}'
-            - name: mode
-              value: bert-inference
-            - name: function
-              value: normalization
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/inference_processed_data.json
-
-        - name: bert-inference
-          depends: bert-normalization-inference.Succeeded
-          template: bert
-          arguments:
-            parameters:
-            - name: mode
-              value: bert-inference
-            - name: function
-              value: bert_inference
-            - name: processed_data
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/inference_processed_data.json
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/inference_output.json
+          template: berttrai-training
 
         - name: bert-normalization-b-evaluation
-          depends: "pipeline-init.Succeeded && (bert-inference.Succeeded || bert-inference.Omitted) && (bert-training.Succeeded || bert-training.Omitted)"
-          when: "'{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*bert.*' && '{{tasks.pipeline-init.outputs.parameters.mode}}' =~ '.*b_evaluation.*'"
-          template: normalization
-          arguments:
-            parameters:
-            - name: raw_data
-              value: '{{workflow.parameters.raw_data}}'
-            - name: data_source_A
-              value: '{{workflow.parameters.data_source_A}}'
-            - name: data_source_B
-              value: '{{workflow.parameters.data_source_B}}'
-            - name: mode
-              value: bert-b_evaluation
-            - name: function
-              value: normalization
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/evaluation_processed_data.json
+          depends: bert-training.Succeeded
+          template: berteva-normalization
 
         - name: bert-evaluation
           depends: bert-normalization-b-evaluation.Succeeded
-          template: bert
-          arguments:
-            parameters:
-            - name: mode
-              value: bert-b_evaluation
-            - name: function
-              value: bert_evaluation
-            - name: processed_data
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/evaluation_processed_data.json
-            - name: output_path
-              value: /app/data/buffers/{{workflow.name}}/batch/bert/evaluation_output.json
+          template: berteva-b-evaluation
+
+    - name: main
+      dag:
+        # TODO(EmbPred): a third branch for batch embedding prediction/evaluation is not
+        # built yet. It should mount entries/batch/EmbPred-*.py (9 scripts: normalization,
+        # graph_construction, random_walk, cg_feature_extraction, embedding_training
+        # (continues the batch-trained model on prediction-side sequences),
+        # candidate_enumeration, calculating_similarity, decision_making, evaluation) the
+        # same way embedding-training-dag/bert-training-evaluation-dag mount their scripts,
+        # then get a task here gated on mode =~ '.*embedding.*' && mode =~ '.*inference.*'
+        # (or '.*evaluation.*', matching config-embedding.yaml's
+        # "embedding-training-inference-evaluation"). Until then, an embedding mode with
+        # "inference" or "evaluation" but without "training" (e.g. "embedding-inference" or
+        # "embedding-evaluation" on their own) matches neither branch below and the workflow
+        # runs zero tasks. This file's own default ("embedding-training") does match the
+        # embedding-training-dag branch.
+        tasks:
+        - name: embedding-training-dag
+          when: "'{{workflow.parameters.mode}}' =~ '.*embedding.*' && '{{workflow.parameters.mode}}' =~ '.*training.*'"
+          template: embedding-training-dag
+
+        - name: bert-training-evaluation-dag
+          when: "'{{workflow.parameters.mode}}' =~ '.*bert.*'"
+          template: bert-training-evaluation-dag

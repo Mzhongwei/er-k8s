@@ -1,0 +1,23 @@
+# VCS and editor metadata
+.git
+.gitignore
+**/.git
+**/.gitignore
+.vscode/
+.idea/
+
+# Python artifacts and local environments
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/.mypy_cache/
+**/venv/
+**/.venv/
+**/.ipynb_checkpoints/
+
+# Runtime output that must not enter a build context
+**/*.log
+**/Data_example/
+k8s/pipeline/exec/

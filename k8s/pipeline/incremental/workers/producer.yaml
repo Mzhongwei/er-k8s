@@ -14,8 +14,8 @@ spec:     # Job 的 spec
       restartPolicy: OnFailure
       containers:
         - name: main
-          image: kevinoulai/kafka:producer
-          imagePullPolicy: Always
+          image: kevinoulai/erctl:kafka-producer
+          imagePullPolicy: IfNotPresent
           command: [python, /app/producer.py]
           resources:
             requests:

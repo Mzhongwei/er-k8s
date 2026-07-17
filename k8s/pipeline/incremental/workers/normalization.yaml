@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: normalization
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: normalization
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: main
+          image: kevinoulai/erctl:normalization
+          imagePullPolicy: IfNotPresent
+          command: [/opt/venv/bin/python, /app/entries/worker/normalization_embedding.py]
+          args:
+            - --workload
+            - ""
+          env:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: pipeline-config
+              mountPath: /app/config/examples/config-embedding.yaml
+              subPath: config.yaml
+            - name: worker-normalization
+              mountPath: /app/entries/worker/normalization_embedding.py
+              subPath: normalization_embedding.py
+            - name: pipeline-buffer-data
+              mountPath: /app/data/buffers
+            - name: pipeline-io
+              mountPath: /app/utils/pipeline_io.py
+              subPath: pipeline_io.py
+      volumes:
+        - name: pipeline-config
+          configMap:
+            name: er-pipeline-config
+        - name: worker-normalization
+          configMap:
+            name: eaer-worker-normalization
+        - name: pipeline-buffer-data
+          persistentVolumeClaim:
+            claimName: pipeline-buffer-data-claim
+        - name: pipeline-io
+          configMap:
+            name: eaer-pipeline-io

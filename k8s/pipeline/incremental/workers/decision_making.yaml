@@ -1,7 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: feature-index-construction
+  name: decision-making
+  labels:
+    app: decision-making
 spec:
   completions: 1
   parallelism: 1
@@ -9,19 +11,17 @@ spec:
   template:
     metadata:
       labels:
-        app: feature-index-construction
+        app: decision-making
     spec:
       restartPolicy: OnFailure
       containers:
         - name: main
-          image: kevinoulai/erctl:featureindex
+          image: kevinoulai/erctl:prediction
           imagePullPolicy: IfNotPresent
-          command: [/opt/venv/bin/python, /app/distributions/featureindex_candidate.py]
+          command: [/opt/venv/bin/python, /app/entries/worker/decision_making.py]
           args:
-            - --mode
-            - embedding-inference
-            - --function
-            - feature_index_construction
+            - --workload
+            - ""
           env:
           resources:
             requests:
@@ -34,18 +34,15 @@ spec:
             - name: pipeline-config
               mountPath: /app/config/examples/config-embedding.yaml
               subPath: config.yaml
-            - name: feature-index-distribution
-              mountPath: /app/distributions/featureindex_candidate.py
-              subPath: featureindex_candidate.py
-            - name: pipeline-feature-index-cache
-              mountPath: /app/data
+            - name: worker-decision-making
+              mountPath: /app/entries/worker/decision_making.py
+              subPath: decision_making.py
+            - name: pipeline-embedding-model-cache
+              mountPath: /app/data/embedding
+            - name: pipeline-decision-evaluation-cache
+              mountPath: /app/data/predicted
             - name: pipeline-buffer-data
               mountPath: /app/data/buffers
-            - name: pipeline-reports
-              mountPath: /app/reports
-            - name: pipeline-buffer-utils
-              mountPath: /app/utils/buffers.py
-              subPath: buffers.py
             - name: pipeline-io
               mountPath: /app/utils/pipeline_io.py
               subPath: pipeline_io.py
@@ -53,21 +50,18 @@ spec:
         - name: pipeline-config
           configMap:
             name: er-pipeline-config
-        - name: feature-index-distribution
+        - name: worker-decision-making
           configMap:
-            name: eaer-feature-index
-        - name: pipeline-feature-index-cache
+            name: eaer-worker-decision-making
+        - name: pipeline-embedding-model-cache
           persistentVolumeClaim:
-            claimName: pipeline-feature-index-cache-claim
-        - name: pipeline-buffer-utils
-          configMap:
-            name: eaer-kafka-buffers
+            claimName: pipeline-embedding-model-cache-claim
+        - name: pipeline-decision-evaluation-cache
+          persistentVolumeClaim:
+            claimName: pipeline-decision-evaluation-cache-claim
         - name: pipeline-io
           configMap:
             name: eaer-pipeline-io
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim
-        - name: pipeline-reports
-          persistentVolumeClaim:
-            claimName: pipeline-reports-claim

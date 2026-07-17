@@ -1,4 +1,17 @@
-FROM kevinoulai/erctl:full
+FROM kevinoulai/erctl:base AS builder
+
+COPY code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-base.txt \
+     code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-bert.txt \
+     /app/requirements/for_entries/
+
+RUN /opt/venv/bin/pip install --no-cache-dir \
+        -r /app/requirements/for_entries/requirements-bert.txt \
+    && /opt/venv/bin/pip uninstall -y torch torchvision torchaudio \
+    && /opt/venv/bin/pip install --no-cache-dir \
+        torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+        --index-url https://download.pytorch.org/whl/cu121
+
+FROM kevinoulai/erctl:base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -6,7 +19,9 @@ ENV PYTHONPATH=/app
 
 WORKDIR /app
 
-COPY ./code/Energy-Aware-Entity-Resolution/pipeline /app/pipeline
-COPY ./code/Energy-Aware-Entity-Resolution/models /app/models
-COPY ./code/Energy-Aware-Entity-Resolution/distributions/bert_distribution.py /app/distributions/bert_distribution.py
-COPY ./code/Energy-Aware-Entity-Resolution/Data_example/bert /app/Data_example/bert
+COPY --from=builder /opt/venv /opt/venv
+
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_training.py /app/pipeline/bert_training.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_evaluation.py /app/pipeline/bert_evaluation.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_utils.py /app/pipeline/bert_utils.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/bert_model.py /app/models/bert_model.py
