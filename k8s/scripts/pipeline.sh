@@ -6,8 +6,9 @@
 #
 # Lifecycle overview:
 #   start     Full setup + run. Compiles manifests, wipes prior Jobs/Workflows/PVCs for
-#             this namespace, recreates PVCs, syncs the dataset, (re)creates ConfigMaps,
-#             then dispatches on config-{embedding,bert}.yaml's `mode:` field:
+#             this namespace, recreates PVCs, lets you edit the config file passed via
+#             -c/--config, then derives everything else (dataset family, ConfigMap
+#             contents, batch vs incremental dispatch) from that file's `mode:` field:
 #               - embedding-training-inference-evaluation: runs the batch training Argo
 #                 Workflow to completion first (seeds graph/embedding/index models), then
 #                 applies the incremental worker Jobs (producer/consumer/normalization/.../
@@ -47,9 +48,6 @@ PIPELINE_INCREMENTAL_WORKERS_DIR="$PIPELINE_INCREMENTAL_DIR/workers"
 # Directory containing PVC manifests that must exist before jobs/workflows run.
 PVC_MANIFESTS="$K8S_DIR/pvc-manifests"
 
-# Directory containing config-embedding.yaml and config-bert.yaml.
-PIPELINE_CONFIG_DIR="$ROOT_DIR/code/Energy-Aware-Entity-Resolution/config/examples"
-
 # Kubernetes namespace used by Argo and the pipeline resources. All `kubectl`/`argo` calls
 # below are scoped to this namespace, including PVC create/delete -- PersistentVolumeClaims
 # are namespaced, so `kubectl delete pvc -n "$NAMESPACE" --all` only ever touches this
@@ -63,8 +61,10 @@ NAMESPACE="argo"
 # It is currently only used by the commented kubectl patch below.
 NODE=server2-labo
 
-# Default config family. Can be overridden by `-m embedding` or `-m bert`.
-PIPELINE_MODE="embedding"
+# Path to the pipeline config YAML, set via -c/--config. Required -- the file's own
+# `mode:` field is the sole source of truth for the dataset family, ConfigMap contents,
+# and batch vs incremental dispatch below.
+CONFIG_PATH=""
 
 # The pipeline intentionally supports exactly these two end-to-end business modes.
 EMBEDDING_PIPELINE_MODE="embedding-training-inference-evaluation"
@@ -82,7 +82,8 @@ Options:
     start                    Start the pipeline (default)
     stop                     Stop the latest pipeline
     terminate                Terminate the latest pipeline and clean up resources
-    -m, --mode MODE          ConfigMap mode for pipeline config (`embedding` or `bert`) default: `embedding`
+    -c, --config PATH        Path to the pipeline config YAML (required); its `mode:` field
+                             decides the dataset family, ConfigMaps, and batch vs incremental dispatch
     -h, --help, -help, help  Show this help
 EOF
 }
@@ -185,11 +186,8 @@ delete_pipeline_storage() {
 
 start_pipeline() {
     # Start either the batch Argo workflow or the incremental Kubernetes Jobs.
-    local config_path
     local config_mode
-
-    # Select config-embedding.yaml or config-bert.yaml based on PIPELINE_MODE.
-    config_path="$PIPELINE_CONFIG_DIR/config-${PIPELINE_MODE}.yaml"
+    local family
 
     # Measure total script wall-clock time.
     script_start_time=$(date +%s)
@@ -197,7 +195,7 @@ start_pipeline() {
     # Let the user edit scheduling rules before compiling executable manifests.
     nano "$SCHEDULING_CONFIG_PATH"
 
-    # Compile 
+    # Compile
     "$SCRIPT_DIR/erctl.sh" compile
 
     # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty
@@ -211,55 +209,46 @@ start_pipeline() {
     # kubectl patch pvc pipeline-kafka-data-claim -n "$NAMESPACE" \
     #     -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
 
-    # Sync static dataset files into the data PVC. Pass PIPELINE_MODE (embedding/bert,
-    # already known from -m/--mode) so sync-data-pvc.sh only requires the file group this
-    # run actually needs (tableA/tableB/matches.txt for embedding, train/test/valid.csv
-    # for bert) instead of demanding both regardless of which mode is about to run.
-    "$SCRIPT_DIR/erctl.sh" dataset "$PIPELINE_MODE"
+    # Let the user edit the config file passed via -c/--config before deriving anything
+    # from it, so the mode read back below reflects their final choice.
+    nano "$CONFIG_PATH"
 
-    # Let the user edit the selected pipeline config before creating ConfigMaps.
-    nano "$config_path"
-
-    # Read mode from the edited config. This decides batch vs incremental execution.
-    config_mode="$(extract_mode_from_config "$config_path")"
+    # Read mode from the edited config. This is now the sole source of truth for the
+    # dataset family, the ConfigMap contents, and batch vs incremental dispatch.
+    config_mode="$(extract_mode_from_config "$CONFIG_PATH")"
 
     # Stop early if the config has no mode field.
     if [ -z "$config_mode" ]; then
-        echo "Unable to read mode from config file: $config_path"
+        echo "Unable to read mode from config file: $CONFIG_PATH"
         exit 1
     fi
 
-    # Guard against PIPELINE_MODE (from -m/--mode) and config_mode (the mode: string just
-    # read back out of the file the user may have hand-edited above) disagreeing. The
-    # dataset sync (erctl dataset "$PIPELINE_MODE" above) and the ConfigMap family
-    # (erctl configmaps "$PIPELINE_MODE" below) are both already prepared for
-    # PIPELINE_MODE, so a mismatch here (e.g. `-m embedding` but the file's mode: was
-    # hand-edited to a bert-* value) would otherwise only surface later, as a confusing
-    # failure deep inside whichever worker first needs a field the wrong dataset doesn't
-    # have -- catch it here instead, before ConfigMaps/workloads are touched.
-    case "$PIPELINE_MODE" in
-        embedding)
-            if [[ "$config_mode" != embedding-* ]]; then
-                echo "config_mode '$config_mode' in $config_path doesn't match -m embedding" \
-                     "(the dataset and ConfigMaps were already prepared for embedding)."
-                exit 1
-            fi
-            ;;
-        bert)
-            if [[ "$config_mode" != bert-* ]]; then
-                echo "config_mode '$config_mode' in $config_path doesn't match -m bert" \
-                     "(the dataset and ConfigMaps were already prepared for bert)."
-                exit 1
-            fi
+    # Derive the embedding/bert family from config_mode instead of taking it as a
+    # separate CLI flag -- this is what makes -c/--config the single point of truth,
+    # with no possibility of a family/mode mismatch to guard against.
+    case "$config_mode" in
+        "$EMBEDDING_PIPELINE_MODE") family="embedding" ;;
+        "$BERT_PIPELINE_MODE") family="bert" ;;
+        *)
+            echo "Unsupported mode in $CONFIG_PATH: $config_mode"
+            echo "Supported modes: $EMBEDDING_PIPELINE_MODE, $BERT_PIPELINE_MODE"
+            exit 1
             ;;
     esac
+
+    # Sync static dataset files into the data PVC. Pass the derived family so
+    # sync-data-pvc.sh only requires the file group this run actually needs
+    # (tableA/tableB/matches.txt for embedding, train/test/valid.csv for bert) instead of
+    # demanding both regardless of which mode is about to run.
+    "$SCRIPT_DIR/erctl.sh" dataset "$family"
 
     # Delete old EAER script ConfigMaps to avoid stale mounted code, and the previous
     # pipeline config ConfigMap.
     delete_pipeline_configmaps
 
-    # ConfigMaps
-    "$SCRIPT_DIR/erctl.sh" configmaps "$PIPELINE_MODE"
+    # ConfigMaps -- bundles the exact file at $CONFIG_PATH as er-pipeline-config, so the
+    # config the workers see at runtime is exactly what was just edited above.
+    "$SCRIPT_DIR/erctl.sh" configmaps "$CONFIG_PATH"
 
     # Measure only the actual workload execution time from this point.
     pipeline_start_time=$(date +%s)
@@ -295,12 +284,6 @@ start_pipeline() {
             # bert-training-evaluation-dag sequence.
             argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" --watch
             argo logs -n "$NAMESPACE" @latest | grep -F '[RESULT]' | tail -n 1
-            ;;
-
-        *)
-            echo "Unsupported mode in $config_path: $config_mode"
-            echo "Supported modes: $EMBEDDING_PIPELINE_MODE, $BERT_PIPELINE_MODE"
-            exit 1
             ;;
     esac
 
@@ -406,21 +389,20 @@ if [ "$ACTION" = "start" ]; then
     # Parse options that follow `start`.
     while [ $# -gt 0 ]; do
         case "$1" in
-            -m|--mode)
-                # `-m` and `--mode` require a separate value.
+            -c|--config)
+                # `-c` and `--config` require a separate value.
                 if [ $# -lt 2 ]; then
-                    echo "Missing value for $1. Expected 'embedding' or 'bert'."
+                    echo "Missing value for $1. Expected a path to a pipeline config YAML file."
                     exit 1
                 fi
-                # Select which config file and ConfigMap family to use.
-                PIPELINE_MODE="$2"
+                CONFIG_PATH="$2"
                 # Consume option name and value.
                 shift 2
                 ;;
-            --mode=*)
-                # Support --mode=embedding and --mode=bert.
-                PIPELINE_MODE="${1#*=}"
-                # Consume the single --mode=value argument.
+            --config=*)
+                # Support --config=path/to/config.yaml.
+                CONFIG_PATH="${1#*=}"
+                # Consume the single --config=value argument.
                 shift
                 ;;
             -h|--help|-help|help)
@@ -437,11 +419,19 @@ if [ "$ACTION" = "start" ]; then
         esac
     done
 
-    # Only two config families are supported by configmaps.sh.
-    if [[ "$PIPELINE_MODE" != "embedding" && "$PIPELINE_MODE" != "bert" ]]; then
-        echo "Invalid mode: $PIPELINE_MODE. Use 'embedding' or 'bert'."
+    # -c/--config is required: it is now the only way the file/mode is chosen, so there
+    # is nothing sensible to default to.
+    if [ -z "$CONFIG_PATH" ]; then
+        echo "Missing required -c/--config <path>. Use 'erctl pipeline --help' for usage information."
         exit 1
     fi
+    if [ ! -f "$CONFIG_PATH" ]; then
+        echo "Config file not found: $CONFIG_PATH"
+        exit 1
+    fi
+    # Resolve to an absolute path so it stays valid regardless of what the rest of the
+    # script or downstream scripts (erctl configmaps) do with their own working directory.
+    CONFIG_PATH="$(cd "$(dirname "$CONFIG_PATH")" && pwd)/$(basename "$CONFIG_PATH")"
 
     # Required for Kubernetes resource operations.
     require_cmd kubectl

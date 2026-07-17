@@ -23,7 +23,8 @@ USAGE:
 
 COMMANDS:
     images      Manage the Docker images for EAER components
-    configmaps  Create batch, worker, simulator and embedding/BERT config ConfigMaps
+    configmaps  Create batch, worker, simulator ConfigMaps, and the pipeline config ConfigMap
+                from a given config file
     dataset     Sync the selected embedding or BERT dataset into the data PVC
     process     Get the PID of processes running in the Argo workflow
     pipeline    Manage the Argo pipeline workflow and its storage
@@ -41,14 +42,14 @@ OPTIONS:
 
 EXAMPLES:
 
-  # Create embedding ConfigMaps (embedding is the default)
-  erctl configmaps
+  # Create ConfigMaps (including the pipeline config) from a given config file
+  erctl configmaps code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml
 
   # Sync only the embedding dataset (embedding is the default)
   erctl dataset
 
   # Select BERT explicitly
-  erctl configmaps bert
+  erctl configmaps code/Energy-Aware-Entity-Resolution/config/examples/config-bert.yaml
   erctl dataset bert
 
   # Show command-specific help
@@ -129,29 +130,24 @@ case "$COMMAND" in
         ;;
 
     configmaps)
-        if [ $# -gt 1 ]; then
-            echo "Usage: erctl configmaps [embedding|bert]"
+        if [ $# -ne 1 ]; then
+            echo "Usage: erctl configmaps <config-file-path>"
             exit 1
         fi
 
-        config_type="${1:-embedding}"
-        case "$config_type" in
+        case "$1" in
             -h|--help|-help|help)
                 cat << 'EOF'
-Usage: erctl configmaps [embedding|bert]
+Usage: erctl configmaps <config-file-path>
 
-Create or update the ConfigMaps that provide the batch, worker, and simulator entry scripts.
-The default mode is embedding.
+Create or update the ConfigMaps that provide the batch, worker, and simulator entry
+scripts, plus the pipeline config itself -- bundled from the given file as
+er-pipeline-config, so the workers run with exactly that config.
 EOF
                 exit 0
                 ;;
-            embedding|bert)
-                run_script "configmaps.sh" "$config_type"
-                ;;
             *)
-                echo "Unknown mode for configmaps: $config_type"
-                echo "Expected 'embedding' or 'bert'."
-                exit 1
+                run_script "configmaps.sh" "$1"
                 ;;
         esac
         ;;

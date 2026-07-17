@@ -10,7 +10,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 IMAGES_DIR="$ROOT_DIR/docker"
-IMAGE_REPOSITORY="kevinoulai/erctl"
+
+# Single source of truth for the Docker Hub (or other registry) repository these images
+# are tagged/pushed under. compiler.py reads the same file to rewrite the `image:` field
+# in every generated k8s/pipeline/exec manifest, so changing the registry/user only means
+# editing this one file (or setting EAER_IMAGE_REPOSITORY for a one-off override) -- not
+# hunting down every yaml that hardcodes it.
+IMAGE_REPOSITORY="${EAER_IMAGE_REPOSITORY:-$(cat "$SCRIPT_DIR/image-repository.conf")}"
 MINIKUBE_PROFILE="${EAER_MINIKUBE_PROFILE:-domolandes}"
 
 # These are the images used by the active batch and incremental manifests. base is built
@@ -82,6 +88,7 @@ build_image() {
     echo "Building ${IMAGE_REPOSITORY}:${tag} from ${dockerfile}..."
     docker_cmd build \
         --tag "${IMAGE_REPOSITORY}:${tag}" \
+        --build-arg "IMAGE_REPOSITORY=${IMAGE_REPOSITORY}" \
         --file "$IMAGES_DIR/$dockerfile" \
         "$ROOT_DIR"
 }

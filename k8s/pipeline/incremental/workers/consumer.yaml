@@ -15,7 +15,7 @@ spec:
       serviceAccountName: argo
       containers:
         - name: main
-          image: kevinoulai/erctl:kafka
+          image: __IMAGE_REPOSITORY__:kafka
           imagePullPolicy: IfNotPresent
           command: [python, /app/consumer.py]
           resources:

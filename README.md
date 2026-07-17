@@ -342,6 +342,12 @@ Notes
 
 This repository is an experimental deployment and orchestration layer around the Energy-Aware Entity Resolution pipeline. It is intended for research, testing, and infrastructure experimentation rather than direct production use.
 
+#  Configuration
+`code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties.example` -->  `code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties`
+
+
+`k8s/scripts/image-repository.conf.example`--> `k8s/scripts/image-repository.conf` and change the dockerhub username
+
 ## Acknowledgements
 
 This project builds on an initial implementation developed by

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -338,6 +339,36 @@ def apply_rule_to_kubernetes_job(
         pod_spec["runtimeClassName"] = "nvidia"
 
 
+IMAGE_REPOSITORY_PLACEHOLDER = "__IMAGE_REPOSITORY__"
+
+
+def read_image_repository(script_dir: Path) -> str:
+    """Single source of truth for the registry/user images are tagged under (matches
+    images.sh). EAER_IMAGE_REPOSITORY overrides for a one-off run; otherwise read from
+    image-repository.conf, so changing the Docker Hub user/registry means editing one
+    file, not hunting down every yaml that hardcodes it."""
+    env_value = os.environ.get("EAER_IMAGE_REPOSITORY")
+    if env_value:
+        return env_value
+    return (script_dir / "image-repository.conf").read_text(encoding="utf-8").strip()
+
+
+def rewrite_image_repository(node: Any, repository: str) -> None:
+    """Recursively replace `image: __IMAGE_REPOSITORY__:tag` with the real repository, in
+    place, regardless of where it's nested (plain Job containers, Argo Workflow templates,
+    DAG tasks). Source manifests use the placeholder so they never need editing when the
+    registry/user changes -- only image-repository.conf does."""
+    if isinstance(node, dict):
+        image = node.get("image")
+        if isinstance(image, str) and image.startswith(IMAGE_REPOSITORY_PLACEHOLDER + ":"):
+            node["image"] = repository + image[len(IMAGE_REPOSITORY_PLACEHOLDER):]
+        for value in node.values():
+            rewrite_image_repository(value, repository)
+    elif isinstance(node, list):
+        for item in node:
+            rewrite_image_repository(item, repository)
+
+
 def load_yaml_file(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as file:
         return yaml.safe_load(file)
@@ -495,11 +526,14 @@ def apply_batch_rules(
     batch_pipeline_path: Path,
     output_path: Path,
     rules: dict[str, dict[str, list[str]]],
+    image_repository: str,
 ) -> list[str]:
     workflow = load_yaml_file(batch_pipeline_path)
 
     if not isinstance(workflow, dict):
         raise ValueError(f"{batch_pipeline_path} root must be a YAML object")
+
+    rewrite_image_repository(workflow, image_repository)
 
     templates = get_argo_templates_container(workflow)
 
@@ -576,6 +610,7 @@ def apply_incremental_rules(
     input_dir: Path,
     output_dir: Path,
     rules: dict[str, dict[str, list[str]]],
+    image_repository: str,
 ) -> list[str]:
     warnings: list[str] = []
     applied_rules: set[str] = set()
@@ -595,9 +630,12 @@ def apply_incremental_rules(
             warnings.append(f"Skipping '{relative_path}': YAML root is not an object")
             continue
 
+        rewrite_image_repository(document, image_repository)
+
         if document.get("kind") != "Job":
-            destination_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, destination_path)
+            # Still write the parsed (and possibly image-rewritten) document rather than
+            # a raw file copy, so the placeholder substitution above always applies.
+            write_yaml_file(destination_path, document)
             continue
 
         candidates = job_candidate_names(source_path, document)
@@ -711,6 +749,7 @@ def main() -> int:
             print()
 
         output_dir = Path(args.output).resolve()
+        image_repository = read_image_repository(script_dir)
 
         if args.mode in ("batch", "all"):
             if batch_rules:
@@ -718,6 +757,7 @@ def main() -> int:
                     Path(args.batch_input).resolve(),
                     output_dir / "batch" / "pipeline.yaml",
                     batch_rules,
+                    image_repository,
                 )
             else:
                 warnings.append("No 'batch' section found in scheduling.yaml")
@@ -728,6 +768,7 @@ def main() -> int:
                     Path(args.incremental_input).resolve(),
                     output_dir / "incremental",
                     incremental_rules,
+                    image_repository,
                 )
             else:
                 warnings.append("No 'incremental' section found in scheduling.yaml")

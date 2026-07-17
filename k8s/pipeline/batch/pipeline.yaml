@@ -5,8 +5,6 @@ metadata:
   namespace: argo
 spec:
   serviceAccountName: argo
-  imagePullSecrets:
-  - name: regcred
 
   podGC:
     strategy: OnWorkflowCompletion
@@ -33,7 +31,7 @@ spec:
     - name: embtrai-normalization
       container:
         name: main
-        image: kevinoulai/erctl:normalization
+        image: __IMAGE_REPOSITORY__:normalization
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-normalization.py]
         args:
@@ -73,7 +71,7 @@ spec:
     - name: embtrai-graph-construction
       container:
         name: main
-        image: kevinoulai/erctl:graph
+        image: __IMAGE_REPOSITORY__:graph
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-graph_construction.py]
         args:
@@ -113,7 +111,7 @@ spec:
     - name: embtrai-random-walk
       container:
         name: main
-        image: kevinoulai/erctl:graph
+        image: __IMAGE_REPOSITORY__:graph
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-random_walk.py]
         args:
@@ -153,7 +151,7 @@ spec:
     - name: embtrai-cg-feature-extraction
       container:
         name: main
-        image: kevinoulai/erctl:cgfeature
+        image: __IMAGE_REPOSITORY__:cgfeature
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-cg_feature_extraction.py]
         args:
@@ -188,7 +186,7 @@ spec:
     - name: embtrai-embedding-training
       container:
         name: main
-        image: kevinoulai/erctl:embedding
+        image: __IMAGE_REPOSITORY__:embedding
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-embedding_training.py]
         args:
@@ -228,7 +226,7 @@ spec:
     - name: embtrai-feature-index-construction
       container:
         name: main
-        image: kevinoulai/erctl:featureindex
+        image: __IMAGE_REPOSITORY__:featureindex
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-feature_index_construction.py]
         args:
@@ -268,7 +266,7 @@ spec:
     - name: berttrai-normalization
       container:
         name: main
-        image: kevinoulai/erctl:normalization
+        image: __IMAGE_REPOSITORY__:normalization
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/entries/batch/BertTrai-normalization.py]
         args:
@@ -308,7 +306,7 @@ spec:
     - name: berttrai-training
       container:
         name: main
-        image: kevinoulai/erctl:bert
+        image: __IMAGE_REPOSITORY__:bert
         imagePullPolicy: IfNotPresent
         resources:
           limits:
@@ -357,7 +355,7 @@ spec:
     - name: berteva-normalization
       container:
         name: main
-        image: kevinoulai/erctl:normalization
+        image: __IMAGE_REPOSITORY__:normalization
         imagePullPolicy: IfNotPresent
         command: [/opt/venv/bin/python, /app/entries/batch/BertEva-normalization.py]
         args:
@@ -397,7 +395,7 @@ spec:
     - name: berteva-b-evaluation
       container:
         name: main
-        image: kevinoulai/erctl:bert
+        image: __IMAGE_REPOSITORY__:bert
         imagePullPolicy: IfNotPresent
         resources:
           limits:

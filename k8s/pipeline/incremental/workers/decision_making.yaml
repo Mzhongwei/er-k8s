@@ -16,7 +16,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: main
-          image: kevinoulai/erctl:prediction
+          image: __IMAGE_REPOSITORY__:prediction
           imagePullPolicy: IfNotPresent
           command: [/opt/venv/bin/python, /app/entries/worker/decision_making.py]
           args:

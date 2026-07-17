@@ -14,7 +14,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: main
-          image: kevinoulai/erctl:graph
+          image: __IMAGE_REPOSITORY__:graph
           imagePullPolicy: IfNotPresent
           command: [/opt/venv/bin/python, /app/entries/worker/graph_construction.py]
           args:

@@ -1,4 +1,7 @@
-FROM kevinoulai/erctl:base AS builder
+# Must be supplied via --build-arg (images.sh reads image-repository.conf); no default
+# so a stale hardcoded username can't silently sneak back in.
+ARG IMAGE_REPOSITORY
+FROM ${IMAGE_REPOSITORY}:base AS builder
 
 COPY ./code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-base.txt \
      ./code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-kafka.txt \
@@ -8,7 +11,7 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
         -r /app/requirements/for_entries/requirements-kafka.txt \
     && rm -rf /root/.cache/pip
 
-FROM kevinoulai/erctl:base
+FROM ${IMAGE_REPOSITORY}:base
 
 WORKDIR /app
 

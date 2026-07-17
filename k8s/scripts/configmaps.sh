@@ -7,28 +7,16 @@ fi
 
 set -euo pipefail
 
-# Select the pipeline config family. Keep the no-argument behavior aligned with
-# `erctl pipeline`, whose default mode is embedding.
-CONFIG_TYPE="embedding"
-if [ $# -gt 1 ]; then
-    echo "Usage: erctl configmaps [embedding|bert]"
+# Path to the pipeline config YAML to bundle as er-pipeline-config. No mode/family
+# selector here -- the caller (erctl pipeline) already derived everything it needs from
+# this same file's own `mode:` field before invoking us.
+if [ $# -ne 1 ]; then
+    echo "Usage: erctl configmaps <config-file-path>"
     exit 1
 fi
-if [ $# -gt 0 ]; then
-    case "$1" in
-        embedding|bert)
-            CONFIG_TYPE="$1"
-            export CONFIG_TYPE
-            ;;
-        *)
-            echo "Unknown option for configmaps: $1"
-            echo "Use '$0 help' for usage information."
-            exit 1
-            ;;
-    esac
-fi
-if [[ "$CONFIG_TYPE" != "bert" && "$CONFIG_TYPE" != "embedding" ]]; then
-    echo "Invalid config type: $CONFIG_TYPE. Must be 'bert' or 'embedding'."
+CONFIG_FILE="$1"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Config file not found: $CONFIG_FILE"
     exit 1
 fi
 
@@ -78,7 +66,6 @@ BATCH_BERTTRAI_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/
 BATCH_BERTEVA_NORMALIZATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/BertEva-normalization.py"
 BATCH_BERTEVA_B_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/BertEva-b_evaluation.py"
 
-CONFIG_FILE="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/config/examples/config-${CONFIG_TYPE}.yaml"
 KAFKA_PRODUCER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/simulators/producer.py"
 KAFKA_CONSUMER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/simulators/consumer.py"
 PIPELINE_IO_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/utils/pipeline_io.py"

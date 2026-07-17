@@ -4,4 +4,6 @@ reports/
 .vscode/
 .codex/
 .agents/
+.claude/
 k8s/pipeline/exec/
+k8s/scripts/image-repository.conf

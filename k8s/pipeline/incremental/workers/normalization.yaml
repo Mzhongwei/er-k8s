@@ -14,7 +14,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: main
-          image: kevinoulai/erctl:normalization
+          image: __IMAGE_REPOSITORY__:normalization
           imagePullPolicy: IfNotPresent
           command: [/opt/venv/bin/python, /app/entries/worker/normalization_embedding.py]
           args:

@@ -1,4 +1,7 @@
-FROM kevinoulai/erctl:kafka
+# Must be supplied via --build-arg (images.sh reads image-repository.conf); no default
+# so a stale hardcoded username can't silently sneak back in.
+ARG IMAGE_REPOSITORY
+FROM ${IMAGE_REPOSITORY}:kafka
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
