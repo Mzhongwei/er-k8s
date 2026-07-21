@@ -11,8 +11,10 @@ from typing import Any
 
 import yaml
 
+from scheduler import compile_policy_config
 
-FIELDS = ("tags", "prefer", "fallback", "avoid")
+
+FIELDS = ("require", "tags", "prefer", "fallback", "avoid")
 HOSTNAME_KEY = "kubernetes.io/hostname"
 
 GPU_TOLERATION = {
@@ -203,6 +205,9 @@ def load_scheduling_config(path: Path) -> dict[str, dict[str, dict[str, list[str
     if not isinstance(data, dict):
         raise ValueError("scheduling.yaml root must be a YAML object")
 
+    if data.get("version") == 2:
+        return compile_policy_config(data)
+
     parsed: dict[str, dict[str, dict[str, list[str]]]] = {}
 
     for group_name, group_content in data.items():
@@ -250,14 +255,23 @@ def build_node_affinity(rule: dict[str, list[str]]) -> dict[str, Any] | None:
             }
         })
 
-    if not preferred_terms:
+    if not preferred_terms and not rule["require"]:
         return None
 
-    return {
-        "nodeAffinity": {
-            "preferredDuringSchedulingIgnoredDuringExecution": preferred_terms
+    node_affinity: dict[str, Any] = {}
+    if rule["require"]:
+        node_affinity["requiredDuringSchedulingIgnoredDuringExecution"] = {
+            "nodeSelectorTerms": [{
+                "matchExpressions": [{
+                    "key": HOSTNAME_KEY,
+                    "operator": "In",
+                    "values": list(rule["require"]),
+                }]
+            }]
         }
-    }
+    if preferred_terms:
+        node_affinity["preferredDuringSchedulingIgnoredDuringExecution"] = preferred_terms
+    return {"nodeAffinity": node_affinity}
 
 
 def has_gpu_tag(rule: dict[str, list[str]]) -> bool:
@@ -283,6 +297,16 @@ def ensure_gpu_toleration(pod_spec_or_argo_template: dict[str, Any]) -> None:
         tolerations.append(copy.deepcopy(GPU_TOLERATION))
 
 
+def ensure_gpu_resource(container: dict[str, Any]) -> None:
+    resources = container.setdefault("resources", {})
+    if not isinstance(resources, dict):
+        raise ValueError("Existing container resources field must be a YAML object")
+    limits = resources.setdefault("limits", {})
+    if not isinstance(limits, dict):
+        raise ValueError("Existing container resource limits must be a YAML object")
+    limits.setdefault("nvidia.com/gpu", 1)
+
+
 def apply_rule_to_argo_template(
     template: dict[str, Any],
     rule: dict[str, list[str]],
@@ -301,6 +325,9 @@ def apply_rule_to_argo_template(
 
     if has_gpu_tag(rule):
         ensure_gpu_toleration(template)
+        container = template.get("container")
+        if isinstance(container, dict):
+            ensure_gpu_resource(container)
 
         existing_patch = str(template.get("podSpecPatch", "") or "")
 
@@ -337,6 +364,9 @@ def apply_rule_to_kubernetes_job(
     if has_gpu_tag(rule):
         ensure_gpu_toleration(pod_spec)
         pod_spec["runtimeClassName"] = "nvidia"
+        containers = pod_spec.get("containers", [])
+        if containers and isinstance(containers[0], dict):
+            ensure_gpu_resource(containers[0])
 
 
 IMAGE_REPOSITORY_PLACEHOLDER = "__IMAGE_REPOSITORY__"

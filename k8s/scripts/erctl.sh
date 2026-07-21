@@ -10,7 +10,7 @@ fi
 set -euo pipefail
 
 # Defines all top-level commands supported by the current management tool.
-ACTIONS=("images" "configmaps" "dataset" "process" "pipeline" "compile" "move" "help")
+ACTIONS=("images" "configmaps" "dataset" "process" "pipeline" "compile" "schedule" "move" "help")
 
 print_help() {
     cat << 'EOF'
@@ -29,6 +29,7 @@ COMMANDS:
     process     Get the PID of processes running in the Argo workflow
     pipeline    Manage the Argo pipeline workflow and its storage
     compile     Compile the node scheduling configuration
+    schedule    Explain placement or run H1/H2 adaptation
     move        Move pods between nodes during execution
     help        Display this help message
 
@@ -190,6 +191,9 @@ EOF
 
     compile)
         run_script "compiler.py" "$@"
+        ;;
+    schedule)
+        run_script "scheduling.py" "$@"
         ;;
     move)
         run_script "move.py" "$@"

@@ -174,14 +174,17 @@ Node placement is configured in:
 k8s/scripts/scheduling.yaml
 ```
 
-The file defines scheduling rules for both batch and incremental executions. Each task can use the following fields:
+Select a strategy with one setting (`B0`, `C1` ... `C7`, `H1`, or `H2`):
 
 ```yaml
-tags: []       # Logical task tags, for example GPU-related tasks
-prefer: []     # Preferred Kubernetes nodes
-fallback: []   # Fallback nodes if preferred nodes are unavailable
-avoid: []      # Nodes to avoid
+version: 2
+strategy: C3
 ```
+
+`nodes` contains stable capabilities, `data` contains storage location, and task overrides
+live under `batch.templates` / `incremental.templates`. A strategy list such as
+`strategy: [C3, C7]` composes policies; optional `preferences.weights` controls their
+relative importance. B0 writes no affinity and is the Kubernetes-default baseline.
 
 Compile the scheduling configuration into executable manifests with:
 
@@ -194,6 +197,28 @@ To inspect the parsed rules:
 ```bash
 bash k8s/scripts/erctl.sh compile --print-rules
 ```
+
+Explain a placement decision without changing the cluster:
+
+```bash
+bash k8s/scripts/erctl.sh schedule recommend random-walk --group incremental
+```
+
+For H2, `--live` reads `kubectl top nodes`. H1 accepts current power measurements from a
+YAML/JSON node mapping via `--metrics`. Runtime adaptation is dry-run by default:
+
+```yaml
+nodes:
+  server2-labo: {power_watts: 210, carbon_intensity: medium}
+```
+
+```bash
+bash k8s/scripts/erctl.sh schedule adapt random-walk --group incremental
+bash k8s/scripts/erctl.sh schedule adapt random-walk --group incremental --apply
+```
+
+`--apply` is limited to tasks explicitly marked `migratable: true`; it recreates the
+Kubernetes Job, so application state must be stored in a PVC/checkpoint.
 
 The compiler writes generated manifests into:
 

@@ -150,6 +150,8 @@ spec:
           name: eaer-pipeline-io
 
     - name: embtrai-cg-feature-extraction
+      archiveLocation:
+        archiveLogs: false
       container:
         name: main
         image: __IMAGE_REPOSITORY__:cgfeature
