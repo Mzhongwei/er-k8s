@@ -4,27 +4,27 @@ batch:
     # Defaults values
     tags: []
     prefer: [server2-labo]
-    fallback: [fedora]
+    fallback: [zhongwei-lap]
     avoid: [server1-k3s-worker, matis-asus-expertbook-b1500ceaey-b1500ceae]
 
     # Bert model tasks
     bert-training:
         tags: [gpu]
         prefer: [server2-labo]
-        fallback: [fedora]
+        fallback: [zhongwei-lap]
         avoid: []
 
     bert-evaluation:
         tags: [gpu]
         prefer: [server2-labo]
-        fallback: [fedora]
+        fallback: [zhongwei-lap]
         avoid: []
 
     # Embedding model tasks
     normalization:
         tags: []
         prefer: [server1-k3s-worker]
-        fallback: [fedora, server2-labo]
+        fallback: [zhongwei-lap, server2-labo]
         avoid: [matis-asus-expertbook-b1500ceaey-b1500ceae]
 
     graph-construction:
@@ -47,13 +47,13 @@ batch:
 
     cg-feature-extraction:
         tags: []
-        prefer: [fedora]
+        prefer: [zhongwei-lap]
         fallback: [server2-labo]
         avoid: []
 
     feature-index-construction:
         tags: []
-        prefer: [fedora]
+        prefer: [zhongwei-lap]
         fallback: [server2-labo]
         avoid: []
 
@@ -62,14 +62,14 @@ incremental:
     # Defaults values
     tags: []
     prefer: [server2-labo]
-    fallback: [fedora]
+    fallback: [zhongwei-lap]
     avoid: [server1-k3s-worker, matis-asus-expertbook-b1500ceaey-b1500ceae]
 
     # Embedding model tasks
     normalization:
         tags: []
         prefer: [server1-k3s-worker]
-        fallback: [fedora, server2-labo]
+        fallback: [zhongwei-lap, server2-labo]
         avoid: [matis-asus-expertbook-b1500ceaey-b1500ceae]
 
     graph-construction:
@@ -92,31 +92,31 @@ incremental:
 
     cg-feature-extraction:
         tags: []
-        prefer: [fedora]
+        prefer: [zhongwei-lap]
         fallback: [server2-labo]
         avoid: []
 
     candidate-enumeration:
         tags: []
-        prefer: [fedora]
+        prefer: [zhongwei-lap]
         fallback: [server2-labo]
         avoid: []
 
     calculating-similarity:
         tags: []
-        prefer: [fedora]
+        prefer: [zhongwei-lap]
         fallback: [server2-labo]
         avoid: []
 
     decision-making:
         tags: []
-        prefer: [fedora]
+        prefer: [zhongwei-lap]
         fallback: [server2-labo]
         avoid: []
 
     evaluation:
         tags: []
-        prefer: [fedora]
+        prefer: [zhongwei-lap]
         fallback: [server2-labo]
         avoid: []
 

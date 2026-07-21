@@ -193,7 +193,7 @@ start_pipeline() {
     script_start_time=$(date +%s)
 
     # Let the user edit scheduling rules before compiling executable manifests.
-    nano "$SCHEDULING_CONFIG_PATH"
+    # nano "$SCHEDULING_CONFIG_PATH"
 
     # Compile
     "$SCRIPT_DIR/erctl.sh" compile
@@ -211,7 +211,7 @@ start_pipeline() {
 
     # Let the user edit the config file passed via -c/--config before deriving anything
     # from it, so the mode read back below reflects their final choice.
-    nano "$CONFIG_PATH"
+    # nano "$CONFIG_PATH"
 
     # Read mode from the edited config. This is now the sole source of truth for the
     # dataset family, the ConfigMap contents, and batch vs incremental dispatch.
@@ -260,8 +260,20 @@ start_pipeline() {
             kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_INIT_PATH"
             wait_for_job_completion incremental-init
 
-            # 2. Build the graph, embedding model and feature index in Argo.
-            argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" --watch
+            # 2. Build the graph, embedding model and feature index in Argo. Submit and
+            # watch are split so the workflow name is available for a status check
+            # afterward -- `argo submit --watch`'s own exit code does not reliably reflect
+            # the workflow's final phase.
+            local workflow_name
+            local workflow_status
+            workflow_name="$(argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" -o name)"
+            argo watch -n "$NAMESPACE" "$workflow_name"
+            workflow_status="$(argo get -n "$NAMESPACE" "$workflow_name" -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"]["phase"])')"
+            if [ "$workflow_status" != "Succeeded" ]; then
+                echo "Batch training workflow $workflow_name finished with status: $workflow_status (expected Succeeded)."
+                echo "Not starting incremental workers -- their inputs would be incomplete."
+                exit 1
+            fi
 
             # 3. Start producer, consumer and all processing workers together, including
             # evaluation. decision_making.py writes a per-window predicted-matching
@@ -441,6 +453,9 @@ if [ "$ACTION" = "start" ]; then
 
     # Required by helper functions in this script.
     require_cmd awk
+
+    # Required to check the batch workflow's final status.
+    require_cmd python3
 
     # Execute the full start workflow.
     start_pipeline

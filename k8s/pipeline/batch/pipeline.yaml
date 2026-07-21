@@ -5,6 +5,7 @@ metadata:
   namespace: argo
 spec:
   serviceAccountName: argo
+  archiveLogs: false
 
   podGC:
     strategy: OnWorkflowCompletion
