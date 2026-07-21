@@ -1,3 +1,4 @@
 [submodule "code/Energy-Aware-Entity-Resolution"]
 	path = code/Energy-Aware-Entity-Resolution
-	url = https://github.com/kevin-oulai/Energy-Aware-Entity-Resolution
+	url = https://github.com/Mzhongwei/Energy-Aware-Entity-Resolution.git
+	branch = distribution-kubernetes
