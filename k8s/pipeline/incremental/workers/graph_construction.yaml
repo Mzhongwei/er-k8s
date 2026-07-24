@@ -15,7 +15,7 @@ spec:
       containers:
         - name: main
           image: __IMAGE_REPOSITORY__:graph
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command: [/opt/venv/bin/python, /app/entries/worker/graph_construction.py]
           args:
             - --workload

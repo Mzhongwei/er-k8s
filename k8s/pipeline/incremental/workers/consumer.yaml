@@ -16,7 +16,7 @@ spec:
       containers:
         - name: main
           image: __IMAGE_REPOSITORY__:kafka
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command: [python, /app/consumer.py]
           resources:
             requests:

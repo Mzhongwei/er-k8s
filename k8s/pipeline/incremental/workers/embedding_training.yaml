@@ -15,7 +15,7 @@ spec:
       containers:
         - name: main
           image: __IMAGE_REPOSITORY__:embedding
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command: [/opt/venv/bin/python, /app/entries/worker/embedding_training.py]
           args:
             - --workload

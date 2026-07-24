@@ -15,7 +15,7 @@ spec:     # Job 的 spec
       containers:
         - name: main
           image: __IMAGE_REPOSITORY__:kafka-producer
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command: [python, /app/producer.py]
           resources:
             requests:

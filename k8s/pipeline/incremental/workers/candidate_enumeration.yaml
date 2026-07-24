@@ -15,7 +15,7 @@ spec:
       containers:
         - name: main
           image: __IMAGE_REPOSITORY__:featureindex
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command: [/opt/venv/bin/python, /app/entries/worker/candidate_enumeration.py]
           args:
             - --workload

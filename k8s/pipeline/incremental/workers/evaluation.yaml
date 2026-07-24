@@ -17,7 +17,7 @@ spec:
       containers:
         - name: main
           image: __IMAGE_REPOSITORY__:prediction
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command: [/opt/venv/bin/python, /app/entries/worker/evaluation.py]
           args:
             - --workload

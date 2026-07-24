@@ -15,7 +15,7 @@ spec:
       containers:
         - name: main
           image: __IMAGE_REPOSITORY__:cgfeature
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command: [/opt/venv/bin/python, /app/entries/worker/cg_feature_extraction.py]
           args:
             - --workload

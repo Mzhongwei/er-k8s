@@ -15,7 +15,7 @@ spec:
       containers:
         - name: main
           image: __IMAGE_REPOSITORY__:config
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command: [sh, /app/incremental_init.sh]
           resources:
             requests:
