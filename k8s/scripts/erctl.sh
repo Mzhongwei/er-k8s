@@ -38,7 +38,6 @@ OPTIONS:
         -b --build           Build the Docker images for EAER components
         -l --load            Load the Docker images into Minikube (if using Minikube)
         -p --push            Push the Docker images to Docker Hub
-        --with-kafka-server  Include the optional Redpanda server image
         -h --help            Show help for images command
 
 EXAMPLES:
@@ -114,9 +113,6 @@ case "$COMMAND" in
                     ;;
                 -p|--push)
                     images_args+=("--push")
-                    ;;
-                --with-kafka-server)
-                    images_args+=("--with-kafka-server")
                     ;;
                 *)
                     echo "Unknown option for images: $1"

@@ -10,7 +10,7 @@
 
 <p align="center">
   <img alt="MinIO" src="https://img.shields.io/badge/MinIO-object%20storage-C72E49?logo=minio&logoColor=white">
-  <img alt="Redpanda Kafka" src="https://img.shields.io/badge/Redpanda%20%2F%20Kafka-streaming-D71920?logo=apachekafka&logoColor=white">
+  <img alt="Apache Kafka" src="https://img.shields.io/badge/Apache%20Kafka-streaming-231F20?logo=apachekafka&logoColor=white">
   <img alt="NVIDIA GPU" src="https://img.shields.io/badge/NVIDIA-GPU%20optional-76B900?logo=nvidia&logoColor=white">
   <img alt="YAML" src="https://img.shields.io/badge/YAML-manifests-CB171E?logo=yaml&logoColor=white">
   <img alt="Status" src="https://img.shields.io/badge/status-research%20prototype-lightgrey">
@@ -60,7 +60,7 @@ Argo Workflows is used for batch execution, while a set of incremental Kubernete
 - Argo Workflow DAG for batch pipeline orchestration.
 - Incremental execution manifests for inference and evaluation workflows.
 - Dedicated Docker images for the different pipeline components.
-- Persistent storage through PVC manifests for datasets, models, buffers, Kafka data, and reports.
+- Persistent storage through PVC manifests for datasets, models, buffers, and reports.
 - ConfigMap generation for Python distribution scripts and runtime configuration.
 - Node scheduling compiler based on a readable YAML file.
 - Ecofloc and process monitoring for energy and emissions reporting.
@@ -75,7 +75,6 @@ Argo Workflows is used for batch execution, while a set of incremental Kubernete
 │   └── Energy-Aware-Entity-Resolution/   # Original EAER Python project as a Git submodule
 ├── docker/                               # Dockerfiles for pipeline components
 ├── k8s/
-│   ├── kafka/                            # Kafka / Redpanda-related manifests
 │   ├── pipeline/
 │   │   ├── batch/                        # Source Argo Workflow manifest
 │   │   ├── incremental/                  # Source incremental Kubernetes job manifests
@@ -265,8 +264,8 @@ The active image hierarchy is `kevinoulai/erctl:base` followed by the
 component images (`normalization`, `graph`, `cgfeature`, `embedding`,
 `featureindex`, `prediction`, `bert`, `config`, `kafka`, and
 `kafka-producer`). The legacy `min`/`full` distinction is no longer used.
-The external Kafka deployment does not require a broker image; add
-`--with-kafka-server` only when the optional local Redpanda image is needed.
+The `kafka` and `kafka-producer` images are clients of the external Kafka
+broker configured in the pipeline YAML; this repository does not deploy a broker.
 
 Create ConfigMaps and sync the dataset for the selected pipeline family. Both commands
 default to `embedding`; dataset synchronization clears the data PVC and copies only the

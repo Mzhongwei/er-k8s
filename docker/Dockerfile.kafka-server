@@ -1,5 +1,0 @@
-FROM docker.redpanda.com/redpandadata/redpanda:v24.1.10
-
-EXPOSE 9092
-
-ENTRYPOINT ["redpanda", "--redpanda-cfg", "/etc/redpanda/redpanda.yaml"]

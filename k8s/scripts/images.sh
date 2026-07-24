@@ -35,7 +35,6 @@ RUNTIME_IMAGE_TAGS=(
     kafka-producer
 )
 
-INCLUDE_KAFKA_SERVER=false
 DO_BUILD=false
 DO_PUSH=false
 DO_LOAD=false
@@ -58,7 +57,6 @@ Options:
   -b, --build               Build base and all runtime images
   -p, --push                Push the exact EAER image set to Docker Hub
   -l, --load                Load the exact EAER image set into Minikube
-      --with-kafka-server   Also manage the optional Redpanda server image
   -h, --help                Show this help
 
 Options can be combined, for example: erctl images --build --push
@@ -76,9 +74,6 @@ docker_cmd() {
 all_image_tags() {
     printf '%s\n' base
     printf '%s\n' "${RUNTIME_IMAGE_TAGS[@]}"
-    if [ "$INCLUDE_KAFKA_SERVER" = true ]; then
-        printf '%s\n' kafka-server
-    fi
 }
 
 build_image() {
@@ -109,10 +104,6 @@ build_images() {
 
     build_image kafka Dockerfile.kafka
     build_image kafka-producer Dockerfile.kafka-producer
-
-    if [ "$INCLUDE_KAFKA_SERVER" = true ]; then
-        build_image kafka-server Dockerfile.kafka-server
-    fi
 }
 
 push_images() {
@@ -161,9 +152,6 @@ while [ $# -gt 0 ]; do
             ;;
         -l|--load)
             DO_LOAD=true
-            ;;
-        --with-kafka-server)
-            INCLUDE_KAFKA_SERVER=true
             ;;
         -h|--help|-help|help)
             usage

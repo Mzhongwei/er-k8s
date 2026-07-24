@@ -209,10 +209,14 @@ delete_pipeline_configmaps() {
 }
 
 delete_pipeline_storage() {
-    # Delete pipeline pods, incremental Jobs, Argo workflows and PVCs in this namespace.
+    # Delete pipeline pods, incremental Jobs, Argo workflows and pipeline-owned PVCs.
     # PersistentVolumes are cluster-scoped (no namespace), so they are deliberately NOT
     # deleted here -- `kubectl delete pv --all` would remove every PV in the cluster,
-    # including ones bound to unrelated namespaces. Deleting the PVCs below is enough:
+    # including ones bound to unrelated namespaces. PVC selection is likewise derived
+    # from this pipeline's manifests instead of using `pvc --all`: the argo namespace may
+    # contain long-lived claims owned by other services. Trying to delete such a claim can
+    # wait forever on pvc-protection and risks deleting state that this pipeline does not
+    # own. Deleting the owned PVCs below is enough:
     # dynamically-provisioned PVs follow the storage class's reclaim policy (nfs-client
     # defaults to Delete), so they get cleaned up as a consequence of their PVC going away,
     # scoped correctly to just this namespace's claims.
@@ -221,6 +225,22 @@ delete_pipeline_storage() {
     # for immediate reuse (start_pipeline's own cleanup pass wants this); recreate=false
     # (the default, used by terminate_pipeline) just tears down and stops there.
     local recreate="${1:-false}"
+    local pvc_manifest
+    local pvc_name
+    local pvc_ref
+    local pipeline_pvcs=()
+
+    # Use the manifest directory as the single source of truth for owned claim names.
+    while IFS= read -r pvc_manifest; do
+        pvc_name="$(
+            awk '/^[[:space:]]*name:[[:space:]]*/ { print $2; exit }' "$pvc_manifest"
+        )"
+        if [ -z "$pvc_name" ]; then
+            echo "Unable to read PVC name from manifest: $pvc_manifest"
+            return 1
+        fi
+        pipeline_pvcs+=("pvc/$pvc_name")
+    done < <(find "$PVC_MANIFESTS" -maxdepth 1 -type f -name '*.yaml' -print | sort)
 
     # `timeout 5` keeps deletion of disposable Pods/Workflows best-effort; `xargs -r`
     # skips running kubectl when nothing matched.
@@ -233,14 +253,21 @@ delete_pipeline_storage() {
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs -r kubectl delete -n "$NAMESPACE" || true
     kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
     timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
-    kubectl delete pvc -n "$NAMESPACE" --all --wait=true --timeout=5m
+    if [ "${#pipeline_pvcs[@]}" -gt 0 ]; then
+        kubectl delete -n "$NAMESPACE" "${pipeline_pvcs[@]}" \
+            --ignore-not-found=true \
+            --wait=true \
+            --timeout=5m
+    fi
 
     if [ "$recreate" = true ]; then
         kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFESTS"
-        kubectl wait -n "$NAMESPACE" \
-            --for=jsonpath='{.status.phase}'=Bound \
-            pvc --all \
-            --timeout=5m
+        for pvc_ref in "${pipeline_pvcs[@]}"; do
+            kubectl wait -n "$NAMESPACE" \
+                --for=jsonpath='{.status.phase}'=Bound \
+                "$pvc_ref" \
+                --timeout=5m
+        done
     fi
 }
 
@@ -261,13 +288,6 @@ start_pipeline() {
     # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty
     # PVCs ready for this one. See delete_pipeline_storage() for exactly what this deletes.
     delete_pipeline_storage true
-
-    # Optional Kafka cleanup, currently disabled.
-    # timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/kafka-server' | xargs kubectl delete -n "$NAMESPACE" || true
-
-    # Optional manual node pinning for a Kafka PVC, currently disabled.
-    # kubectl patch pvc pipeline-kafka-data-claim -n "$NAMESPACE" \
-    #     -p "{\"metadata\":{\"annotations\":{\"volume.kubernetes.io/selected-node\":\"$NODE\"}}}"
 
     # Let the user edit the config file passed via -c/--config before deriving anything
     # from it, so the mode read back below reflects their final choice.
