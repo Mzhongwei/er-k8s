@@ -117,18 +117,69 @@ wait_for_job_completion() {
     # Wait for a Kubernetes Job to finish successfully.
     local job_name="$1"
 
-    # Used to gate incremental-init (buffer cleanup must finish before workers start) and
-    # to know when the evaluation worker has fully drained the decision-making stream.
-    #
-    # KNOWN LIMITATION: the same flat 30m timeout is used for both callers, even though
-    # they have very different expected durations -- incremental-init only clears buffer
-    # directories (seconds), while evaluation blocks on the entire incremental stream
-    # (producer/consumer/normalization/.../decision-making) finishing, which has no upper
-    # bound. A genuinely long-running stream makes this `kubectl wait` time out and abort
-    # start_pipeline even though decision-making/evaluation are still legitimately working.
-    # Left as-is for now (30m accepted as a stopgap); a real fix would need separate,
-    # per-caller timeouts.
+    # Used to gate incremental-init: buffer cleanup must finish before workers start.
+    # Incremental workers use wait_for_incremental_jobs so upstream failure is detected
+    # instead of being hidden behind this flat timeout.
     kubectl wait -n "$NAMESPACE" --for=condition=complete "job/$job_name" --timeout=30m
+}
+
+wait_for_incremental_jobs() {
+    # Wait for the whole incremental pipeline, while failing immediately when Kubernetes
+    # has marked any worker Job terminally Failed. Waiting only for evaluation hid upstream
+    # failures until the flat 30-minute timeout expired.
+    local timeout_seconds=1800
+    local deadline=$((SECONDS + timeout_seconds))
+    local all_complete
+    local complete_status
+    local failed_status
+    local job_name
+    local job_names=(
+        calculating-similarity
+        candidate-enumeration
+        cg-feature-extraction
+        decision-making
+        embedding-training
+        evaluation
+        graph-construction
+        kafka-consumer
+        kafka-producer
+        normalization
+        random-walk
+    )
+
+    while (( SECONDS < deadline )); do
+        all_complete=true
+
+        for job_name in "${job_names[@]}"; do
+            failed_status="$(
+                kubectl get job -n "$NAMESPACE" "$job_name" \
+                    -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' \
+                    2>/dev/null || true
+            )"
+            if [ "$failed_status" = "True" ]; then
+                echo "Incremental worker job/$job_name failed."
+                kubectl logs -n "$NAMESPACE" "job/$job_name" --tail=50 || true
+                return 1
+            fi
+
+            complete_status="$(
+                kubectl get job -n "$NAMESPACE" "$job_name" \
+                    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' \
+                    2>/dev/null || true
+            )"
+            if [ "$complete_status" != "True" ]; then
+                all_complete=false
+            fi
+        done
+
+        if [ "$all_complete" = true ]; then
+            return 0
+        fi
+        sleep 5
+    done
+
+    echo "Timed out after ${timeout_seconds}s waiting for incremental worker jobs."
+    return 1
 }
 
 extract_mode_from_config() {
@@ -171,16 +222,25 @@ delete_pipeline_storage() {
     # (the default, used by terminate_pipeline) just tears down and stops there.
     local recreate="${1:-false}"
 
-    # `timeout 5` prevents cleanup from blocking the whole run; `|| true` makes it
-    # best-effort under `set -e`; `xargs -r` skips running kubectl at all when nothing
-    # matched, instead of invoking it with no resource name.
+    # `timeout 5` keeps deletion of disposable Pods/Workflows best-effort; `xargs -r`
+    # skips running kubectl when nothing matched.
+    #
+    # PVC deletion is intentionally different: it must finish before manifests with the
+    # same claim names are applied again. Previously the client was killed after five
+    # seconds and the apply raced with deletion still running in the API server. The old
+    # claims could then disappear after `kubectl apply` reported success, leaving
+    # incremental-init permanently Pending with "persistentvolumeclaim ... not found".
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs -r kubectl delete -n "$NAMESPACE" || true
     kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
     timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
-    timeout 5 kubectl delete pvc -n "$NAMESPACE" --all || true
+    kubectl delete pvc -n "$NAMESPACE" --all --wait=true --timeout=5m
 
     if [ "$recreate" = true ]; then
         kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFESTS"
+        kubectl wait -n "$NAMESPACE" \
+            --for=jsonpath='{.status.phase}'=Bound \
+            pvc --all \
+            --timeout=5m
     fi
 }
 
@@ -286,8 +346,8 @@ start_pipeline() {
                 kubectl apply -n "$NAMESPACE" -f "$worker_manifest"
             done
 
-            echo "Waiting for evaluation job to complete..."
-            wait_for_job_completion evaluation
+            echo "Waiting for incremental worker jobs to complete..."
+            wait_for_incremental_jobs
             kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]' | tail -n 1
             ;;
 
