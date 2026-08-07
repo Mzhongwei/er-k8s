@@ -124,11 +124,10 @@ wait_for_job_completion() {
 }
 
 wait_for_incremental_jobs() {
-    # Wait for the whole incremental pipeline, while failing immediately when Kubernetes
-    # has marked any worker Job terminally Failed. Waiting only for evaluation hid upstream
-    # failures until the flat 30-minute timeout expired.
-    local timeout_seconds=1800
-    local deadline=$((SECONDS + timeout_seconds))
+    # Incremental processing is stream-driven: success is reached only after EOS has
+    # propagated through every worker. There is deliberately no elapsed-time deadline
+    # here; a slow mini-batch must not be mistaken for an ended stream. Kubernetes Job
+    # failure remains the terminal error signal.
     local all_complete
     local complete_status
     local failed_status
@@ -147,7 +146,7 @@ wait_for_incremental_jobs() {
         random-walk
     )
 
-    while (( SECONDS < deadline )); do
+    while true; do
         all_complete=true
 
         for job_name in "${job_names[@]}"; do
@@ -177,9 +176,6 @@ wait_for_incremental_jobs() {
         fi
         sleep 5
     done
-
-    echo "Timed out after ${timeout_seconds}s waiting for incremental worker jobs."
-    return 1
 }
 
 extract_mode_from_config() {
