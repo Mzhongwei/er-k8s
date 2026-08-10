@@ -15,6 +15,17 @@ from collections import defaultdict
 from pathlib import Path
 
 
+INCREMENTAL_JOBS = {
+    "calculating-similarity", "candidate-enumeration", "cg-feature-extraction",
+    "decision-making", "embedding-training", "evaluation", "graph-construction",
+    "kafka-consumer", "kafka-producer", "normalization", "random-walk",
+}
+PLACEMENT_FIELDS = (
+    "phase", "task", "pod", "node", "pod_ip", "status", "started_at", "finished_at",
+    "workflow", "job",
+)
+
+
 def energy_summary(run_dir: Path) -> None:
     energy_dir = run_dir / "energy"
     energy_dir.mkdir(parents=True, exist_ok=True)
@@ -106,7 +117,62 @@ def detect_artifacts(run_dir: Path) -> dict[str, bool]:
         "energy_summary": (run_dir / "energy" / "summary.json").exists(),
         "matching_graph": graph is not None,
         "evaluation_report": report is not None,
+        "pod_placement": (run_dir / "placement.tsv").exists(),
     }
+
+
+def collect_placement(run_dir: Path, namespace: str, phase: str, workflow: str) -> None:
+    result = subprocess.run(
+        ["kubectl", "get", "pods", "-n", namespace, "-o", "json"],
+        text=True, capture_output=True, check=True,
+    )
+    items = json.loads(result.stdout).get("items", [])
+    rows = []
+    for pod in items:
+        metadata = pod.get("metadata", {})
+        labels = metadata.get("labels", {}) or {}
+        pod_workflow = labels.get("workflows.argoproj.io/workflow", "")
+        job = labels.get("job-name", "")
+        if phase == "batch":
+            if not workflow or pod_workflow != workflow:
+                continue
+        elif job not in INCREMENTAL_JOBS:
+            continue
+
+        status = pod.get("status", {})
+        finished = max(
+            (state.get("terminated", {}).get("finishedAt", "")
+             for container in status.get("containerStatuses", [])
+             for state in [container.get("state", {})]),
+            default="",
+        )
+        rows.append({
+            "phase": phase,
+            "task": labels.get("workflows.argoproj.io/template") or labels.get("app") or job,
+            "pod": metadata.get("name", ""),
+            "node": pod.get("spec", {}).get("nodeName", ""),
+            "pod_ip": status.get("podIP", ""),
+            "status": status.get("phase", ""),
+            "started_at": status.get("startTime", ""),
+            "finished_at": finished,
+            "workflow": pod_workflow,
+            "job": job,
+        })
+
+    path = run_dir / "placement.tsv"
+    existing = set()
+    if path.exists():
+        with path.open(encoding="utf-8") as stream:
+            existing = {(row["phase"], row["pod"]) for row in csv.DictReader(stream, delimiter="\t")}
+    new_rows = [row for row in rows if (row["phase"], row["pod"]) not in existing]
+    if not new_rows:
+        return
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=PLACEMENT_FIELDS, delimiter="\t")
+        if path.stat().st_size == 0:
+            writer.writeheader()
+        writer.writerows(new_rows)
 
 
 def collect_matching(run_dir: Path, namespace: str) -> None:
@@ -187,6 +253,13 @@ def show(run_dir: Path) -> None:
     # A Succeeded run with missing matching artifacts is an honest caveat, not a lie.
     if status == "Succeeded" and not (graph and report):
         print("Note: workload Succeeded but some matching artifacts were not saved (see manifest.artifacts).")
+    placement_path = run_dir / "placement.tsv"
+    if placement_path.exists():
+        with placement_path.open(encoding="utf-8") as stream:
+            placement = list(csv.DictReader(stream, delimiter="\t"))
+        print(f"Placement: {len(placement)} pod(s)  file={placement_path}")
+        for row in placement:
+            print(f"  {row['phase']:<11} {row['task']:<34} -> {row['node'] or '(unscheduled)'}")
     if summary:
         print(
             f"Energy: {summary.get('measurement_status', 'unknown')}  "
@@ -218,6 +291,11 @@ def main() -> None:
     collect = sub.add_parser("collect")
     collect.add_argument("run_dir", type=Path)
     collect.add_argument("--namespace", default="argo")
+    placement = sub.add_parser("placement")
+    placement.add_argument("run_dir", type=Path)
+    placement.add_argument("--namespace", default="argo")
+    placement.add_argument("--phase", choices=("batch", "incremental"), required=True)
+    placement.add_argument("--workflow", default="")
     manifest = sub.add_parser("manifest")
     manifest.add_argument("run_dir", type=Path)
     manifest.add_argument("--status", required=True)
@@ -237,6 +315,8 @@ def main() -> None:
             raise SystemExit(str(error)) from None
     elif args.command == "collect":
         collect_matching(args.run_dir, args.namespace)
+    elif args.command == "placement":
+        collect_placement(args.run_dir, args.namespace, args.phase, args.workflow)
     elif args.command == "manifest":
         write_manifest(args.run_dir, args)
     elif args.command == "list":

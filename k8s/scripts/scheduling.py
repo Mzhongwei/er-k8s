@@ -6,6 +6,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,49 @@ def pod_for_task(task: str, namespace: str) -> dict[str, Any] | None:
     return running[0] if running else None
 
 
+def recreate_job(pod: dict[str, Any], node: str, namespace: str) -> None:
+    job_name = next(
+        (owner.get("name") for owner in pod.get("metadata", {}).get("ownerReferences", [])
+         if owner.get("kind") == "Job" and owner.get("name")),
+        None,
+    )
+    if not job_name:
+        raise RuntimeError("Pod is not owned by a Kubernetes Job")
+
+    manifests = Path(__file__).resolve().parent.parent / "pipeline" / "exec" / "incremental"
+    job = None
+    manifest_path = None
+    for path in manifests.rglob("*.yaml"):
+        with path.open(encoding="utf-8") as stream:
+            document = yaml.safe_load(stream)
+        if (isinstance(document, dict) and document.get("kind") == "Job"
+                and document.get("metadata", {}).get("name") == job_name):
+            job, manifest_path = document, path
+            break
+    if job is None:
+        raise RuntimeError(
+            f"Generated manifest for Job '{job_name}' not found; run pipeline start first"
+        )
+
+    pod_spec = job["spec"]["template"]["spec"]
+    affinity = pod_spec.setdefault("affinity", {}).setdefault("nodeAffinity", {})
+    affinity["requiredDuringSchedulingIgnoredDuringExecution"] = {
+        "nodeSelectorTerms": [{
+            "matchFields": [{"key": "metadata.name", "operator": "In", "values": [node]}]
+        }]
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as stream:
+        yaml.safe_dump(job, stream, sort_keys=False)
+        stream.flush()
+        deleted = run(["kubectl", "delete", "job", job_name, "-n", namespace], check=False)
+        if deleted.returncode:
+            raise RuntimeError(deleted.stderr.strip())
+        applied = run(["kubectl", "apply", "-f", stream.name, "-n", namespace], check=False)
+        if applied.returncode:
+            raise RuntimeError(applied.stderr.strip())
+    print(f"Recreated Job {job_name} on {node} using {manifest_path}")
+
+
 def recommend(
     config: dict[str, Any], group: str, name: str, live: bool, metrics: str | None = None
 ) -> list[Any]:
@@ -134,11 +178,8 @@ def adapt_once(config: dict[str, Any], args: argparse.Namespace) -> int:
     if not args.apply:
         print(f"recommend move to {best.node}; add --apply to recreate the Job")
         return 0
-    move = Path(__file__).with_name("move.py")
-    result = subprocess.run([
-        sys.executable, str(move), args.task, f"--to={best.node}", "--namespace", args.namespace
-    ])
-    return result.returncode
+    recreate_job(pod, best.node, args.namespace)
+    return 0
 
 
 def main() -> int:

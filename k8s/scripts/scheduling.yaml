@@ -94,7 +94,6 @@ incremental:
       migratable: true
       data_ids: [pipeline_buffers]
   templates:
-    incremental-init: {}
     producer: {}
     consumer: {}
     normalization: {}

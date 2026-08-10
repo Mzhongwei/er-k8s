@@ -17,7 +17,6 @@ IMAGES_DIR="$ROOT_DIR/docker"
 # editing this one file (or setting EAER_IMAGE_REPOSITORY for a one-off override) -- not
 # hunting down every yaml that hardcodes it.
 IMAGE_REPOSITORY="${EAER_IMAGE_REPOSITORY:-$(cat "$SCRIPT_DIR/image-repository.conf")}"
-MINIKUBE_PROFILE="${EAER_MINIKUBE_PROFILE:-domolandes}"
 
 # These are the images used by the active batch and incremental manifests. base is built
 # first because every Python component inherits from it; kafka-producer is built last
@@ -30,23 +29,12 @@ RUNTIME_IMAGE_TAGS=(
     featureindex
     prediction
     bert
-    config
     kafka
     kafka-producer
 )
 
 DO_BUILD=false
 DO_PUSH=false
-DO_LOAD=false
-TEMP_IMAGE_ARCHIVE=""
-
-cleanup() {
-    if [ -n "$TEMP_IMAGE_ARCHIVE" ]; then
-        rm -f "$TEMP_IMAGE_ARCHIVE"
-    fi
-}
-
-trap cleanup EXIT
 
 usage() {
     cat << 'EOF'
@@ -56,7 +44,6 @@ Manage the Docker images used by the active EAER pipelines.
 Options:
   -b, --build               Build base and all runtime images
   -p, --push                Push the exact EAER image set to Docker Hub
-  -l, --load                Load the exact EAER image set into Minikube
   -h, --help                Show this help
 
 Options can be combined, for example: erctl images --build --push
@@ -100,8 +87,6 @@ build_images() {
     build_image featureindex Dockerfile.featureindex
     build_image prediction Dockerfile.prediction
     build_image bert Dockerfile.bert
-    build_image config Dockerfile.config
-
     build_image kafka Dockerfile.kafka
     build_image kafka-producer Dockerfile.kafka-producer
 }
@@ -117,31 +102,6 @@ push_images() {
     done < <(all_image_tags)
 }
 
-load_images() {
-    local tag=""
-
-    if ! command -v minikube >/dev/null 2>&1; then
-        echo "Minikube is not installed. Please install Minikube to use --load."
-        exit 1
-    fi
-
-    if ! minikube status --profile="$MINIKUBE_PROFILE" >/dev/null 2>&1; then
-        echo "Minikube profile '$MINIKUBE_PROFILE' is not running."
-        exit 1
-    fi
-
-    echo "Loading the EAER image set into Minikube profile '$MINIKUBE_PROFILE'..."
-    while IFS= read -r tag; do
-        docker_cmd image inspect "${IMAGE_REPOSITORY}:${tag}" >/dev/null
-        TEMP_IMAGE_ARCHIVE="$(mktemp)"
-        docker_cmd save --output "$TEMP_IMAGE_ARCHIVE" "${IMAGE_REPOSITORY}:${tag}"
-        minikube image load "$TEMP_IMAGE_ARCHIVE" --overwrite=true --profile="$MINIKUBE_PROFILE"
-        rm -f "$TEMP_IMAGE_ARCHIVE"
-        TEMP_IMAGE_ARCHIVE=""
-        echo "Loaded ${IMAGE_REPOSITORY}:${tag}"
-    done < <(all_image_tags)
-}
-
 while [ $# -gt 0 ]; do
     case "$1" in
         -b|--build)
@@ -149,9 +109,6 @@ while [ $# -gt 0 ]; do
             ;;
         -p|--push)
             DO_PUSH=true
-            ;;
-        -l|--load)
-            DO_LOAD=true
             ;;
         -h|--help|-help|help)
             usage
@@ -166,7 +123,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$DO_BUILD" = false ] && [ "$DO_PUSH" = false ] && [ "$DO_LOAD" = false ]; then
+if [ "$DO_BUILD" = false ] && [ "$DO_PUSH" = false ]; then
     usage
     exit 1
 fi
@@ -176,7 +133,4 @@ if [ "$DO_BUILD" = true ]; then
 fi
 if [ "$DO_PUSH" = true ]; then
     push_images
-fi
-if [ "$DO_LOAD" = true ]; then
-    load_images
 fi

@@ -16,10 +16,9 @@
 #                 Workflow. These run concurrently and stream until the input exhausts.
 #               - bert-training-evaluation: runs entirely as one Argo Workflow (no
 #                 incremental phase).
-#   stop      Best-effort pause: finds the newest `pipeline-*` Argo Workflow and asks Argo
-#             to stop it. Only ever affects the batch training Workflow -- the incremental
-#             worker Jobs from an embedding run are plain Kubernetes Jobs, invisible to
-#             `argo stop`, and keep running. See the note in stop_pipeline().
+#   stop      Non-destructive cancellation: stops the newest `pipeline-*` Argo Workflow
+#             and deletes incremental worker Jobs, while preserving ConfigMaps, runtime
+#             PVCs, and saved results. Stopped work cannot be resumed in place.
 #   terminate Force-stops the Argo Workflow (if any), then hard-resets: deletes the EAER
 #             ConfigMaps and wipes+recreates the pipeline's PVCs -- this also clears out
 #             the incremental worker Jobs, since deleting $PIPELINE_INCREMENTAL_DIR is part
@@ -42,7 +41,6 @@ PIPELINE_BATCH_PATH="$K8S_DIR/pipeline/exec/batch/pipeline.yaml"
 
 # Generated Kubernetes Job manifests used for incremental mode.
 PIPELINE_INCREMENTAL_DIR="$K8S_DIR/pipeline/exec/incremental"
-PIPELINE_INCREMENTAL_INIT_PATH="$PIPELINE_INCREMENTAL_DIR/bootstrap/incremental_init.yaml"
 PIPELINE_INCREMENTAL_WORKERS_DIR="$PIPELINE_INCREMENTAL_DIR/workers"
 
 # Directory containing PVC manifests that must exist before jobs/workflows run.
@@ -61,10 +59,6 @@ DATASET_VOLUME_MANIFEST="$K8S_DIR/datasets/dataset-volume.yaml"
 # variable alone is not enough to move the pipeline to a different namespace.
 NAMESPACE="argo"
 
-# Default node name kept for older/manual PVC patching logic.
-# It is currently only used by the commented kubectl patch below.
-NODE=server2-labo
-
 # Path to the pipeline config YAML, set via -c/--config. Required -- the file's own
 # `mode:` field is the sole source of truth for the ConfigMap contents and batch vs
 # incremental dispatch below.
@@ -73,9 +67,6 @@ CONFIG_PATH=""
 # The pipeline intentionally supports exactly these two end-to-end business modes.
 EMBEDDING_PIPELINE_MODE="embedding-training-inference-evaluation"
 BERT_PIPELINE_MODE="bert-training-evaluation"
-
-# Human-editable scheduling source file. compiler.py reads this file.
-SCHEDULING_CONFIG_PATH="$K8S_DIR/scripts/scheduling.yaml"
 
 # Energy monitoring engine (the cluster EcoFloc monitor). Driven in the background by
 # --energy-monitor so a run's power/energy is captured without a second terminal.
@@ -87,6 +78,7 @@ PROCESS_SCRIPT="$SCRIPT_DIR/process.sh"
 #     energy/sessions.tsv  one persistent record per PID and metric
 #     monitor.log          stderr/stdout of the background monitor (diagnostics)
 #     matching-result.txt  the pipeline's own [Result]/[RESULT] line
+#     placement.tsv        task Pod -> Kubernetes node mapping and timestamps
 RESULTS_DIR="$K8S_DIR/results"
 
 # --energy-monitor: auto-start EcoFloc monitor -> track Pods/Jobs -> auto-stop -> summarize
@@ -99,10 +91,9 @@ RESULTS_SUMMARY=false
 # --results-archive DEST (or env ERCTL_RESULTS_ARCHIVE): after the run, copy this run's
 # results dir to a durable/remote location -- a local/mounted path, or user@host:/path
 # (rsync/scp). The control-node k8s/results/ dir alone is gitignored and not a backup.
-# Requires --energy-monitor (which is what creates the run's results dir).
 RESULTS_ARCHIVE="${ERCTL_RESULTS_ARCHIVE:-}"
 
-# Populated at runtime by start_energy_monitor / capture_matching_result.
+# Populated at runtime by start_run / record_matching_result.
 RUN_DIR=""          # this run's permanent results directory
 MONITOR_PID=""      # PID of the background process.sh coordinator, if started
 MONITOR_READY_FILE=""
@@ -116,24 +107,23 @@ PIPELINE_STOPPING=false
 usage() {
     # Print command help without executing any cluster operation.
     cat << 'EOF'
-Usage: erctl pipeline [start|stop|terminate|results] [options]
+Usage: erctl pipeline [start|stop|terminate] [options]
 Manage the pipeline.
 Actions:
     start                    Start the pipeline (default)
-    stop                     Stop the latest pipeline
+    stop                     Cancel active workloads but preserve PVCs and ConfigMaps
     terminate                Terminate the latest pipeline and clean up resources
-    results                  Print the most recent saved run's matching + energy summary
 Options (start):
     -c, --config PATH        Path to the pipeline config YAML (required); its `mode:` field
                              decides the ConfigMaps and batch vs incremental dispatch
     --energy-monitor         Auto-run the EcoFloc energy monitor for the whole workload,
                              stop it when the Pods/Jobs finish, and permanently save the
                              energy summary under k8s/results/<mode>-<timestamp>/.
-    --results-summary        After the workload finishes, print the matching result (and the
-                             energy summary too, if --energy-monitor was also given).
+    --results-summary        After the workload finishes, print matching, Pod placement,
+                             and energy (when monitored).
     --results-archive DEST   Copy this run's results dir to a durable/remote location after
-                             the run (local/mounted path, or user@host:/path). Requires
-                             --energy-monitor. Also settable via ERCTL_RESULTS_ARCHIVE.
+                             the run (local/mounted path, or user@host:/path). Also settable
+                             via ERCTL_RESULTS_ARCHIVE.
     -h, --help, -help, help  Show this help
 EOF
 }
@@ -161,16 +151,6 @@ latest_pipeline_workflow() {
         | sort -k2,2 \
         | tail -n 1 \
         | cut -f1
-}
-
-wait_for_job_completion() {
-    # Wait for a Kubernetes Job to finish successfully.
-    local job_name="$1"
-
-    # Used to gate incremental-init: buffer cleanup must finish before workers start.
-    # Incremental workers use wait_for_incremental_jobs so upstream failure is detected
-    # instead of being hidden behind this flat timeout.
-    kubectl wait -n "$NAMESPACE" --for=condition=complete "job/$job_name" --timeout=30m
 }
 
 wait_for_workflow_completion() {
@@ -316,8 +296,8 @@ delete_pipeline_storage() {
     # PVC deletion is intentionally different: it must finish before manifests with the
     # same claim names are applied again. Previously the client was killed after five
     # seconds and the apply raced with deletion still running in the API server. The old
-    # claims could then disappear after `kubectl apply` reported success, leaving
-    # incremental-init permanently Pending with "persistentvolumeclaim ... not found".
+    # claims could then disappear after `kubectl apply` reported success, leaving new
+    # workload Pods Pending with "persistentvolumeclaim ... not found".
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs -r kubectl delete -n "$NAMESPACE" || true
     kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
     timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
@@ -394,24 +374,23 @@ stop_energy_monitor_on_exit() {
     archive_results
 }
 
+start_run() {
+    local mode="$1" ts
+    ts="$(date +%Y%m%d-%H%M%S)"
+    CURRENT_MODE="$mode"
+    RUN_DIR="$RESULTS_DIR/${mode}-${ts}-$$"
+    mkdir -p "$RUN_DIR"
+    python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Running --mode "$mode"
+    trap stop_energy_monitor_on_exit EXIT
+}
+
 start_energy_monitor() {
     # Start the cluster monitor before workload Pods are created.
     [ "$ENERGY_MONITOR" = true ] || return 0
-    local mode="$1" run_id
-    local ts
-    ts="$(date +%Y%m%d-%H%M%S)"
-    # Include the PID so two runs started in the same second never share a results directory
-    # or the RUN_ID-derived remote stop file (which would let them stop each other).
-    run_id="${mode}-${ts}-$$"
-    RUN_DIR="$RESULTS_DIR/$run_id"
-    mkdir -p "$RUN_DIR"
+    local run_id
+    run_id="$(basename "$RUN_DIR")"
     MONITOR_READY_FILE="$RUN_DIR/.energy-ready"
     MONITOR_STOP_FILE="$RUN_DIR/.energy-stop"
-    CURRENT_MODE="$mode"
-    python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Running --mode "$mode"
-
-    # Tear the monitor down on any exit path from here on.
-    trap stop_energy_monitor_on_exit EXIT
 
     # Only measure new Kubernetes worker processes; old Pods and host processes are ignored.
     bash "$PROCESS_SCRIPT" \
@@ -477,6 +456,15 @@ record_matching_result() {
     fi
 }
 
+record_placement() {
+    local phase="$1"
+    local workflow="${2:-}"
+    local args=(placement "$RUN_DIR" --namespace "$NAMESPACE" --phase "$phase")
+    [ -n "$workflow" ] && args+=(--workflow "$workflow")
+    python3 "$SCRIPT_DIR/results.py" "${args[@]}" \
+        || echo "Warning: $phase Pod placement could not be recorded." >&2
+}
+
 emit_results_summary() {
     # --results-summary: print the matching result and, if energy was monitored, the energy
     # summary too. Independent of --energy-monitor; no-op unless --results-summary was given.
@@ -488,10 +476,6 @@ emit_results_summary() {
     fi
 }
 
-show_results() {
-    python3 "$SCRIPT_DIR/results.py" show --root "$RESULTS_DIR" --run latest
-}
-
 interrupt_pipeline() {
     local exit_code="$1"
     trap - INT TERM
@@ -501,6 +485,10 @@ interrupt_pipeline() {
     PIPELINE_STOPPING=true
     echo >&2
     echo "Pipeline interrupted; stopping Kubernetes workloads..." >&2
+    if [ -n "$RUN_DIR" ]; then
+        [ -n "$ACTIVE_WORKFLOW" ] && record_placement batch "$ACTIVE_WORKFLOW"
+        record_placement incremental
+    fi
     if [ -n "$ACTIVE_WORKFLOW" ]; then
         argo terminate -n "$NAMESPACE" "$ACTIVE_WORKFLOW" >/dev/null 2>&1 || true
     fi
@@ -527,11 +515,8 @@ start_pipeline() {
     # Measure total script wall-clock time.
     script_start_time=$(date +%s)
 
-    # Let the user edit scheduling rules before compiling executable manifests.
-    # nano "$SCHEDULING_CONFIG_PATH"
-
-    # Compile
-    "$SCRIPT_DIR/erctl.sh" compile
+    # Generate executable manifests from scheduling.yaml.
+    python3 "$SCRIPT_DIR/compiler.py"
 
     # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty
     # PVCs ready for this one. See delete_pipeline_storage() for exactly what this deletes.
@@ -540,10 +525,6 @@ start_pipeline() {
     # Create the long-lived dataset PV/PVC if needed. Re-applying is idempotent and does
     # not copy or clear any dataset files.
     ensure_dataset_volume
-
-    # Let the user edit the config file passed via -c/--config before deriving anything
-    # from it, so the mode read back below reflects their final choice.
-    # nano "$CONFIG_PATH"
 
     # Read mode from the edited config. This is now the sole source of truth for the
     # ConfigMap contents and batch vs incremental dispatch.
@@ -570,10 +551,13 @@ start_pipeline() {
 
     # ConfigMaps -- bundles the exact file at $CONFIG_PATH as er-pipeline-config, so the
     # config the workers see at runtime is exactly what was just edited above.
-    "$SCRIPT_DIR/erctl.sh" configmaps "$CONFIG_PATH"
+    bash "$SCRIPT_DIR/configmaps.sh" "$CONFIG_PATH"
 
     # Measure only the actual workload execution time from this point.
     pipeline_start_time=$(date +%s)
+
+    # Every run gets a result directory, even when energy monitoring is disabled.
+    start_run "$config_mode"
 
     # Start the background energy monitor (no-op unless --energy-monitor) so it covers the
     # whole workload -- both the batch Argo phase and the incremental worker phase.
@@ -581,18 +565,15 @@ start_pipeline() {
 
     case "$config_mode" in
         "$EMBEDDING_PIPELINE_MODE")
-            # 1. Clear stale incremental buffers before either phase starts.
-            echo "Running incremental-init (buffer cleanup)..."
-            kubectl apply -n "$NAMESPACE" -f "$PIPELINE_INCREMENTAL_INIT_PATH"
-            wait_for_job_completion incremental-init
-
-            # 2. Build the graph, embedding model and feature index in Argo. Submit and
+            # Build the graph, embedding model and feature index in Argo. Submit and
             # waiting are split so the workflow name is known and external deletion can
             # terminate this local process instead of leaving it waiting indefinitely.
             ACTIVE_WORKFLOW="$(argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" -o name)"
             if ! workflow_status="$(wait_for_workflow_completion "$ACTIVE_WORKFLOW")"; then
+                record_placement batch "$ACTIVE_WORKFLOW"
                 exit 1
             fi
+            record_placement batch "$ACTIVE_WORKFLOW"
             if [ "$workflow_status" != "Succeeded" ]; then
                 echo "Batch training workflow $ACTIVE_WORKFLOW finished with status: $workflow_status (expected Succeeded)."
                 echo "Not starting incremental workers -- their inputs would be incomplete."
@@ -600,7 +581,7 @@ start_pipeline() {
             fi
             ACTIVE_WORKFLOW=""
 
-            # 3. Start producer, consumer and all processing workers together, including
+            # Start producer, consumer and all processing workers together, including
             # evaluation. decision_making.py writes a per-window predicted-matching
             # snapshot and references it in its buffer event, so evaluation.py -- running
             # concurrently -- evaluates the exact graph produced for that window instead of
@@ -612,7 +593,11 @@ start_pipeline() {
             done
 
             echo "Waiting for incremental worker jobs to complete..."
-            wait_for_incremental_jobs
+            if ! wait_for_incremental_jobs; then
+                record_placement incremental
+                exit 1
+            fi
+            record_placement incremental
 
             # Capture the matching result. `|| true` guards the whole substitution: under
             # `set -o pipefail`, a grep that finds no [Result] line would otherwise abort
@@ -630,8 +615,10 @@ start_pipeline() {
             # bert-training-evaluation-dag sequence.
             ACTIVE_WORKFLOW="$(argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" -o name)"
             if ! workflow_status="$(wait_for_workflow_completion "$ACTIVE_WORKFLOW")"; then
+                record_placement batch "$ACTIVE_WORKFLOW"
                 exit 1
             fi
+            record_placement batch "$ACTIVE_WORKFLOW"
             if [ "$workflow_status" != "Succeeded" ]; then
                 echo "BERT workflow $ACTIVE_WORKFLOW finished with status: $workflow_status (expected Succeeded)."
                 exit 1
@@ -690,8 +677,9 @@ start_pipeline() {
 }
 
 stop_pipeline() {
-    # Stop the latest Argo workflow and any plain Kubernetes incremental Jobs. Runtime
-    # PVCs and the static dataset volume are preserved.
+    # Non-destructively cancel the latest Argo workflow and plain incremental Jobs.
+    # Runtime PVCs, ConfigMaps, the static dataset volume, and saved results are preserved;
+    # this is cancellation, not a resumable pause.
     local workflow_name
 
     # Find the newest pipeline-* workflow. Ignore errors so the empty case can be handled.
@@ -735,15 +723,10 @@ terminate_pipeline() {
 # Default action when no explicit action is passed.
 ACTION="start"
 
-# Currently unused feature flags kept from an earlier version of the script.
-RANDOM_VERSION_NAME=false
-CREATE_CONFIGMAPS=false
-CLEAR_KAFKA_STORAGE=false
-
 # Parse the optional first positional argument: start, stop, terminate, or help.
 if [ $# -gt 0 ]; then
     case "$1" in
-        start|stop|terminate|results)
+        start|stop|terminate)
             # Use the requested lifecycle action.
             ACTION="$1"
             # Remove the action from the remaining argument list.
@@ -824,8 +807,7 @@ if [ "$ACTION" = "start" ]; then
         echo "Config file not found: $CONFIG_PATH"
         exit 1
     fi
-    # Resolve to an absolute path so it stays valid regardless of what the rest of the
-    # script or downstream scripts (erctl configmaps) do with their own working directory.
+    # Resolve to an absolute path for the internal ConfigMap builder.
     CONFIG_PATH="$(cd "$(dirname "$CONFIG_PATH")" && pwd)/$(basename "$CONFIG_PATH")"
 
     # Required for Kubernetes resource operations.
@@ -846,27 +828,10 @@ if [ "$ACTION" = "start" ]; then
         exit 1
     fi
 
-    # --results-archive only has something to archive when a run dir is created, which is the
-    # energy monitor's job. Warn and ignore rather than silently doing nothing.
-    if [ -n "$RESULTS_ARCHIVE" ] && [ "$ENERGY_MONITOR" != true ]; then
-        echo "Note: --results-archive requires --energy-monitor (it archives the run's results dir); ignoring." >&2
-        RESULTS_ARCHIVE=""
-    fi
-
     # Execute the full start workflow.
     trap 'interrupt_pipeline 130' INT
     trap 'interrupt_pipeline 143' TERM
     start_pipeline
-elif [ "$ACTION" = "results" ]; then
-    # Results accepts no extra arguments.
-    if [ $# -gt 0 ]; then
-        echo "Results does not accept additional options."
-        echo "Use 'erctl pipeline --help' for usage information."
-        exit 1
-    fi
-
-    # Print the most recent saved run's matching + energy summary.
-    show_results
 elif [ "$ACTION" = "stop" ]; then
     # Stop accepts no extra arguments.
     if [ $# -gt 0 ]; then
@@ -880,7 +845,7 @@ elif [ "$ACTION" = "stop" ]; then
     require_cmd argo
     require_cmd awk
 
-    # Stop the latest matching Argo workflow.
+    # Cancel active workloads without resetting their persistent state.
     stop_pipeline
 elif [ "$ACTION" = "terminate" ]; then
     # Terminate accepts no extra arguments.

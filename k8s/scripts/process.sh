@@ -216,12 +216,15 @@ agent_main() {
   trap finalize_all EXIT
   trap 'exit 0' INT TERM HUP
 
-  # Preflight the passwordless EcoFLOC command; unsupported metrics become no_data sessions.
-  sleep 3 &
+  # Preflight both sudo access and actual PID measurement. EcoFLOC may exit zero even when
+  # it reports "PID ... CLOSED OR INEXISTENT", which is not a usable measurement.
+  sleep 10 &
   test_pid="$!"
-  if ! "${ecofloc_cmd[@]}" --cpu -p "$test_pid" -i 1000 -t 1 > "$log_dir/preflight.log" 2>&1; then
+  if ! "${ecofloc_cmd[@]}" --cpu -p "$test_pid" -i 1000 -t 2 > "$log_dir/preflight.log" 2>&1 \
+      || grep -qiE 'CLOSED OR INEXISTENT|inexistent' "$log_dir/preflight.log" \
+      || [ "$(parse_log "$log_dir/preflight.log" | awk -F'|' '{print $3}')" != "ok" ]; then
     kill "$test_pid" 2>/dev/null || true
-    echo "EcoFLOC preflight failed on $node" >&2
+    echo "EcoFLOC preflight produced no usable measurement on $node" >&2
     exit 1
   fi
   kill "$test_pid" 2>/dev/null || true

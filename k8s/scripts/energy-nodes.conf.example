@@ -11,6 +11,7 @@
 #             local  run the agent directly on this host (the coordinator's host)
 #             ssh    ssh into target, then run the agent there
 #             vm     ssh into target, then `ssh vm` into a nested VM, then run the agent
+#                   (Kubernetes API-only access is not sufficient for this transport)
 #   target  ssh destination (user@host or an ssh config alias); omit for kind=local
 #   mode    execute | direct  -- how EcoFLOC is invoked under sudo -n:
 #             execute  sudo -n /bin/execute ecofloc ...      (wrapper binary)

@@ -28,13 +28,14 @@ The original Python pipeline is split into multiple containerized tasks and orch
 - Main features
 - Repository structure
 - Prerequisites
-- Installation
+- Quick start
 - Dataset storage
 - Usage
 - Scheduling configuration
-- Process monitoring
+- Automatic EcoFLOC measurement
 - Useful commands
 - Troubleshooting
+- Acknowledgements
 
 # Overview
 
@@ -108,11 +109,15 @@ Cluster-side requirements:
 - access to the Docker images referenced by the manifests;
 - optional NVIDIA GPU support for BERT-related tasks.
 
-When using the Git submodule, clone the repository recursively:
+The control machine must be able to reach the Kubernetes API and the Argo namespace.
+
+# Quick start
+
+## 1. Clone the repository
 
 ```bash
-git clone --recurse-submodules https://github.com/kevin-oulai/k8s-python-llm.git
-cd k8s-python-llm
+git clone --recurse-submodules https://github.com/Mzhongwei/er-k8s.git --branch development
+cd er-k8s
 ```
 
 If the repository was already cloned without submodules:
@@ -121,7 +126,30 @@ If the repository was already cloned without submodules:
 git submodule update --init --recursive
 ```
 
-# Installation
+## 2. Create local configuration
+
+Copy the simulator and image repository examples, then edit the copies:
+
+```bash
+cp code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties.example \
+  code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties
+
+cp k8s/scripts/image-repository.conf.example \
+  k8s/scripts/image-repository.conf
+
+vim code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties
+vim k8s/scripts/image-repository.conf
+```
+
+Set `spring.kafka.bootstrap-servers` to the external broker, for example
+`localhost:9092`. Set `image-repository.conf` to the image prefix used by the cluster,
+for example `your-dockerhub-user/erctl`.
+
+`image-repository.conf` is required even when images are reused: both the image tool and
+the manifest compiler read it to produce complete image names. The two generated config
+files are ignored by Git.
+
+## 3. Prepare cluster resources
 
 Create or select the Argo namespace:
 
@@ -135,10 +163,113 @@ Apply the RBAC resources used by the helper scripts:
 kubectl apply -n argo -f k8s/rbac-configmaps.yaml
 ```
 
-Generate the scheduled execution manifests:
+`pipeline start` generates scheduled manifests and ConfigMaps automatically.
+
+## 4. Configure the static dataset volume
+
+Before applying the volume, verify the NFS `server` and `path` in
+`k8s/datasets/dataset-volume.yaml`. All Kubernetes nodes that can run EAER Pods must be
+able to mount that export.
+
+For a fresh installation, apply it directly:
 
 ```bash
-bash k8s/scripts/erctl.sh compile
+kubectl apply -f k8s/datasets/dataset-volume.yaml
+
+kubectl wait -n argo \
+  --for=jsonpath='{.status.phase}'=Bound \
+  pvc/pipeline-data-claim \
+  --timeout=5m
+
+kubectl get pv eaer-datasets-pv
+kubectl get pvc -n argo pipeline-data-claim
+```
+
+If `pipeline-data-claim` already exists with an incompatible dynamic definition, PVC
+storage fields are immutable. Stop all Pods using it before replacing it:
+
+```bash
+kubectl get pods -n argo
+kubectl delete pvc -n argo pipeline-data-claim --wait=true
+kubectl delete pv eaer-datasets-pv --ignore-not-found --wait=true
+kubectl apply -f k8s/datasets/dataset-volume.yaml
+kubectl wait -n argo --for=jsonpath='{.status.phase}'=Bound \
+  pvc/pipeline-data-claim --timeout=5m
+```
+
+Do not run the deletion block for an already-correct static claim or as part of every
+experiment. The static dataset volume is retained across pipeline runs.
+
+## 5. Prepare images
+
+Build and push the complete image set when the images do not yet exist or their source
+code/Dockerfiles changed:
+
+```bash
+sudo docker login
+bash k8s/scripts/erctl.sh images --build --push
+```
+
+When compatible tags already exist in the configured repository, skip this build step;
+`pipeline start` will reuse/pull those tags. `docker login` is only needed for pushing.
+A private registry additionally requires Kubernetes image-pull credentials on the cluster.
+
+## 6. Validate EcoFLOC (optional)
+
+Only perform this step when using `--energy-monitor`. Copy and edit the node access list:
+
+```bash
+cp k8s/scripts/energy-nodes.conf.example k8s/scripts/energy-nodes.conf
+vim k8s/scripts/energy-nodes.conf
+```
+
+For every `ssh` node, first verify the host key with its administrator, connect once
+interactively if needed, then verify non-interactive SSH and passwordless EcoFLOC:
+
+```bash
+ssh -o BatchMode=yes user@node true
+ssh -o BatchMode=yes user@node 'sudo -n /usr/local/bin/ecofloc --help'
+```
+
+Test a live PID on each node:
+
+```bash
+sleep 10 & PID=$!
+sudo -n /usr/local/bin/ecofloc --cpu -p "$PID" -i 1000 -t 2
+wait "$PID"
+```
+or
+```bash
+sleep 10 & PID=$!
+sudo -n /bin/execute ecofloc --cpu -p "$PID" -i 1000 -t 2
+wait "$PID"
+```
+
+The output must contain `Average Power` and `Total Energy` and must not contain
+`CLOSED OR INEXISTENT`. The pipeline performs the same functional preflight and skips a
+node whose executable starts but cannot measure the PID.
+
+A `vm` entry requires both SSH hops to work non-interactively. If the VM has no SSH
+account and is reachable only through Kubernetes, remove it from `energy-nodes.conf`;
+the current collector cannot measure that host through the Kubernetes API. This does not
+affect pipeline execution or Pod placement recording.
+
+## 7. Start and observe the pipeline
+
+```bash
+bash k8s/scripts/erctl.sh pipeline start \
+  -c code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml \
+  --energy-monitor \
+  --results-summary
+```
+
+If EcoFLOC has not been configured, omit `--energy-monitor`; matching and placement are
+still saved.
+
+In another terminal, observe Jobs and Pods:
+
+```bash
+kubectl get jobs,pods -n argo -w
 ```
 
 # Dataset storage
@@ -147,8 +278,8 @@ The read-only dataset volume is defined in `k8s/datasets/dataset-volume.yaml`. I
 NFS-to-Pod mapping is:
 
 ```text
-NFS <ip>:/srv/nfs/k8s/data → Pod /data
-└── exp_datasets/           → Pod /data/exp_datasets/
+NFS <ip>:/srv/nfs/k8s/data → Pod: /data
+└── exp_datasets/           → Pod: /data/exp_datasets/
     ├── 2-fordors_zagats/
     └── 4-1_dirty_dblp_acm/
 ```
@@ -174,21 +305,23 @@ Run with the helper script
 The erctl wrapper can manage the pipeline from a single entry point:
 
 ```bash
-bash k8s/scripts/erctl.sh pipeline start -m embedding
+bash k8s/scripts/erctl.sh pipeline start -c <config.yaml>
 ```
 
-For BERT mode:
+The config file's `mode` selects the embedding or BERT lifecycle.
+
+The helper provides two different cancellation levels:
 
 ```bash
-bash k8s/scripts/erctl.sh pipeline start -m bert
-```
-
-The helper script can also stop or terminate the latest workflow:
-
-```bash
+# Non-destructive cancellation: stop workloads, preserve PVCs and ConfigMaps.
 bash k8s/scripts/erctl.sh pipeline stop
+
+# Destructive reset: terminate workloads and recreate runtime PVCs.
 bash k8s/scripts/erctl.sh pipeline terminate
 ```
+
+`pipeline stop` is not a resumable pause. Incremental Jobs are deleted, but their
+persistent state remains available for inspection or a later new run.
 
 > Warning
 > The pipeline helper is designed for an experimental cluster workflow. It may delete and recreate pipeline-related pods, workflows, PVCs, and PVs before starting a new run. Review k8s/scripts/pipeline.sh before using it on a shared or production cluster.
@@ -213,17 +346,8 @@ live under `batch.templates` / `incremental.templates`. A strategy list such as
 `strategy: [C3, C7]` composes policies; optional `preferences.weights` controls their
 relative importance. B0 writes no affinity and is the Kubernetes-default baseline.
 
-Compile the scheduling configuration into executable manifests with:
-
-```bash
-bash k8s/scripts/erctl.sh compile
-```
-
-To inspect the parsed rules:
-
-```bash
-bash k8s/scripts/erctl.sh compile --print-rules
-```
+`pipeline start` compiles this configuration into executable manifests before creating
+the workload.
 
 Explain a placement decision without changing the cluster:
 
@@ -258,7 +382,7 @@ The source manifests in k8s/pipeline/batch/ and k8s/pipeline/incremental/ are ke
 # Automatic EcoFLOC measurement
 
 Start EcoFLOC before pipeline Pods are created, drain it after all Jobs finish, and save
-matching plus energy results under `k8s/results/<run-id>/`:
+matching, Pod placement, and energy results under `k8s/results/<run-id>/`:
 
 ```bash
 bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> --energy-monitor --results-summary
@@ -267,11 +391,15 @@ bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> --energy-monitor --res
 Add `--results-archive <path-or-user@host:path>` when the run directory must also be copied
 off the control node. Archive failure is reported separately and does not change workload status.
 
-Show the latest saved run later:
+Every run writes `placement.tsv`, including each task's Pod, node, phase, status, and
+timestamps. `--results-summary` displays those mappings after the run. EcoFLOC is optional;
+matching and placement results are still saved when `--energy-monitor` is omitted.
 
-```bash
-bash k8s/scripts/erctl.sh pipeline results
-```
+The current EcoFLOC collector runs on the control host (`local`) or through SSH (`ssh` and
+two-hop `vm`). Kubernetes API access alone is not host measurement access: a VM without an
+SSH account is recorded as unavailable and needs either an SSH route or a separately
+designed privileged host-PID collector. EcoFLOC output containing `PID ... CLOSED OR
+INEXISTENT` and `0.00 Joules` is an invalid measurement; the preflight now rejects it.
 
 # Useful commands
 
@@ -281,11 +409,10 @@ Display available erctl commands:
 bash k8s/scripts/erctl.sh help
 ```
 
-Build, load, or push Docker images:
+Build or push Docker images:
 
 ```bash
 bash k8s/scripts/erctl.sh images --build
-bash k8s/scripts/erctl.sh images --load
 bash k8s/scripts/erctl.sh images --push
 # Actions can be combined; base is built before its component images.
 bash k8s/scripts/erctl.sh images --build --push
@@ -293,24 +420,12 @@ bash k8s/scripts/erctl.sh images --build --push
 
 The active image hierarchy is `kevinoulai/erctl:base` followed by the
 component images (`normalization`, `graph`, `cgfeature`, `embedding`,
-`featureindex`, `prediction`, `bert`, `config`, `kafka`, and
+`featureindex`, `prediction`, `bert`, `kafka`, and
 `kafka-producer`). The legacy `min`/`full` distinction is no longer used.
 The `kafka` and `kafka-producer` images are clients of the external Kafka
 broker configured in the pipeline YAML; this repository does not deploy a broker.
 
-Create ConfigMaps and sync the dataset for the selected pipeline family. Both commands
-default to `embedding`; dataset synchronization clears the data PVC and copies only the
-three files required by that family.
-
-```bash
-# Embedding: tableA.csv, tableB.csv, matches.txt
-bash k8s/scripts/erctl.sh configmaps
-bash k8s/scripts/erctl.sh dataset
-
-# BERT: train.csv, test.csv, valid.csv
-bash k8s/scripts/erctl.sh configmaps bert
-bash k8s/scripts/erctl.sh dataset bert
-```
+ConfigMaps are generated internally by `pipeline start` from the selected config file.
 
 Check Argo workflows:
 
@@ -361,16 +476,10 @@ kubectl apply -n argo -f k8s/pvc-manifests/
 
 Argo cannot find ConfigMaps
 
-Regenerate the ConfigMaps:
+Regenerate the ConfigMaps and execution manifests by starting the pipeline again:
 
 ```bash
-bash k8s/scripts/erctl.sh configmaps embedding
-```
-
-or, for BERT mode:
-
-```bash
-bash k8s/scripts/erctl.sh configmaps bert
+bash k8s/scripts/erctl.sh pipeline start -c <config.yaml>
 ```
 
 GPU/BERT tasks stay pending
@@ -387,23 +496,13 @@ Also verify the scheduling rules in:
 k8s/scripts/scheduling.yaml
 ```
 
-Then regenerate the execution manifests:
-
-```bash
-bash k8s/scripts/erctl.sh compile
-```
+They are regenerated automatically on the next `pipeline start`.
 
 Notes
 
 This repository is an experimental deployment and orchestration layer around the Energy-Aware Entity Resolution pipeline. It is intended for research, testing, and infrastructure experimentation rather than direct production use.
 
-#  Configuration
-`code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties.example` -->  `code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties`
-
-
-`k8s/scripts/image-repository.conf.example`--> `k8s/scripts/image-repository.conf` and change the dockerhub username
-
-## Acknowledgements
+# Acknowledgements
 
 This project builds on an initial implementation developed by
 [Kevin OULAI](https://github.com/kevin-oulai/k8s-python-llm/). The repository contains subsequent modifications, extensions, and maintenance work.

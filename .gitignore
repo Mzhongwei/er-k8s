@@ -10,3 +10,4 @@ k8s/scripts/__pycache__/
 k8s/pipeline/exec/
 k8s/results/
 k8s/scripts/image-repository.conf
+k8s/scripts/energy-nodes.conf

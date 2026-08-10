@@ -8,10 +8,10 @@ fi
 set -euo pipefail
 
 # Path to the pipeline config YAML to bundle as er-pipeline-config. No mode/family
-# selector here -- the caller (erctl pipeline) already derived everything it needs from
+# selector here -- pipeline.sh already derived everything it needs from
 # this same file's own `mode:` field before invoking us.
 if [ $# -ne 1 ]; then
-    echo "Usage: erctl configmaps <config-file-path>"
+    echo "Usage: configmaps.sh <config-file-path>"
     exit 1
 fi
 CONFIG_FILE="$1"
@@ -69,7 +69,6 @@ BATCH_BERTEVA_B_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resoluti
 KAFKA_PRODUCER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/simulators/producer.py"
 KAFKA_CONSUMER_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/simulators/consumer.py"
 PIPELINE_IO_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/utils/pipeline_io.py"
-INCREMENTAL_INIT_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/incremental_init.sh"
 VERSION_NAME="${EAER_PIPELINE_VERSION_NAME:-}"
 TEMP_FILES=()
 
@@ -186,4 +185,3 @@ create_or_update_configmap "er-pipeline-config" "config.yaml" "$CONFIG_FILE_TO_U
 create_or_update_configmap "eaer-kafka-producer" "producer.py" "$KAFKA_PRODUCER_SCRIPT"
 create_or_update_configmap "eaer-kafka-consumer" "consumer.py" "$KAFKA_CONSUMER_SCRIPT"
 create_or_update_configmap "eaer-pipeline-io" "pipeline_io.py" "$PIPELINE_IO_SCRIPT"
-create_or_update_configmap "eaer-incremental-init" "incremental_init.sh" "$INCREMENTAL_INIT_SCRIPT"
