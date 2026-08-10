@@ -39,7 +39,6 @@ spec:
               subPath: evaluation.py
             - name: pipeline-data
               mountPath: /data
-              subPath: data
               readOnly: true
             - name: pipeline-communication
               mountPath: /app/data/communication

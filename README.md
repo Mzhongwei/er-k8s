@@ -29,6 +29,7 @@ The original Python pipeline is split into multiple containerized tasks and orch
 - Repository structure
 - Prerequisites
 - Installation
+- Dataset storage
 - Usage
 - Scheduling configuration
 - Process monitoring
@@ -79,6 +80,7 @@ Argo Workflows is used for batch execution, while a set of incremental Kubernete
 │   │   ├── batch/                        # Source Argo Workflow manifest
 │   │   ├── incremental/                  # Source incremental Kubernetes job manifests
 │   │   └── exec/                         # Generated manifests, created by the compiler
+│   ├── datasets/                          # Long-lived static dataset PV/PVC
 │   ├── pvc-manifests/                    # PersistentVolumeClaim manifests
 │   ├── scripts/                          # Helper scripts and scheduling compiler
 │   ├── svc-manifests/                    # Service manifests
@@ -138,6 +140,32 @@ Generate the scheduled execution manifests:
 ```bash
 bash k8s/scripts/erctl.sh compile
 ```
+
+# Dataset storage
+
+The read-only dataset volume is defined in `k8s/datasets/dataset-volume.yaml`. Its current
+NFS-to-Pod mapping is:
+
+```text
+NFS <ip>:/srv/nfs/k8s/data → Pod /data
+└── exp_datasets/           → Pod /data/exp_datasets/
+    ├── 2-fordors_zagats/
+    └── 4-1_dirty_dblp_acm/
+```
+
+Kubernetes uses the static PV `eaer-datasets-pv` and PVC `pipeline-data-claim`; Pods mount
+the PVC read-only at `/data`. Dataset paths in an experiment config therefore use the Pod
+path, for example:
+
+```yaml
+data_source_A: "/data/exp_datasets/2-fordors_zagats/tableA.csv"
+data_source_B: "/data/exp_datasets/2-fordors_zagats/tableB.csv"
+ground_truth: "/data/exp_datasets/2-fordors_zagats/matches.txt"
+```
+
+The static dataset PVC is retained across runs. Runtime PVCs for buffers, models, graphs,
+indexes, communication files, and predictions are mounted separately under `/app/data/*`
+and are recreated by `pipeline start`.
 
 # Usage
 

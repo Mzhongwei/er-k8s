@@ -11,7 +11,7 @@ spec:
   storageClassName: ""
   nfs:
     server: 192.168.1.107
-    path: /srv/nfs/k8s
+    path: /srv/nfs/k8s/data
     readOnly: true
 ---
 apiVersion: v1

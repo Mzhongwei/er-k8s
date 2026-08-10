@@ -47,7 +47,6 @@ spec:
           subPath: EmbTrai-normalization.py
         - name: pipeline-data
           mountPath: /data
-          subPath: data
           readOnly: true
         - name: pipeline-communication
           mountPath: /app/data
@@ -287,7 +286,6 @@ spec:
           subPath: BertTrai-normalization.py
         - name: pipeline-data
           mountPath: /data
-          subPath: data
           readOnly: true
         - name: pipeline-communication
           mountPath: /app/data
@@ -379,7 +377,6 @@ spec:
           subPath: BertEva-normalization.py
         - name: pipeline-data
           mountPath: /data
-          subPath: data
           readOnly: true
         - name: pipeline-communication
           mountPath: /app/data
