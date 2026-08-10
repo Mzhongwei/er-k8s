@@ -33,6 +33,7 @@ spec:     # Job 的 spec
               subPath: config.yaml
             - name: pipeline-data
               mountPath: /data
+              subPath: data
               readOnly: true
       volumes:
         - name: pipeline-kafka-producer

@@ -110,6 +110,8 @@ MONITOR_STOP_FILE=""
 MATCHING_RESULT=""  # the captured [Result]/[RESULT] line for this run
 CURRENT_MODE=""
 PIPELINE_STATUS="Running"
+ACTIVE_WORKFLOW=""
+PIPELINE_STOPPING=false
 
 usage() {
     # Print command help without executing any cluster operation.
@@ -171,6 +173,24 @@ wait_for_job_completion() {
     kubectl wait -n "$NAMESPACE" --for=condition=complete "job/$job_name" --timeout=30m
 }
 
+wait_for_workflow_completion() {
+    local workflow_name="$1"
+    local phase
+    while true; do
+        if ! phase="$(kubectl get wf -n "$NAMESPACE" "$workflow_name" -o jsonpath='{.status.phase}' 2>/dev/null)"; then
+            echo "Workflow $workflow_name was deleted; stopping local execution." >&2
+            return 1
+        fi
+        case "$phase" in
+            Succeeded|Failed|Error)
+                printf '%s\n' "$phase"
+                return 0
+                ;;
+        esac
+        sleep 2
+    done
+}
+
 wait_for_incremental_jobs() {
     # Incremental processing is stream-driven: success is reached only after EOS has
     # propagated through every worker. There is deliberately no elapsed-time deadline
@@ -198,6 +218,10 @@ wait_for_incremental_jobs() {
         all_complete=true
 
         for job_name in "${job_names[@]}"; do
+            if ! kubectl get job -n "$NAMESPACE" "$job_name" >/dev/null 2>&1; then
+                echo "Incremental worker job/$job_name was deleted; stopping local execution." >&2
+                return 1
+            fi
             failed_status="$(
                 kubectl get job -n "$NAMESPACE" "$job_name" \
                     -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' \
@@ -468,6 +492,25 @@ show_results() {
     python3 "$SCRIPT_DIR/results.py" show --root "$RESULTS_DIR" --run latest
 }
 
+interrupt_pipeline() {
+    local exit_code="$1"
+    trap - INT TERM
+    if [ "$PIPELINE_STOPPING" = true ]; then
+        exit "$exit_code"
+    fi
+    PIPELINE_STOPPING=true
+    echo >&2
+    echo "Pipeline interrupted; stopping Kubernetes workloads..." >&2
+    if [ -n "$ACTIVE_WORKFLOW" ]; then
+        argo terminate -n "$NAMESPACE" "$ACTIVE_WORKFLOW" >/dev/null 2>&1 || true
+    fi
+    if [ -d "$PIPELINE_INCREMENTAL_DIR" ]; then
+        kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" \
+            --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+    fi
+    exit "$exit_code"
+}
+
 ensure_dataset_volume() {
     kubectl apply -f "$DATASET_VOLUME_MANIFEST"
     kubectl wait -n "$NAMESPACE" \
@@ -479,6 +522,7 @@ ensure_dataset_volume() {
 start_pipeline() {
     # Start either the batch Argo workflow or the incremental Kubernetes Jobs.
     local config_mode
+    local workflow_status
 
     # Measure total script wall-clock time.
     script_start_time=$(date +%s)
@@ -543,19 +587,18 @@ start_pipeline() {
             wait_for_job_completion incremental-init
 
             # 2. Build the graph, embedding model and feature index in Argo. Submit and
-            # watch are split so the workflow name is available for a status check
-            # afterward -- `argo submit --watch`'s own exit code does not reliably reflect
-            # the workflow's final phase.
-            local workflow_name
-            local workflow_status
-            workflow_name="$(argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" -o name)"
-            argo watch -n "$NAMESPACE" "$workflow_name"
-            workflow_status="$(argo get -n "$NAMESPACE" "$workflow_name" -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"]["phase"])')"
+            # waiting are split so the workflow name is known and external deletion can
+            # terminate this local process instead of leaving it waiting indefinitely.
+            ACTIVE_WORKFLOW="$(argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" -o name)"
+            if ! workflow_status="$(wait_for_workflow_completion "$ACTIVE_WORKFLOW")"; then
+                exit 1
+            fi
             if [ "$workflow_status" != "Succeeded" ]; then
-                echo "Batch training workflow $workflow_name finished with status: $workflow_status (expected Succeeded)."
+                echo "Batch training workflow $ACTIVE_WORKFLOW finished with status: $workflow_status (expected Succeeded)."
                 echo "Not starting incremental workers -- their inputs would be incomplete."
                 exit 1
             fi
+            ACTIVE_WORKFLOW=""
 
             # 3. Start producer, consumer and all processing workers together, including
             # evaluation. decision_making.py writes a per-window predicted-matching
@@ -585,7 +628,15 @@ start_pipeline() {
         "$BERT_PIPELINE_MODE")
             # The Argo main DAG routes every bert mode to the fixed
             # bert-training-evaluation-dag sequence.
-            argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" --watch
+            ACTIVE_WORKFLOW="$(argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" -o name)"
+            if ! workflow_status="$(wait_for_workflow_completion "$ACTIVE_WORKFLOW")"; then
+                exit 1
+            fi
+            if [ "$workflow_status" != "Succeeded" ]; then
+                echo "BERT workflow $ACTIVE_WORKFLOW finished with status: $workflow_status (expected Succeeded)."
+                exit 1
+            fi
+            ACTIVE_WORKFLOW=""
 
             # Capture the matching result (see the embedding branch for why `|| true`).
             record_matching_result "$(
@@ -639,32 +690,18 @@ start_pipeline() {
 }
 
 stop_pipeline() {
-    # Stop the latest Argo workflow created by this pipeline.
-    #
-    # BUG / KNOWN LIMITATION: latest_pipeline_workflow only looks at Argo Workflow objects
-    # (`kubectl get wf`), and `argo stop` only ever acts on those. In embedding mode, the
-    # incremental worker Jobs (producer/consumer/normalization/.../evaluation) are plain
-    # `kind: Job` manifests applied directly via `kubectl apply` in start_pipeline -- they
-    # are never registered with Argo at all. By the time those workers are running, the
-    # batch training Workflow they depended on has usually already completed (step 2 in
-    # start_pipeline blocks on `argo submit --watch` before step 3 applies the workers), so
-    # there is nothing left for `argo stop` to act on. In practice this command does not
-    # stop a running embedding/incremental pipeline; use `kubectl delete job -n "$NAMESPACE"
-    # -l app=<job-name>` (or delete the whole $PIPELINE_INCREMENTAL_DIR) to actually stop
-    # the incremental workers.
+    # Stop the latest Argo workflow and any plain Kubernetes incremental Jobs. Runtime
+    # PVCs and the static dataset volume are preserved.
     local workflow_name
 
     # Find the newest pipeline-* workflow. Ignore errors so the empty case can be handled.
     workflow_name="$(latest_pipeline_workflow || true)"
 
-    # If no workflow exists, stopping is a no-op.
-    if [ -z "$workflow_name" ]; then
-        echo "No pipeline workflow found in namespace $NAMESPACE."
-        exit 0
+    if [ -n "$workflow_name" ]; then
+        argo stop -n "$NAMESPACE" "$workflow_name" || true
     fi
-
-    # Ask Argo to stop the workflow gracefully.
-    argo stop -n "$NAMESPACE" "$workflow_name"
+    kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" \
+        --ignore-not-found=true --wait=false
 }
 
 terminate_pipeline() {
@@ -817,6 +854,8 @@ if [ "$ACTION" = "start" ]; then
     fi
 
     # Execute the full start workflow.
+    trap 'interrupt_pipeline 130' INT
+    trap 'interrupt_pipeline 143' TERM
     start_pipeline
 elif [ "$ACTION" = "results" ]; then
     # Results accepts no extra arguments.
