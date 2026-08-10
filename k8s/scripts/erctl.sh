@@ -10,7 +10,7 @@ fi
 set -euo pipefail
 
 # Defines all top-level commands supported by the current management tool.
-ACTIONS=("images" "configmaps" "dataset" "pipeline" "compile" "schedule" "move" "help")
+ACTIONS=("images" "configmaps" "pipeline" "compile" "schedule" "move" "help")
 
 print_help() {
     cat << 'EOF'
@@ -25,7 +25,6 @@ COMMANDS:
     images      Manage the Docker images for EAER components
     configmaps  Create batch, worker, simulator ConfigMaps, and the pipeline config ConfigMap
                 from a given config file
-    dataset     Sync the selected embedding or BERT dataset into the data PVC
     pipeline    Manage the Argo pipeline workflow and its storage.
                   start --energy-monitor   auto-monitor energy + save under k8s/results/
                   start --results-summary  print matching (+ energy) summary at the end
@@ -47,16 +46,11 @@ EXAMPLES:
   # Create ConfigMaps (including the pipeline config) from a given config file
   erctl configmaps code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml
 
-  # Sync only the embedding dataset (embedding is the default)
-  erctl dataset
-
-  # Select BERT explicitly
+  # Create ConfigMaps for BERT
   erctl configmaps code/Energy-Aware-Entity-Resolution/config/examples/config-bert.yaml
-  erctl dataset bert
 
   # Show command-specific help
   erctl configmaps --help
-  erctl dataset --help
   erctl pipeline --help
 EOF
 }
@@ -151,34 +145,6 @@ EOF
         esac
         ;;
 
-    dataset)
-        if [ $# -gt 1 ]; then
-            echo "Usage: erctl dataset [embedding|bert]"
-            exit 1
-        fi
-
-        dataset_mode="${1:-embedding}"
-        case "$dataset_mode" in
-            -h|--help|-help|help)
-                cat << 'EOF'
-Usage: erctl dataset [embedding|bert]
-
-Create/apply the data PVC, clear its previous contents, and sync exactly one dataset family.
-embedding (default): tableA.csv, tableB.csv, matches.txt
-bert:                train.csv, test.csv, valid.csv
-EOF
-                exit 0
-                ;;
-            embedding|bert)
-                run_script "sync-data-pvc.sh" "$dataset_mode"
-                ;;
-            *)
-                echo "Unknown mode for dataset: $dataset_mode"
-                echo "Expected 'embedding' or 'bert'."
-                exit 1
-                ;;
-        esac
-        ;;
     pipeline)
         run_script "pipeline.sh" "$@"
         ;;

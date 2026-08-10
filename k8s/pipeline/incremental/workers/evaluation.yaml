@@ -57,6 +57,7 @@ spec:
         - name: pipeline-data
           persistentVolumeClaim:
             claimName: pipeline-data-claim
+            readOnly: true
         - name: pipeline-communication
           persistentVolumeClaim:
             claimName: pipeline-communication-claim

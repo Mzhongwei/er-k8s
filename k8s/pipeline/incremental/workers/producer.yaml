@@ -33,6 +33,7 @@ spec:     # Job 的 spec
               subPath: config.yaml
             - name: pipeline-data
               mountPath: /data
+              readOnly: true
       volumes:
         - name: pipeline-kafka-producer
           configMap:
@@ -43,3 +44,4 @@ spec:     # Job 的 spec
         - name: pipeline-data
           persistentVolumeClaim:
             claimName: pipeline-data-claim
+            readOnly: true

@@ -47,6 +47,7 @@ spec:
           subPath: EmbTrai-normalization.py
         - name: pipeline-data
           mountPath: /data
+          readOnly: true
         - name: pipeline-communication
           mountPath: /app/data
         - name: pipeline-io
@@ -62,6 +63,7 @@ spec:
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
+          readOnly: true
       - name: pipeline-communication
         persistentVolumeClaim:
           claimName: pipeline-communication-claim
@@ -284,6 +286,7 @@ spec:
           subPath: BertTrai-normalization.py
         - name: pipeline-data
           mountPath: /data
+          readOnly: true
         - name: pipeline-communication
           mountPath: /app/data
         - name: pipeline-io
@@ -299,6 +302,7 @@ spec:
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
+          readOnly: true
       - name: pipeline-communication
         persistentVolumeClaim:
           claimName: pipeline-communication-claim
@@ -373,6 +377,7 @@ spec:
           subPath: BertEva-normalization.py
         - name: pipeline-data
           mountPath: /data
+          readOnly: true
         - name: pipeline-communication
           mountPath: /app/data
         - name: pipeline-io
@@ -388,6 +393,7 @@ spec:
       - name: pipeline-data
         persistentVolumeClaim:
           claimName: pipeline-data-claim
+          readOnly: true
       - name: pipeline-communication
         persistentVolumeClaim:
           claimName: pipeline-communication-claim

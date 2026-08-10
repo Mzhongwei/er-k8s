@@ -7,8 +7,8 @@
 # Lifecycle overview:
 #   start     Full setup + run. Compiles manifests, wipes prior Jobs/Workflows/PVCs for
 #             this namespace, recreates PVCs, lets you edit the config file passed via
-#             -c/--config, then derives everything else (dataset family, ConfigMap
-#             contents, batch vs incremental dispatch) from that file's `mode:` field:
+#             -c/--config, then derives the ConfigMap contents and batch vs incremental
+#             dispatch from that file's `mode:` field:
 #               - embedding-training-inference-evaluation: runs the batch training Argo
 #                 Workflow to completion first (seeds graph/embedding/index models), then
 #                 applies the incremental worker Jobs (producer/consumer/normalization/.../
@@ -48,6 +48,10 @@ PIPELINE_INCREMENTAL_WORKERS_DIR="$PIPELINE_INCREMENTAL_DIR/workers"
 # Directory containing PVC manifests that must exist before jobs/workflows run.
 PVC_MANIFESTS="$K8S_DIR/pvc-manifests"
 
+# Long-lived read-only dataset volume. It is outside PVC_MANIFESTS so pipeline cleanup
+# never deletes it.
+DATASET_VOLUME_MANIFEST="$K8S_DIR/datasets/dataset-volume.yaml"
+
 # Kubernetes namespace used by Argo and the pipeline resources. All `kubectl`/`argo` calls
 # below are scoped to this namespace, including PVC create/delete -- PersistentVolumeClaims
 # are namespaced, so `kubectl delete pvc -n "$NAMESPACE" --all` only ever touches this
@@ -62,8 +66,8 @@ NAMESPACE="argo"
 NODE=server2-labo
 
 # Path to the pipeline config YAML, set via -c/--config. Required -- the file's own
-# `mode:` field is the sole source of truth for the dataset family, ConfigMap contents,
-# and batch vs incremental dispatch below.
+# `mode:` field is the sole source of truth for the ConfigMap contents and batch vs
+# incremental dispatch below.
 CONFIG_PATH=""
 
 # The pipeline intentionally supports exactly these two end-to-end business modes.
@@ -119,7 +123,7 @@ Actions:
     results                  Print the most recent saved run's matching + energy summary
 Options (start):
     -c, --config PATH        Path to the pipeline config YAML (required); its `mode:` field
-                             decides the dataset family, ConfigMaps, and batch vs incremental dispatch
+                             decides the ConfigMaps and batch vs incremental dispatch
     --energy-monitor         Auto-run the EcoFloc energy monitor for the whole workload,
                              stop it when the Pods/Jobs finish, and permanently save the
                              energy summary under k8s/results/<mode>-<timestamp>/.
@@ -464,10 +468,17 @@ show_results() {
     python3 "$SCRIPT_DIR/results.py" show --root "$RESULTS_DIR" --run latest
 }
 
+ensure_dataset_volume() {
+    kubectl apply -f "$DATASET_VOLUME_MANIFEST"
+    kubectl wait -n "$NAMESPACE" \
+        --for=jsonpath='{.status.phase}'=Bound \
+        pvc/pipeline-data-claim \
+        --timeout=5m
+}
+
 start_pipeline() {
     # Start either the batch Argo workflow or the incremental Kubernetes Jobs.
     local config_mode
-    local family
 
     # Measure total script wall-clock time.
     script_start_time=$(date +%s)
@@ -482,12 +493,16 @@ start_pipeline() {
     # PVCs ready for this one. See delete_pipeline_storage() for exactly what this deletes.
     delete_pipeline_storage true
 
+    # Create the long-lived dataset PV/PVC if needed. Re-applying is idempotent and does
+    # not copy or clear any dataset files.
+    ensure_dataset_volume
+
     # Let the user edit the config file passed via -c/--config before deriving anything
     # from it, so the mode read back below reflects their final choice.
     # nano "$CONFIG_PATH"
 
     # Read mode from the edited config. This is now the sole source of truth for the
-    # dataset family, the ConfigMap contents, and batch vs incremental dispatch.
+    # ConfigMap contents and batch vs incremental dispatch.
     config_mode="$(extract_mode_from_config "$CONFIG_PATH")"
 
     # Stop early if the config has no mode field.
@@ -496,24 +511,14 @@ start_pipeline() {
         exit 1
     fi
 
-    # Derive the embedding/bert family from config_mode instead of taking it as a
-    # separate CLI flag -- this is what makes -c/--config the single point of truth,
-    # with no possibility of a family/mode mismatch to guard against.
     case "$config_mode" in
-        "$EMBEDDING_PIPELINE_MODE") family="embedding" ;;
-        "$BERT_PIPELINE_MODE") family="bert" ;;
+        "$EMBEDDING_PIPELINE_MODE"|"$BERT_PIPELINE_MODE") ;;
         *)
             echo "Unsupported mode in $CONFIG_PATH: $config_mode"
             echo "Supported modes: $EMBEDDING_PIPELINE_MODE, $BERT_PIPELINE_MODE"
             exit 1
             ;;
     esac
-
-    # Sync static dataset files into the data PVC. Pass the derived family so
-    # sync-data-pvc.sh only requires the file group this run actually needs
-    # (tableA/tableB/matches.txt for embedding, train/test/valid.csv for bert) instead of
-    # demanding both regardless of which mode is about to run.
-    "$SCRIPT_DIR/erctl.sh" dataset "$family"
 
     # Delete old EAER script ConfigMaps to avoid stale mounted code, and the previous
     # pipeline config ConfigMap.
@@ -696,7 +701,6 @@ ACTION="start"
 # Currently unused feature flags kept from an earlier version of the script.
 RANDOM_VERSION_NAME=false
 CREATE_CONFIGMAPS=false
-SYNC_DATASET=false
 CLEAR_KAFKA_STORAGE=false
 
 # Parse the optional first positional argument: start, stop, terminate, or help.
