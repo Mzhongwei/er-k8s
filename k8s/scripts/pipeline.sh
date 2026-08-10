@@ -73,17 +73,61 @@ BERT_PIPELINE_MODE="bert-training-evaluation"
 # Human-editable scheduling source file. compiler.py reads this file.
 SCHEDULING_CONFIG_PATH="$K8S_DIR/scripts/scheduling.yaml"
 
+# Energy monitoring engine (the cluster EcoFloc monitor). Driven in the background by
+# --energy-monitor so a run's power/energy is captured without a second terminal.
+PROCESS_SCRIPT="$SCRIPT_DIR/process.sh"
+
+# Root under which each run's permanent results are stored, one directory per run:
+#   k8s/results/<mode>-<timestamp>/
+#     energy/summary.json  final EcoFloc totals by task and node
+#     energy/sessions.tsv  one persistent record per PID and metric
+#     monitor.log          stderr/stdout of the background monitor (diagnostics)
+#     matching-result.txt  the pipeline's own [Result]/[RESULT] line
+RESULTS_DIR="$K8S_DIR/results"
+
+# --energy-monitor: auto-start EcoFloc monitor -> track Pods/Jobs -> auto-stop -> summarize
+#   -> permanently save under RESULTS_DIR. Off by default.
+ENERGY_MONITOR=false
+# --results-summary: after the workload finishes, print the matching result (and, if energy
+#   was monitored, the energy summary). Independent of --energy-monitor. Off by default.
+RESULTS_SUMMARY=false
+
+# --results-archive DEST (or env ERCTL_RESULTS_ARCHIVE): after the run, copy this run's
+# results dir to a durable/remote location -- a local/mounted path, or user@host:/path
+# (rsync/scp). The control-node k8s/results/ dir alone is gitignored and not a backup.
+# Requires --energy-monitor (which is what creates the run's results dir).
+RESULTS_ARCHIVE="${ERCTL_RESULTS_ARCHIVE:-}"
+
+# Populated at runtime by start_energy_monitor / capture_matching_result.
+RUN_DIR=""          # this run's permanent results directory
+MONITOR_PID=""      # PID of the background process.sh coordinator, if started
+MONITOR_READY_FILE=""
+MONITOR_STOP_FILE=""
+MATCHING_RESULT=""  # the captured [Result]/[RESULT] line for this run
+CURRENT_MODE=""
+PIPELINE_STATUS="Running"
+
 usage() {
     # Print command help without executing any cluster operation.
     cat << 'EOF'
-Usage: erctl pipeline [start|stop|terminate] [options]
+Usage: erctl pipeline [start|stop|terminate|results] [options]
 Manage the pipeline.
-Options:
+Actions:
     start                    Start the pipeline (default)
     stop                     Stop the latest pipeline
     terminate                Terminate the latest pipeline and clean up resources
+    results                  Print the most recent saved run's matching + energy summary
+Options (start):
     -c, --config PATH        Path to the pipeline config YAML (required); its `mode:` field
                              decides the dataset family, ConfigMaps, and batch vs incremental dispatch
+    --energy-monitor         Auto-run the EcoFloc energy monitor for the whole workload,
+                             stop it when the Pods/Jobs finish, and permanently save the
+                             energy summary under k8s/results/<mode>-<timestamp>/.
+    --results-summary        After the workload finishes, print the matching result (and the
+                             energy summary too, if --energy-monitor was also given).
+    --results-archive DEST   Copy this run's results dir to a durable/remote location after
+                             the run (local/mounted path, or user@host:/path). Requires
+                             --energy-monitor. Also settable via ERCTL_RESULTS_ARCHIVE.
     -h, --help, -help, help  Show this help
 EOF
 }
@@ -267,6 +311,159 @@ delete_pipeline_storage() {
     fi
 }
 
+reap_monitor() {
+    # Bound shutdown so an unreachable node cannot block the pipeline forever.
+    local pid="$1" waited=0
+    [ -n "$pid" ] || return 0
+    [ -n "${MONITOR_STOP_FILE:-}" ] && { : > "$MONITOR_STOP_FILE" 2>/dev/null || true; }
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$waited" -ge 150 ]; then   # 150 x 0.2s = 30s
+            echo "Warning: energy monitor did not stop within 30s; terminating it." >&2
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 1
+            kill -KILL "$pid" 2>/dev/null || true
+            break
+        fi
+        sleep 0.2
+        waited=$((waited + 1))
+    done
+    wait "$pid" 2>/dev/null || true
+}
+
+RESULTS_ARCHIVED=false
+archive_results() {
+    # Copy the final run directory once when the script exits.
+    [ "$RESULTS_ARCHIVED" = false ] || return 0
+    [ -n "${RESULTS_ARCHIVE:-}" ] && [ -n "${RUN_DIR:-}" ] && [ -d "$RUN_DIR" ] || return 0
+    RESULTS_ARCHIVED=true
+    echo "Archiving results to $RESULTS_ARCHIVE ..."
+    case "$RESULTS_ARCHIVE" in
+        *:*)
+            if command -v rsync >/dev/null 2>&1; then
+                rsync -a -e "ssh -o ConnectTimeout=5 -o BatchMode=yes" "$RUN_DIR" "$RESULTS_ARCHIVE/"
+            else
+                scp -q -o ConnectTimeout=5 -o BatchMode=yes -r "$RUN_DIR" "$RESULTS_ARCHIVE/"
+            fi
+            ;;
+        *)
+            mkdir -p "$RESULTS_ARCHIVE"
+            cp -r "$RUN_DIR" "$RESULTS_ARCHIVE/"
+            ;;
+    esac
+}
+
+stop_energy_monitor_on_exit() {
+    # Preserve partial measurements when the pipeline fails or is interrupted.
+    if [ -n "${MONITOR_PID:-}" ]; then
+        reap_monitor "$MONITOR_PID"
+        MONITOR_PID=""
+        python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
+    fi
+    if [ -n "$RUN_DIR" ] && [ "$PIPELINE_STATUS" != "Succeeded" ]; then
+        python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" \
+            --status Failed --mode "$CURRENT_MODE" 2>/dev/null || true
+    fi
+    archive_results
+}
+
+start_energy_monitor() {
+    # Start the cluster monitor before workload Pods are created.
+    [ "$ENERGY_MONITOR" = true ] || return 0
+    local mode="$1" run_id
+    local ts
+    ts="$(date +%Y%m%d-%H%M%S)"
+    # Include the PID so two runs started in the same second never share a results directory
+    # or the RUN_ID-derived remote stop file (which would let them stop each other).
+    run_id="${mode}-${ts}-$$"
+    RUN_DIR="$RESULTS_DIR/$run_id"
+    mkdir -p "$RUN_DIR"
+    MONITOR_READY_FILE="$RUN_DIR/.energy-ready"
+    MONITOR_STOP_FILE="$RUN_DIR/.energy-stop"
+    CURRENT_MODE="$mode"
+    python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Running --mode "$mode"
+
+    # Tear the monitor down on any exit path from here on.
+    trap stop_energy_monitor_on_exit EXIT
+
+    # Only measure new Kubernetes worker processes; old Pods and host processes are ignored.
+    bash "$PROCESS_SCRIPT" \
+        --run-id "$run_id" \
+        --result-dir "$RUN_DIR/energy" \
+        --ready-file "$MONITOR_READY_FILE" \
+        --stop-file "$MONITOR_STOP_FILE" \
+        --k8s-only \
+        > "$RUN_DIR/monitor.log" 2>&1 &
+    MONITOR_PID=$!
+
+    local ticks=0
+    local ready_timeout_ticks=150   # 150 x 0.2s = 30s
+    while [ ! -f "$MONITOR_READY_FILE" ]; do
+        if ! kill -0 "$MONITOR_PID" 2>/dev/null; then
+            echo "Warning: energy monitor exited before becoming ready; continuing without energy data." >&2
+            wait "$MONITOR_PID" 2>/dev/null || true
+            MONITOR_PID=""
+            python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
+            return 0
+        fi
+        if [ "$ticks" -ge "$ready_timeout_ticks" ]; then
+            echo "Warning: energy monitor was not ready after 30s; continuing without energy data." >&2
+            reap_monitor "$MONITOR_PID"
+            MONITOR_PID=""
+            python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
+            return 0
+        fi
+        sleep 0.2
+        ticks=$((ticks + 1))
+    done
+
+    local ready_nodes=""
+    [ -f "$MONITOR_READY_FILE" ] && ready_nodes="$(tr -dc '0-9' < "$MONITOR_READY_FILE" 2>/dev/null)"
+    if [ -n "$ready_nodes" ] && [ "$ready_nodes" -gt 0 ] 2>/dev/null; then
+        echo "Energy monitor ready (measuring $ready_nodes node(s)); results dir: $RUN_DIR"
+    else
+        echo "Warning: energy monitor has no usable node; continuing without energy data." >&2
+        reap_monitor "$MONITOR_PID"
+        MONITOR_PID=""
+        python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
+        return 0
+    fi
+}
+
+stop_energy_monitor() {
+    # Drain every agent, then build the persistent summary.
+    [ -n "${MONITOR_PID:-}" ] || return 0
+    reap_monitor "$MONITOR_PID"
+    MONITOR_PID=""
+    if python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR"; then
+        echo "Energy summary saved: $RUN_DIR/energy/summary.json"
+    else
+        echo "Warning: no valid energy measurement; workload results remain valid (see $RUN_DIR/energy/summary.json)." >&2
+    fi
+}
+
+record_matching_result() {
+    # Store the result log line next to the exported matching files.
+    MATCHING_RESULT="$1"
+    if [ -n "$RUN_DIR" ]; then
+        printf '%s\n' "$MATCHING_RESULT" > "$RUN_DIR/matching-result.txt"
+    fi
+}
+
+emit_results_summary() {
+    # --results-summary: print the matching result and, if energy was monitored, the energy
+    # summary too. Independent of --energy-monitor; no-op unless --results-summary was given.
+    [ "$RESULTS_SUMMARY" = true ] || return 0
+    if [ -n "$RUN_DIR" ]; then
+        python3 "$SCRIPT_DIR/results.py" show --root "$RESULTS_DIR" --run "$(basename "$RUN_DIR")"
+    elif [ -n "$MATCHING_RESULT" ]; then
+        echo "$MATCHING_RESULT"
+    fi
+}
+
+show_results() {
+    python3 "$SCRIPT_DIR/results.py" show --root "$RESULTS_DIR" --run latest
+}
+
 start_pipeline() {
     # Start either the batch Argo workflow or the incremental Kubernetes Jobs.
     local config_mode
@@ -329,6 +526,10 @@ start_pipeline() {
     # Measure only the actual workload execution time from this point.
     pipeline_start_time=$(date +%s)
 
+    # Start the background energy monitor (no-op unless --energy-monitor) so it covers the
+    # whole workload -- both the batch Argo phase and the incremental worker phase.
+    start_energy_monitor "$config_mode"
+
     case "$config_mode" in
         "$EMBEDDING_PIPELINE_MODE")
             # 1. Clear stale incremental buffers before either phase starts.
@@ -364,16 +565,59 @@ start_pipeline() {
 
             echo "Waiting for incremental worker jobs to complete..."
             wait_for_incremental_jobs
-            kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 | grep -F '[Result]' | tail -n 1
+
+            # Capture the matching result. `|| true` guards the whole substitution: under
+            # `set -o pipefail`, a grep that finds no [Result] line would otherwise abort
+            # an otherwise-successful run.
+            record_matching_result "$(
+                kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 2>/dev/null \
+                    | grep -F '[Result]' | tail -n 1 || true
+            )"
+            [ -n "$MATCHING_RESULT" ] && echo "$MATCHING_RESULT"
+
             ;;
 
         "$BERT_PIPELINE_MODE")
             # The Argo main DAG routes every bert mode to the fixed
             # bert-training-evaluation-dag sequence.
             argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" --watch
-            argo logs -n "$NAMESPACE" @latest | grep -F '[RESULT]' | tail -n 1
+
+            # Capture the matching result (see the embedding branch for why `|| true`).
+            record_matching_result "$(
+                argo logs -n "$NAMESPACE" @latest 2>/dev/null \
+                    | grep -F '[RESULT]' | tail -n 1 || true
+            )"
+            [ -n "$MATCHING_RESULT" ] && echo "$MATCHING_RESULT"
+
             ;;
     esac
+
+    # Persist workload artifacts before finalizing optional monitoring.
+    if [ -n "$RUN_DIR" ]; then
+        python3 "$SCRIPT_DIR/results.py" collect "$RUN_DIR" --namespace "$NAMESPACE" 2>/dev/null \
+            || echo "Warning: matching-result artifacts could not be collected." >&2
+    fi
+
+    # Energy measurement is auxiliary: its own failed/partial status is stored in summary.json.
+    stop_energy_monitor
+
+    if [ -n "$RUN_DIR" ]; then
+        python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Succeeded --mode "$config_mode"
+        PIPELINE_STATUS="Succeeded"
+        if [ -n "$RESULTS_ARCHIVE" ]; then
+            if archive_results; then
+                python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Succeeded \
+                    --mode "$config_mode" --archive-status succeeded
+            else
+                python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Succeeded \
+                    --mode "$config_mode" --archive-status failed
+                echo "Warning: workload succeeded, but results could not be archived to $RESULTS_ARCHIVE." >&2
+            fi
+        fi
+    fi
+
+    # --results-summary: print matching result (+ energy summary if monitored).
+    emit_results_summary
 
     # Compute workload duration.
     end_time=$(date +%s)
@@ -458,7 +702,7 @@ CLEAR_KAFKA_STORAGE=false
 # Parse the optional first positional argument: start, stop, terminate, or help.
 if [ $# -gt 0 ]; then
     case "$1" in
-        start|stop|terminate)
+        start|stop|terminate|results)
             # Use the requested lifecycle action.
             ACTION="$1"
             # Remove the action from the remaining argument list.
@@ -491,6 +735,28 @@ if [ "$ACTION" = "start" ]; then
                 # Support --config=path/to/config.yaml.
                 CONFIG_PATH="${1#*=}"
                 # Consume the single --config=value argument.
+                shift
+                ;;
+            --energy-monitor)
+                # Auto-run the EcoFloc monitor for the whole workload and save the summary.
+                ENERGY_MONITOR=true
+                shift
+                ;;
+            --results-summary)
+                # Print matching (+ energy, if monitored) summary after the workload ends.
+                RESULTS_SUMMARY=true
+                shift
+                ;;
+            --results-archive)
+                if [ $# -lt 2 ]; then
+                    echo "Missing value for --results-archive. Expected a path or user@host:/path."
+                    exit 1
+                fi
+                RESULTS_ARCHIVE="$2"
+                shift 2
+                ;;
+            --results-archive=*)
+                RESULTS_ARCHIVE="${1#*=}"
                 shift
                 ;;
             -h|--help|-help|help)
@@ -533,8 +799,31 @@ if [ "$ACTION" = "start" ]; then
     # Required to check the batch workflow's final status.
     require_cmd python3
 
+    # The energy monitor engine must exist when --energy-monitor is requested.
+    if [ "$ENERGY_MONITOR" = true ] && [ ! -f "$PROCESS_SCRIPT" ]; then
+        echo "Energy monitor engine not found: $PROCESS_SCRIPT"
+        exit 1
+    fi
+
+    # --results-archive only has something to archive when a run dir is created, which is the
+    # energy monitor's job. Warn and ignore rather than silently doing nothing.
+    if [ -n "$RESULTS_ARCHIVE" ] && [ "$ENERGY_MONITOR" != true ]; then
+        echo "Note: --results-archive requires --energy-monitor (it archives the run's results dir); ignoring." >&2
+        RESULTS_ARCHIVE=""
+    fi
+
     # Execute the full start workflow.
     start_pipeline
+elif [ "$ACTION" = "results" ]; then
+    # Results accepts no extra arguments.
+    if [ $# -gt 0 ]; then
+        echo "Results does not accept additional options."
+        echo "Use 'erctl pipeline --help' for usage information."
+        exit 1
+    fi
+
+    # Print the most recent saved run's matching + energy summary.
+    show_results
 elif [ "$ACTION" = "stop" ]; then
     # Stop accepts no extra arguments.
     if [ $# -gt 0 ]; then

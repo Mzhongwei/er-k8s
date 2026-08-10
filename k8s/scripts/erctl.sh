@@ -10,7 +10,7 @@ fi
 set -euo pipefail
 
 # Defines all top-level commands supported by the current management tool.
-ACTIONS=("images" "configmaps" "dataset" "process" "pipeline" "compile" "schedule" "move" "help")
+ACTIONS=("images" "configmaps" "dataset" "pipeline" "compile" "schedule" "move" "help")
 
 print_help() {
     cat << 'EOF'
@@ -26,11 +26,13 @@ COMMANDS:
     configmaps  Create batch, worker, simulator ConfigMaps, and the pipeline config ConfigMap
                 from a given config file
     dataset     Sync the selected embedding or BERT dataset into the data PVC
-    process     Get the PID of processes running in the Argo workflow
-    pipeline    Manage the Argo pipeline workflow and its storage
+    pipeline    Manage the Argo pipeline workflow and its storage.
+                  start --energy-monitor   auto-monitor energy + save under k8s/results/
+                  start --results-summary  print matching (+ energy) summary at the end
+                  results                  print the latest saved run's summary
     compile     Compile the node scheduling configuration
     schedule    Explain placement or run H1/H2 adaptation
-    move        Move pods between nodes during execution
+    move        [DEPRECATED] Manual node pinning. Prefer: erctl schedule adapt <task>
     help        Display this help message
 
 OPTIONS:
@@ -177,10 +179,6 @@ EOF
                 ;;
         esac
         ;;
-    process)
-        run_script "process.sh" "$@"
-        ;;
-
     pipeline)
         run_script "pipeline.sh" "$@"
         ;;

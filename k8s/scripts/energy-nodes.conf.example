@@ -1,0 +1,24 @@
+# EcoFLOC energy-monitor node list (used by process.sh, driven by
+# `erctl pipeline start --energy-monitor`).
+#
+# Copy this file to `energy-nodes.conf` in the same directory and edit it for your cluster.
+# When energy-nodes.conf is absent, process.sh falls back to its built-in defaults; when
+# `--node` is passed on the command line, both the file and the defaults are ignored.
+#
+# One node per line, format:  name=kind:target:mode
+#   name    label shown in the energy summary (any string; k8s node name is convenient)
+#   kind    local | ssh | vm
+#             local  run the agent directly on this host (the coordinator's host)
+#             ssh    ssh into target, then run the agent there
+#             vm     ssh into target, then `ssh vm` into a nested VM, then run the agent
+#   target  ssh destination (user@host or an ssh config alias); omit for kind=local
+#   mode    execute | direct  -- how EcoFLOC is invoked under sudo -n:
+#             execute  sudo -n /bin/execute ecofloc ...      (wrapper binary)
+#             direct   sudo -n /usr/local/bin/ecofloc ...    (absolute path)
+#
+# Every listed node must allow passwordless (`sudo -n`) access to that EcoFLOC command.
+# Unavailable nodes are recorded as partial coverage. At least one node must pass preflight.
+
+server2-labo=local:execute
+zhongwei-lap=ssh:zhongwei-lap:direct
+server1-k3s-worker=vm:server1:direct

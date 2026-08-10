@@ -5,5 +5,7 @@ reports/
 .codex/
 .agents/
 .claude/
+__pycache__/
 k8s/pipeline/exec/
+k8s/results/
 k8s/scripts/image-repository.conf

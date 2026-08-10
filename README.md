@@ -227,20 +227,23 @@ k8s/pipeline/exec/
 
 The source manifests in k8s/pipeline/batch/ and k8s/pipeline/incremental/ are kept unchanged.
 
-# Process monitoring with EcoFloc
+# Automatic EcoFLOC measurement
 
-The repository provides a process-level monitoring command through erctl:
+Start EcoFLOC before pipeline Pods are created, drain it after all Jobs finish, and save
+matching plus energy results under `k8s/results/<run-id>/`:
 
-bash k8s/scripts/erctl.sh process ecofloc
+```bash
+bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> --energy-monitor --results-summary
+```
 
-This command detects Python processes running pipeline scripts from /app/... on the configured Kubernetes nodes, then launches EcoFloc on the node where each target PID is running. This is useful when the objective is to observe the actual processes executed by the Argo workflow instead of relying only on workflow-level reports.
+Add `--results-archive <path-or-user@host:path>` when the run directory must also be copied
+off the control node. Archive failure is reported separately and does not change workload status.
 
-The process helper has two main modes:
+Show the latest saved run later:
 
-bash k8s/scripts/erctl.sh process get
-bash k8s/scripts/erctl.sh process ecofloc
-get lists the detected Python PIDs and their commands.
-ecofloc monitors the detected PIDs with EcoFloc.
+```bash
+bash k8s/scripts/erctl.sh pipeline results
+```
 
 # Useful commands
 

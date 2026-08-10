@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Recreate one incremental Job with required affinity to a target node."""
+"""Recreate one incremental Job with required affinity to a target node.
+
+DEPRECATED: this manual one-off pinning tool is superseded by the scheduler
+(`erctl schedule adapt <task>`), which chooses and applies placement from the
+strategies in scheduling.yaml. Kept for ad-hoc manual moves only.
+"""
 from __future__ import annotations
 
 import argparse
@@ -90,6 +95,10 @@ def main() -> int:
     parser.add_argument("--to", dest="target_node", required=True)
     parser.add_argument("--namespace", default="argo")
     args = parser.parse_args()
+    print(
+        "[DEPRECATED] erctl move is deprecated; prefer 'erctl schedule adapt <task>'.",
+        file=sys.stderr,
+    )
     try:
         move(args.pod, args.target_node, args.namespace)
     except (OSError, KeyError, RuntimeError, yaml.YAMLError) as error:
