@@ -68,22 +68,26 @@ CONFIG_PATH=""
 EMBEDDING_PIPELINE_MODE="embedding-training-inference-evaluation"
 BERT_PIPELINE_MODE="bert-training-evaluation"
 
-# Energy monitoring engine (the cluster EcoFloc monitor). Driven in the background by
-# --energy-monitor so a run's power/energy is captured without a second terminal.
+# Energy monitoring backends. EcoFLOC is started per run; Alumet is a cluster service and
+# this script exports the current run's time window from its InfluxDB backend.
 PROCESS_SCRIPT="$SCRIPT_DIR/process.sh"
+ALUMET_SCRIPT="$SCRIPT_DIR/alumet.py"
 
 # Root under which each run's permanent results are stored, one directory per run:
 #   k8s/results/<mode>-<timestamp>/
-#     energy/summary.json  final EcoFloc totals by task and node
-#     energy/sessions.tsv  one persistent record per PID and metric
-#     monitor.log          stderr/stdout of the background monitor (diagnostics)
+#     energy/summary.json  normalized totals from the selected monitor
+#     energy/sessions.tsv  EcoFLOC session records (EcoFLOC backend only)
+#     energy/alumet-raw.csv raw InfluxDB export (Alumet backend only)
+#     monitor.log          EcoFLOC coordinator diagnostics (EcoFLOC backend only)
 #     matching-result.txt  the pipeline's own [Result]/[RESULT] line
 #     placement.tsv        task Pod -> Kubernetes node mapping and timestamps
 RESULTS_DIR="$K8S_DIR/results"
 
-# --energy-monitor: auto-start EcoFloc monitor -> track Pods/Jobs -> auto-stop -> summarize
-#   -> permanently save under RESULTS_DIR. Off by default.
+# --energy-monitor: use EcoFLOC (default) or export an Alumet time window, then permanently
+#   save the summary under RESULTS_DIR. Off by default.
 ENERGY_MONITOR=false
+ENERGY_MONITOR_TOOL="ecofloc"
+ENERGY_MONITOR_ACTIVE=false
 # --results-summary: after the workload finishes, print the matching result (and, if energy
 #   was monitored, the energy summary). Independent of --energy-monitor. Off by default.
 RESULTS_SUMMARY=false
@@ -116,9 +120,8 @@ Actions:
 Options (start):
     -c, --config PATH        Path to the pipeline config YAML (required); its `mode:` field
                              decides the ConfigMaps and batch vs incremental dispatch
-    --energy-monitor         Auto-run the EcoFloc energy monitor for the whole workload,
-                             stop it when the Pods/Jobs finish, and permanently save the
-                             energy summary under k8s/results/<mode>-<timestamp>/.
+    --energy-monitor [TOOL]  Save energy for the whole workload. TOOL is ecofloc (default)
+                             or alumet. Also accepts --energy-monitor=TOOL.
     --results-summary        After the workload finishes, print matching, Pod placement,
                              and energy (when monitored).
     --results-archive DEST   Copy this run's results dir to a durable/remote location after
@@ -362,10 +365,8 @@ archive_results() {
 
 stop_energy_monitor_on_exit() {
     # Preserve partial measurements when the pipeline fails or is interrupted.
-    if [ -n "${MONITOR_PID:-}" ]; then
-        reap_monitor "$MONITOR_PID"
-        MONITOR_PID=""
-        python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
+    if [ "$ENERGY_MONITOR_ACTIVE" = true ]; then
+        stop_energy_monitor >/dev/null 2>&1 || true
     fi
     if [ -n "$RUN_DIR" ] && [ "$PIPELINE_STATUS" != "Succeeded" ]; then
         python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" \
@@ -387,6 +388,14 @@ start_run() {
 start_energy_monitor() {
     # Start the cluster monitor before workload Pods are created.
     [ "$ENERGY_MONITOR" = true ] || return 0
+    if [ "$ENERGY_MONITOR_TOOL" = "alumet" ]; then
+        if python3 "$ALUMET_SCRIPT" start "$RUN_DIR"; then
+            ENERGY_MONITOR_ACTIVE=true
+        else
+            echo "Warning: Alumet is unavailable; continuing without energy data." >&2
+        fi
+        return 0
+    fi
     local run_id
     run_id="$(basename "$RUN_DIR")"
     MONITOR_READY_FILE="$RUN_DIR/.energy-ready"
@@ -401,6 +410,7 @@ start_energy_monitor() {
         --k8s-only \
         > "$RUN_DIR/monitor.log" 2>&1 &
     MONITOR_PID=$!
+    ENERGY_MONITOR_ACTIVE=true
 
     local ticks=0
     local ready_timeout_ticks=150   # 150 x 0.2s = 30s
@@ -409,6 +419,7 @@ start_energy_monitor() {
             echo "Warning: energy monitor exited before becoming ready; continuing without energy data." >&2
             wait "$MONITOR_PID" 2>/dev/null || true
             MONITOR_PID=""
+            ENERGY_MONITOR_ACTIVE=false
             python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
             return 0
         fi
@@ -416,6 +427,7 @@ start_energy_monitor() {
             echo "Warning: energy monitor was not ready after 30s; continuing without energy data." >&2
             reap_monitor "$MONITOR_PID"
             MONITOR_PID=""
+            ENERGY_MONITOR_ACTIVE=false
             python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
             return 0
         fi
@@ -431,6 +443,7 @@ start_energy_monitor() {
         echo "Warning: energy monitor has no usable node; continuing without energy data." >&2
         reap_monitor "$MONITOR_PID"
         MONITOR_PID=""
+        ENERGY_MONITOR_ACTIVE=false
         python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
         return 0
     fi
@@ -438,6 +451,16 @@ start_energy_monitor() {
 
 stop_energy_monitor() {
     # Drain every agent, then build the persistent summary.
+    [ "$ENERGY_MONITOR_ACTIVE" = true ] || return 0
+    ENERGY_MONITOR_ACTIVE=false
+    if [ "$ENERGY_MONITOR_TOOL" = "alumet" ]; then
+        if python3 "$ALUMET_SCRIPT" stop "$RUN_DIR"; then
+            echo "Alumet energy summary saved: $RUN_DIR/energy/summary.json"
+        else
+            echo "Warning: Alumet returned no usable energy data; workload results remain valid." >&2
+        fi
+        return 0
+    fi
     [ -n "${MONITOR_PID:-}" ] || return 0
     reap_monitor "$MONITOR_PID"
     MONITOR_PID=""
@@ -762,8 +785,17 @@ if [ "$ACTION" = "start" ]; then
                 shift
                 ;;
             --energy-monitor)
-                # Auto-run the EcoFloc monitor for the whole workload and save the summary.
                 ENERGY_MONITOR=true
+                if [ $# -ge 2 ] && { [ "$2" = "ecofloc" ] || [ "$2" = "alumet" ]; }; then
+                    ENERGY_MONITOR_TOOL="$2"
+                    shift 2
+                else
+                    shift
+                fi
+                ;;
+            --energy-monitor=*)
+                ENERGY_MONITOR=true
+                ENERGY_MONITOR_TOOL="${1#*=}"
                 shift
                 ;;
             --results-summary)
@@ -823,9 +855,19 @@ if [ "$ACTION" = "start" ]; then
     require_cmd python3
 
     # The energy monitor engine must exist when --energy-monitor is requested.
-    if [ "$ENERGY_MONITOR" = true ] && [ ! -f "$PROCESS_SCRIPT" ]; then
-        echo "Energy monitor engine not found: $PROCESS_SCRIPT"
-        exit 1
+    if [ "$ENERGY_MONITOR" = true ]; then
+        case "$ENERGY_MONITOR_TOOL" in
+            ecofloc)
+                [ -f "$PROCESS_SCRIPT" ] || { echo "Energy monitor engine not found: $PROCESS_SCRIPT"; exit 1; }
+                ;;
+            alumet)
+                [ -f "$ALUMET_SCRIPT" ] || { echo "Alumet adapter not found: $ALUMET_SCRIPT"; exit 1; }
+                ;;
+            *)
+                echo "Unknown energy monitor: $ENERGY_MONITOR_TOOL (expected ecofloc or alumet)"
+                exit 1
+                ;;
+        esac
     fi
 
     # Execute the full start workflow.

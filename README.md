@@ -18,7 +18,7 @@
 
 This repository contains the Kubernetes deployment of an Energy-Aware Entity Resolution pipeline.
 
-The original Python pipeline is split into multiple containerized tasks and orchestrated with Argo Workflows. The goal is to execute the entity resolution workflow on a Kubernetes cluster while keeping track of execution time, resource placement, and energy consumption through Ecofloc.
+The original Python pipeline is split into multiple containerized tasks and orchestrated with Argo Workflows. The goal is to execute the entity resolution workflow on a Kubernetes cluster while keeping track of execution time, resource placement, and energy consumption through EcoFLOC or Alumet.
 
 ![Architecture overview](architecture.png)
 
@@ -32,7 +32,7 @@ The original Python pipeline is split into multiple containerized tasks and orch
 - Dataset storage
 - Usage
 - Scheduling configuration
-- Automatic EcoFLOC measurement
+- Automatic EcoFLOC or Alumet measurement
 - Useful commands
 - Troubleshooting
 - Acknowledgements
@@ -387,20 +387,72 @@ k8s/pipeline/exec/
 
 The source manifests in k8s/pipeline/batch/ and k8s/pipeline/incremental/ are kept unchanged.
 
-# Automatic EcoFLOC measurement
+# Automatic energy measurement
 
-Start EcoFLOC before pipeline Pods are created, drain it after all Jobs finish, and save
-matching, Pod placement, and energy results under `k8s/results/<run-id>/`:
+Measure the pipeline from before its Pods are created until all Jobs finish, and save matching,
+Pod placement, and energy results under `k8s/results/<run-id>/`:
 
 ```bash
 bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> --energy-monitor --results-summary
+```
+
+`--energy-monitor` keeps EcoFLOC as the default. Select a backend explicitly with:
+
+```bash
+# Existing behavior
+bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> \
+  --energy-monitor ecofloc --results-summary
+
+# Cluster-wide Alumet deployment
+bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> \
+  --energy-monitor alumet --results-summary
+```
+
+Alumet is a persistent cluster service rather than a per-run child process. `erctl` checks
+that its node clients and InfluxDB are ready, records the pipeline's UTC time window, exports
+that window to `energy/alumet-raw.csv`, and writes the common `energy/summary.json`. Hardware
+and attributed energy are kept separate because adding them would double-count energy.
+
+Install Alumet once with the official chart before selecting that backend:
+
+```bash
+helm repo add alumet https://alumet-dev.github.io/helm-charts/
+helm repo update
+kubectl create namespace alumet --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install eaer-alumet alumet/alumet \
+  --namespace alumet \
+  -f k8s/monitoring/alumet-values.yaml
+
+kubectl rollout status daemonset/eaer-alumet-alumet-relay-client \
+  -n alumet --timeout=5m
+kubectl get pods -n alumet -o wide
+python3 k8s/scripts/alumet.py preflight
+```
+
+The chart creates a privileged, host-PID relay-client DaemonSet, read-only Kubernetes RBAC,
+the relay server, and persistent InfluxDB. This avoids per-run SSH and passwordless `sudo`,
+but a cluster administrator must authorize the one-time privileged deployment. RAPL must be
+available on each node; a VM whose hypervisor does not expose RAPL can report resource usage
+but not measured CPU energy. The values file does not enable NVML because enabling the chart's
+GPU resource limit on a mixed cluster would restrict the DaemonSet to GPU-capable nodes.
+
+If the release uses a different namespace, bucket, organization, secret, or InfluxDB pod,
+set these before running `erctl`:
+
+```bash
+export ERCTL_ALUMET_NAMESPACE=alumet
+export ERCTL_ALUMET_ORG=influxdata
+export ERCTL_ALUMET_BUCKET=default
+# Normally auto-detected; only set when the deployment uses nonstandard names:
+export ERCTL_ALUMET_TOKEN_SECRET=eaer-alumet-influxdb2-auth
+export ERCTL_ALUMET_INFLUX_POD=<influxdb-pod-name>
 ```
 
 Add `--results-archive <path-or-user@host:path>` when the run directory must also be copied
 off the control node. Archive failure is reported separately and does not change workload status.
 
 Every run writes `placement.tsv`, including each task's Pod, node, phase, status, and
-timestamps. `--results-summary` displays those mappings after the run. EcoFLOC is optional;
+timestamps. `--results-summary` displays those mappings after the run. Energy monitoring is optional;
 matching and placement results are still saved when `--energy-monitor` is omitted.
 
 The current EcoFLOC collector runs on the control host (`local`) or through SSH (`ssh` and

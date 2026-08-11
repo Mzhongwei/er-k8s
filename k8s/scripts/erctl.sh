@@ -24,7 +24,8 @@ USAGE:
 COMMANDS:
     images      Manage the Docker images for EAER components
     pipeline    Manage the Argo pipeline workflow and its storage.
-                  start --energy-monitor   auto-monitor energy + save under k8s/results/
+                  start --energy-monitor [ecofloc|alumet]
+                                             auto-monitor energy + save under k8s/results/
                   start --results-summary  print matching, placement, and energy summary
     schedule    Explain placement or run H1/H2 adaptation
     help        Display this help message

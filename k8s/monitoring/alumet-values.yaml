@@ -1,0 +1,36 @@
+# EAER's CPU-energy profile for the official Alumet Helm chart.
+# The relay clients run once per Kubernetes node and InfluxDB stores measurements.
+alumet-relay-client:
+  hostPID: true
+  securityContext:
+    privileged: true
+  plugins:
+    k8s:
+      enable: true
+      poll_interval: 1s
+    procfs:
+      enable: true
+    rapl:
+      enable: true
+      poll_interval: 1s
+      flush_interval: 5s
+    energyAttribution:
+      enable: true
+    relay_client:
+      buffer_timeout: 2s
+
+alumet-relay-server:
+  plugins:
+    influxdb:
+      enable: true
+      organization: influxdata
+      bucket: default
+      attributes_as: tag
+
+influxdb2:
+  enabled: true
+  persistence:
+    enabled: true
+  adminUser:
+    organization: influxdata
+    bucket: default

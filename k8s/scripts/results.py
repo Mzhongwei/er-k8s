@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Persist and display matching/evaluation and EcoFLOC experiment results."""
+"""Persist and display matching, placement, evaluation, and energy results."""
 from __future__ import annotations
 
 import argparse
@@ -81,6 +81,7 @@ def energy_summary(run_dir: Path) -> None:
         measurement_status = "complete"
 
     summary = {
+        "provider": "ecofloc",
         "total_energy_j": round(sum(by_node.values()), 6),
         "measurement_status": measurement_status,
         "valid_session_count": valid_sessions,
@@ -262,7 +263,7 @@ def show(run_dir: Path) -> None:
             print(f"  {row['phase']:<11} {row['task']:<34} -> {row['node'] or '(unscheduled)'}")
     if summary:
         print(
-            f"Energy: {summary.get('measurement_status', 'unknown')}  "
+            f"Energy ({summary.get('provider', 'ecofloc')}): {summary.get('measurement_status', 'unknown')}  "
             f"total={summary.get('total_energy_j', 0):.3f} J"
         )
         for task, value in summary.get("by_task_j", {}).items():
