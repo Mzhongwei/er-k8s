@@ -228,7 +228,6 @@ interactively if needed, then verify non-interactive SSH and passwordless EcoFLO
 
 ```bash
 ssh -o BatchMode=yes user@node true
-ssh -o BatchMode=yes user@node 'sudo -n /usr/local/bin/ecofloc --help'
 ```
 
 Test a live PID on each node:
