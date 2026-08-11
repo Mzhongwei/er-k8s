@@ -343,7 +343,16 @@ strategy: C3
 `nodes` contains stable capabilities, `data` contains storage location, and task overrides
 live under `batch.templates` / `incremental.templates`. A strategy list such as
 `strategy: [C3, C7]` composes policies; optional `preferences.weights` controls their
-relative importance. B0 writes no affinity and is the Kubernetes-default baseline.
+relative importance. B0 applies no scoring policy and leaves placement to the Kubernetes
+default scheduler among nodes not marked `schedulable: false`.
+
+Temporarily exclude one node from all EAER strategies, including B0:
+
+```yaml
+nodes:
+  zhongwei-lap:
+    schedulable: false
+```
 
 `pipeline start` compiles this configuration into executable manifests before creating
 the workload.

@@ -243,8 +243,18 @@ def compile_policy_config(config: dict[str, Any]) -> dict[str, dict[str, dict[st
             methods = _strategies(method)
 
             if methods == ["B0"]:
+                # B0 leaves ranking to Kubernetes, but still honors the configured node
+                # availability switch. Requiring all enabled nodes gives the default
+                # scheduler full freedom within that set while hard-blocking nodes with
+                # schedulable: false.
+                enabled_nodes = [
+                    name for name, node in nodes.items()
+                    if (node or {}).get("schedulable") is not False
+                ]
+                if nodes and not enabled_nodes:
+                    raise ValueError(f"No schedulable node for {group_name}.{task_name}")
                 rule = {
-                    "require": [],
+                    "require": enabled_nodes,
                     "tags": ["gpu"] if task.get("gpu_required") else [],
                     "prefer": [],
                     "fallback": [],

@@ -1,5 +1,6 @@
 # Placement experiment configuration. Change only `strategy` to select one policy:
 # B0, C1, C2, C3, C4, C5, C6, C7, H1, H2; lists compose policies, e.g. [C3, C7].
+# Every strategy honors `schedulable: false`; B0 otherwise leaves placement to Kubernetes.
 version: 2
 strategy: B0
 
@@ -20,6 +21,7 @@ nodes:
     storage_access: [nfs, ceph, local_path]
     historical_energy: medium
   zhongwei-lap:
+    schedulable: false
     cpu_class: medium
     memory_class: medium
     gpu_type: none
@@ -36,6 +38,7 @@ nodes:
     storage_access: [nfs]
     historical_energy: low
   matis-asus-expertbook-b1500ceaey-b1500ceae:
+    schedulable: false
     cpu_class: low
     memory_class: low
     gpu_type: none
