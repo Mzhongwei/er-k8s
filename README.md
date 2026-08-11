@@ -389,6 +389,13 @@ The source manifests in k8s/pipeline/batch/ and k8s/pipeline/incremental/ are ke
 
 # Automatic energy measurement
 
+Set the configuration
+
+```
+mv k8s/scripts/energy-nodes.conf.example k8s/scripts/energy-nodes.conf
+vim k8s/scripts/energy-nodes.conf
+```
+
 Measure the pipeline from before its Pods are created until all Jobs finish, and save matching,
 Pod placement, and energy results under `k8s/results/<run-id>/`:
 
