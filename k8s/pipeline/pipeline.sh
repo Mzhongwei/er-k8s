@@ -440,9 +440,12 @@ start_energy_monitor() {
     done
 
     local ready_nodes=""
+    local active_nodes=""
     [ -f "$MONITOR_READY_FILE" ] && ready_nodes="$(tr -dc '0-9' < "$MONITOR_READY_FILE" 2>/dev/null)"
     if [ -n "$ready_nodes" ] && [ "$ready_nodes" -gt 0 ] 2>/dev/null; then
-        echo "Energy monitor ready (measuring $ready_nodes node(s)); results dir: $RUN_DIR"
+        active_nodes="$(awk -F '\t' 'NR > 1 && $2 == "ready" { names = names (names ? ", " : "") $1 } END { print names }' "$RUN_DIR/energy/agents.tsv")"
+        echo "EcoFLOC ready (measuring $ready_nodes node(s)): $active_nodes"
+        echo "Results dir: $RUN_DIR"
     else
         echo "EcoFLOC has no usable node; pipeline will not start." >&2
         reap_monitor "$MONITOR_PID"

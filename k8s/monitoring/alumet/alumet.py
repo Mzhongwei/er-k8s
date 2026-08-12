@@ -98,7 +98,7 @@ def is_ready(pod: dict) -> bool:
     return any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
 
 
-def preflight() -> tuple[str, str, int]:
+def preflight() -> tuple[str, str, list[dict[str, str]]]:
     servers = [
         item for item in cluster_objects("deployments")
         if "alumet-relay-server" in item.get("metadata", {}).get("name", "")
@@ -122,7 +122,14 @@ def preflight() -> tuple[str, str, int]:
     )
     if not any(True for _ in influx_rows(recent)):
         raise RuntimeError("InfluxDB has no Alumet energy measurement from the last 2 minutes")
-    return pod, secret, len(ready)
+    client_details = [
+        {
+            "pod": item["metadata"]["name"],
+            "node": item.get("spec", {}).get("nodeName", "unknown"),
+        }
+        for item in ready
+    ]
+    return pod, secret, client_details
 
 
 def start(run_dir: Path) -> None:
@@ -140,7 +147,10 @@ def start(run_dir: Path) -> None:
         "ready_clients": clients,
     }
     (energy_dir / "alumet-window.json").write_text(json.dumps(window, indent=2), encoding="utf-8")
-    print(f"Alumet ready ({clients} client pod(s)); results dir: {run_dir}")
+    print(f"Alumet ready ({len(clients)} client pod(s)):")
+    for client in clients:
+        print(f"  {client['pod']} -> {client['node']}")
+    print(f"Results dir: {run_dir}")
 
 
 def run_query(flux: str, pod: str | None = None) -> str:
@@ -428,7 +438,11 @@ def main() -> None:
     try:
         if args.command == "preflight":
             pod, secret, clients = preflight()
-            print(f"ready_clients={clients} influx_pod={pod} token_secret={secret}")
+            names = ",".join(f"{item['pod']}@{item['node']}" for item in clients)
+            print(
+                f"ready_clients={len(clients)} clients={names} "
+                f"influx_pod={pod} token_secret={secret}"
+            )
         elif args.command == "start":
             if args.run_dir:
                 start(args.run_dir)
