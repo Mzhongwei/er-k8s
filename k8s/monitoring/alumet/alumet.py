@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture one pipeline time window from a cluster-wide Alumet deployment."""
+"""Manage Alumet and capture one pipeline time window from its deployment."""
 from __future__ import annotations
 
 import argparse

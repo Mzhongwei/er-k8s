@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve external carbon and historical-energy inputs for placement policies."""
+"""Resolve external carbon and historical-energy inputs for scheduling policies."""
 from __future__ import annotations
 
 import copy

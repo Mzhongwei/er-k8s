@@ -1,12 +1,9 @@
-# C8 regenerates this node inventory from the current cluster, then asks for confirmation.
+# C8 regenerates carbon-intensity.yaml from the current cluster.
 # Existing zone choices are preserved; public-IP geolocation is only a suggestion.
 ip_geolocation:
   source_url: https://ipapi.co/api/
   api_url: https://ipapi.co/{ip}/json/
-nodes:
-  server2-labo: {zone: FR}
-  zhongwei-lap: {zone: FR}
-  server1-k3s-worker: {zone: FR}
+nodes: {}
 zones:
   FR:
     provider: rte-eco2mix

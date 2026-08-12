@@ -88,7 +88,7 @@ case "$COMMAND" in
         while [ $# -gt 0 ]; do
             case "$1" in
                 -h|--help|-help|help)
-                    run_script "images.sh" "--help"
+                    run_script "images/images.sh" "--help"
                     exit 0
                     ;;
                 -b|--build)
@@ -106,11 +106,11 @@ case "$COMMAND" in
             shift
         done
 
-        run_script "images.sh" "${images_args[@]}"
+        run_script "images/images.sh" "${images_args[@]}"
         ;;
 
     pipeline)
-        run_script "pipeline.sh" "$@"
+        run_script "pipeline/pipeline.sh" "$@"
         ;;
 
     alumet)
@@ -118,11 +118,11 @@ case "$COMMAND" in
         case "$action" in
             start|stop|status)
                 [ $# -le 1 ] || { echo "Usage: erctl alumet $action"; exit 1; }
-                run_script "alumet.py" "$action"
+                run_script "monitoring/alumet/alumet.py" "$action"
                 ;;
             retention)
                 [ $# -le 2 ] || { echo "Usage: erctl alumet retention [DURATION]"; exit 1; }
-                run_script "alumet.py" retention --duration "${2:-7d}"
+                run_script "monitoring/alumet/alumet.py" retention --duration "${2:-7d}"
                 ;;
             -h|--help|help)
                 echo "Usage: erctl alumet [start|stop|status|retention [DURATION]]"
@@ -135,6 +135,6 @@ case "$COMMAND" in
         ;;
 
     schedule)
-        run_script "scheduling.py" "$@"
+        run_script "scheduling/scheduling.py" "$@"
         ;;
 esac

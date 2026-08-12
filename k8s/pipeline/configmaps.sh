@@ -8,7 +8,7 @@ fi
 set -euo pipefail
 
 # Path to the pipeline config YAML to bundle as er-pipeline-config. No mode/family
-# selector here -- pipeline.sh already derived everything it needs from
+# selector here; pipeline.sh already derived everything it needs from
 # this same file's own `mode:` field before invoking us.
 if [ $# -ne 1 ]; then
     echo "Usage: configmaps.sh <config-file-path>"

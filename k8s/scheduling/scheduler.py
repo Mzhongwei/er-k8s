@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, dependency-free placement policy engine used by compiler/runtime tools."""
+"""Small, dependency-free placement engine shared by the scheduling tools."""
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,4 +1,4 @@
-# EcoFLOC energy-monitor node list (used by process.sh, driven by
+# EcoFLOC node list (used by process.sh and driven by
 # `erctl pipeline start --energy-monitor`).
 #
 # Copy this file to `energy-nodes.conf` in the same directory and edit it for your cluster.

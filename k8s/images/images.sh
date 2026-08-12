@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and publish the images used by the active EAER Kubernetes pipelines.
+# Build and publish images used by the EAER Kubernetes pipelines.
 
 if [ -z "${BASH_VERSION:-}" ]; then
     exec bash "$0" "$@"

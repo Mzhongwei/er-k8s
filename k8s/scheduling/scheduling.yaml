@@ -1,4 +1,4 @@
-# Placement experiment configuration. Change only `strategy` to select one policy:
+# EAER placement configuration. Change `strategy` to select one policy:
 # B0, C1, C2, C3, C4, C5, C6, C7, C8, H1, H2.
 # lists compose policies, e.g. [C3, C7].
 # Every strategy honors `schedulable: false`; B0 otherwise leaves placement to Kubernetes.

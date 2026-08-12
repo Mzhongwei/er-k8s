@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Persist and display matching, placement, evaluation, and energy results."""
+"""Persist and display matching, placement, evaluation, and monitoring results."""
 from __future__ import annotations
 
 import argparse

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Internal multi-node EcoFLOC collector. It is started and stopped by pipeline.sh.
+# Internal multi-node EcoFLOC collector used by the pipeline lifecycle.
 
 set -euo pipefail
 

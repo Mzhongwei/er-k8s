@@ -2,7 +2,7 @@
 
 # Manage the Kubernetes/Argo pipeline lifecycle.
 # This script is normally called through:
-#   k8s/scripts/erctl.sh pipeline ...
+#   k8s/erctl.sh pipeline ...
 #
 # Lifecycle overview:
 #   start     Full setup + run. Compiles manifests, wipes prior Jobs/Workflows/PVCs for
@@ -70,8 +70,10 @@ BERT_PIPELINE_MODE="bert-training-evaluation"
 
 # Energy monitoring backends. EcoFLOC is started per run; Alumet is a cluster service and
 # this script exports the current run's time window from its InfluxDB backend.
-PROCESS_SCRIPT="$SCRIPT_DIR/process.sh"
-ALUMET_SCRIPT="$SCRIPT_DIR/alumet.py"
+PROCESS_SCRIPT="$K8S_DIR/monitoring/ecofloc/process.sh"
+ALUMET_SCRIPT="$K8S_DIR/monitoring/alumet/alumet.py"
+RESULTS_SCRIPT="$K8S_DIR/monitoring/results.py"
+SCHEDULING_COMPILER="$K8S_DIR/scheduling/compiler.py"
 
 # Root under which each run's permanent results are stored, one directory per run:
 #   k8s/results/<mode>-<timestamp>/
@@ -369,7 +371,7 @@ stop_energy_monitor_on_exit() {
         stop_energy_monitor >/dev/null 2>&1 || true
     fi
     if [ -n "$RUN_DIR" ] && [ "$PIPELINE_STATUS" != "Succeeded" ]; then
-        python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" \
+        python3 "$RESULTS_SCRIPT" manifest "$RUN_DIR" \
             --status Failed --mode "$CURRENT_MODE" 2>/dev/null || true
     fi
     archive_results
@@ -381,7 +383,7 @@ start_run() {
     CURRENT_MODE="$mode"
     RUN_DIR="$RESULTS_DIR/${mode}-${ts}-$$"
     mkdir -p "$RUN_DIR"
-    python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Running --mode "$mode"
+    python3 "$RESULTS_SCRIPT" manifest "$RUN_DIR" --status Running --mode "$mode"
     trap stop_energy_monitor_on_exit EXIT
 }
 
@@ -420,7 +422,7 @@ start_energy_monitor() {
             wait "$MONITOR_PID" 2>/dev/null || true
             MONITOR_PID=""
             ENERGY_MONITOR_ACTIVE=false
-            python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
+            python3 "$RESULTS_SCRIPT" energy "$RUN_DIR" 2>/dev/null || true
             return 0
         fi
         if [ "$ticks" -ge "$ready_timeout_ticks" ]; then
@@ -428,7 +430,7 @@ start_energy_monitor() {
             reap_monitor "$MONITOR_PID"
             MONITOR_PID=""
             ENERGY_MONITOR_ACTIVE=false
-            python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
+            python3 "$RESULTS_SCRIPT" energy "$RUN_DIR" 2>/dev/null || true
             return 0
         fi
         sleep 0.2
@@ -444,7 +446,7 @@ start_energy_monitor() {
         reap_monitor "$MONITOR_PID"
         MONITOR_PID=""
         ENERGY_MONITOR_ACTIVE=false
-        python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR" 2>/dev/null || true
+        python3 "$RESULTS_SCRIPT" energy "$RUN_DIR" 2>/dev/null || true
         return 0
     fi
 }
@@ -464,7 +466,7 @@ stop_energy_monitor() {
     [ -n "${MONITOR_PID:-}" ] || return 0
     reap_monitor "$MONITOR_PID"
     MONITOR_PID=""
-    if python3 "$SCRIPT_DIR/results.py" energy "$RUN_DIR"; then
+    if python3 "$RESULTS_SCRIPT" energy "$RUN_DIR"; then
         echo "Energy summary saved: $RUN_DIR/energy/summary.json"
     else
         echo "Warning: no valid energy measurement; workload results remain valid (see $RUN_DIR/energy/summary.json)." >&2
@@ -484,7 +486,7 @@ record_placement() {
     local workflow="${2:-}"
     local args=(placement "$RUN_DIR" --namespace "$NAMESPACE" --phase "$phase")
     [ -n "$workflow" ] && args+=(--workflow "$workflow")
-    python3 "$SCRIPT_DIR/results.py" "${args[@]}" \
+    python3 "$RESULTS_SCRIPT" "${args[@]}" \
         || echo "Warning: $phase Pod placement could not be recorded." >&2
 }
 
@@ -493,7 +495,7 @@ emit_results_summary() {
     # summary too. Independent of --energy-monitor; no-op unless --results-summary was given.
     [ "$RESULTS_SUMMARY" = true ] || return 0
     if [ -n "$RUN_DIR" ]; then
-        python3 "$SCRIPT_DIR/results.py" show --root "$RESULTS_DIR" --run "$(basename "$RUN_DIR")"
+        python3 "$RESULTS_SCRIPT" show --root "$RESULTS_DIR" --run "$(basename "$RUN_DIR")"
     elif [ -n "$MATCHING_RESULT" ]; then
         echo "$MATCHING_RESULT"
     fi
@@ -538,8 +540,8 @@ start_pipeline() {
     # Measure total script wall-clock time.
     script_start_time=$(date +%s)
 
-    # Generate executable manifests from scheduling/scheduling.yaml.
-    python3 "$SCRIPT_DIR/compiler.py"
+    # Generate executable manifests from k8s/scheduling/scheduling.yaml.
+    python3 "$SCHEDULING_COMPILER"
 
     # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty
     # PVCs ready for this one. See delete_pipeline_storage() for exactly what this deletes.
@@ -660,7 +662,7 @@ start_pipeline() {
 
     # Persist workload artifacts before finalizing optional monitoring.
     if [ -n "$RUN_DIR" ]; then
-        python3 "$SCRIPT_DIR/results.py" collect "$RUN_DIR" --namespace "$NAMESPACE" 2>/dev/null \
+        python3 "$RESULTS_SCRIPT" collect "$RUN_DIR" --namespace "$NAMESPACE" 2>/dev/null \
             || echo "Warning: matching-result artifacts could not be collected." >&2
     fi
 
@@ -668,14 +670,14 @@ start_pipeline() {
     stop_energy_monitor
 
     if [ -n "$RUN_DIR" ]; then
-        python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Succeeded --mode "$config_mode"
+        python3 "$RESULTS_SCRIPT" manifest "$RUN_DIR" --status Succeeded --mode "$config_mode"
         PIPELINE_STATUS="Succeeded"
         if [ -n "$RESULTS_ARCHIVE" ]; then
             if archive_results; then
-                python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Succeeded \
+                python3 "$RESULTS_SCRIPT" manifest "$RUN_DIR" --status Succeeded \
                     --mode "$config_mode" --archive-status succeeded
             else
-                python3 "$SCRIPT_DIR/results.py" manifest "$RUN_DIR" --status Succeeded \
+                python3 "$RESULTS_SCRIPT" manifest "$RUN_DIR" --status Succeeded \
                     --mode "$config_mode" --archive-status failed
                 echo "Warning: workload succeeded, but results could not be archived to $RESULTS_ARCHIVE." >&2
             fi

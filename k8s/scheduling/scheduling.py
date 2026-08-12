@@ -188,9 +188,7 @@ def adapt_once(config: dict[str, Any], args: argparse.Namespace) -> int:
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="EAER placement recommendation/runtime adaptation")
-    parser.add_argument(
-        "--config", default=str(script_dir / "scheduling" / "scheduling.yaml")
-    )
+    parser.add_argument("--config", default=str(script_dir / "scheduling.yaml"))
     sub = parser.add_subparsers(dest="command", required=True)
     inspect = sub.add_parser("recommend", help="rank nodes for one configured task")
     inspect.add_argument("task")

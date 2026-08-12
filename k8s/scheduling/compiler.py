@@ -386,7 +386,9 @@ def read_image_repository(script_dir: Path) -> str:
     env_value = os.environ.get("EAER_IMAGE_REPOSITORY")
     if env_value:
         return env_value
-    return (script_dir / "image-repository.conf").read_text(encoding="utf-8").strip()
+    return (script_dir.parent / "images" / "image-repository.conf").read_text(
+        encoding="utf-8"
+    ).strip()
 
 
 def rewrite_image_repository(node: Any, repository: str) -> None:
@@ -724,7 +726,7 @@ def main() -> int:
 
     parser.add_argument(
         "--config",
-        default=str(script_dir / "scheduling" / "scheduling.yaml"),
+        default=str(script_dir / "scheduling.yaml"),
         help="Path to scheduling.yaml",
     )
 

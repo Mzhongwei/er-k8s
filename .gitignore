@@ -1,4 +1,3 @@
-k8s/scripts/pipeline-version-names.txt
 logs/
 reports/
 .vscode/
@@ -6,9 +5,10 @@ reports/
 .agents/
 .claude/
 __pycache__/
-k8s/scripts/__pycache__/
 k8s/pipeline/exec/
 k8s/results/
-k8s/scripts/image-repository.conf
-k8s/scripts/energy-nodes.conf
+k8s/images/image-repository.conf
+k8s/monitoring/ecofloc/energy-nodes.conf
+k8s/monitoring/alumet/values.yaml
 k8s/datasets/dataset-volume.yaml
+k8s/scheduling/carbon-intensity.yaml

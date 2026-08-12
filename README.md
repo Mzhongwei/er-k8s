@@ -66,7 +66,7 @@ Argo Workflows is used for batch execution, while a set of incremental Kubernete
 - ConfigMap generation for Python distribution scripts and runtime configuration.
 - Node scheduling compiler based on a readable YAML file.
 - Ecofloc and process monitoring for energy and emissions reporting.
-- Helper CLI wrapper through k8s/scripts/erctl.sh.
+- Helper CLI wrapper through k8s/erctl.sh.
 
 # Repository structure
 
@@ -77,14 +77,21 @@ Argo Workflows is used for batch execution, while a set of incremental Kubernete
 │   └── Energy-Aware-Entity-Resolution/   # Original EAER Python project as a Git submodule
 ├── docker/                               # Dockerfiles for pipeline components
 ├── k8s/
+│   ├── erctl.sh                          # Top-level management CLI
+│   ├── scheduling/                       # Placement config, compiler, and runtime tools
+│   ├── monitoring/
+│   │   ├── ecofloc/                      # EcoFLOC collector and node access config
+│   │   ├── alumet/                       # Alumet manager and Helm values
+│   │   └── results.py                    # Persistent result collection and display
+│   ├── images/                           # Image build tool and repository config
 │   ├── pipeline/
+│   │   ├── pipeline.sh                   # Pipeline lifecycle
+│   │   ├── configmaps.sh                 # Runtime ConfigMap generation
 │   │   ├── batch/                        # Source Argo Workflow manifest
 │   │   ├── incremental/                  # Source incremental Kubernetes job manifests
 │   │   └── exec/                         # Generated manifests, created by the compiler
-│   ├── datasets/                          # Long-lived static dataset PV/PVC
+│   ├── datasets/                         # Long-lived static dataset PV/PVC
 │   ├── pvc-manifests/                    # PersistentVolumeClaim manifests
-│   ├── scripts/                          # Helper scripts and scheduling compiler
-│   ├── svc-manifests/                    # Service manifests
 │   └── rbac-configmaps.yaml              # RBAC resources for ConfigMap handling
 ├── archive/                              # Legacy / experimental files
 └── README.md
@@ -134,11 +141,11 @@ Copy the simulator and image repository examples, then edit the copies:
 cp code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties.example \
   code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties
 
-cp k8s/scripts/image-repository.conf.example \
-  k8s/scripts/image-repository.conf
+cp k8s/images/image-repository.conf.example \
+  k8s/images/image-repository.conf
 
 vim code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties
-vim k8s/scripts/image-repository.conf
+vim k8s/images/image-repository.conf
 ```
 
 Set `spring.kafka.bootstrap-servers` to the external broker, for example
@@ -213,7 +220,7 @@ Build and push the complete image set when the images do not yet exist or their 
 
 ```bash
 sudo docker login
-bash k8s/scripts/erctl.sh images --build --push
+bash k8s/erctl.sh images --build --push
 ```
 
 When compatible tags already exist in the configured repository, skip this build step;
@@ -222,14 +229,14 @@ A private registry additionally requires Kubernetes image-pull credentials on th
 
 ## 6. Check scheduling strategies
 
-Check placement configuration under `k8s/scripts/scheduling/scheduling.yaml` and change node
+Check placement configuration under `k8s/scheduling/scheduling.yaml` and change node
 properties according to the examples. Carbon-region confirmation is kept separately in
-`k8s/scripts/scheduling/carbon-intensity.yaml`.
+`k8s/scheduling/carbon-intensity.yaml`.
 
-## 6. Start and observe the pipeline
+## 7. Start and observe the pipeline
 
 ```bash
-bash k8s/scripts/erctl.sh pipeline start \
+bash k8s/erctl.sh pipeline start \
   -c code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml \
   --results-summary
 ```
@@ -247,7 +254,7 @@ Run with the helper script
 The erctl wrapper can manage the pipeline from a single entry point:
 
 ```bash
-bash k8s/scripts/erctl.sh pipeline start -c <config.yaml>
+bash k8s/erctl.sh pipeline start -c <config.yaml>
 ```
 
 The config file's `mode` selects the embedding or BERT lifecycle.
@@ -256,24 +263,24 @@ The helper provides two different cancellation levels:
 
 ```bash
 # Non-destructive cancellation: stop workloads, preserve PVCs and ConfigMaps.
-bash k8s/scripts/erctl.sh pipeline stop
+bash k8s/erctl.sh pipeline stop
 
 # Destructive reset: terminate workloads and recreate runtime PVCs.
-bash k8s/scripts/erctl.sh pipeline terminate
+bash k8s/erctl.sh pipeline terminate
 ```
 
 `pipeline stop` is not a resumable pause. Incremental Jobs are deleted, but their
 persistent state remains available for inspection or a later new run.
 
 > Warning
-> The pipeline helper is designed for an experimental cluster workflow. It may delete and recreate pipeline-related pods, workflows, PVCs, and PVs before starting a new run. Review k8s/scripts/pipeline.sh before using it on a shared or production cluster.
+> The pipeline helper is designed for an experimental cluster workflow. It may delete and recreate pipeline-related pods, workflows, PVCs, and PVs before starting a new run. Review k8s/pipeline/pipeline.sh before using it on a shared or production cluster.
 
 # Scheduling configuration
 
 Node placement is configured in:
 
 ```text
-k8s/scripts/scheduling/scheduling.yaml
+k8s/scheduling/scheduling.yaml
 ```
 
 Select a strategy with one setting (`B0`, `C1` ... `C8`, `H1`, or `H2`). C8 is
@@ -295,7 +302,7 @@ default scheduler among nodes not marked `schedulable: false`.
 terminal warning when no usable history exists; manually entered historical-energy classes
 are not required.
 
-`C8` and H1 regenerate the node inventory in `scheduling/carbon-intensity.yaml` from
+`C8` and H1 regenerate the node inventory in `k8s/scheduling/carbon-intensity.yaml` from
 `kubectl get nodes` before compilation. Existing confirmed zone choices are preserved;
 Kubernetes country/carbon labels and public-IP geolocation can suggest a zone, while private
 or unresolved IPs are marked `NEEDS_CONFIRMATION`. The complete file and source links are
@@ -329,7 +336,7 @@ the workload.
 Explain a placement decision without changing the cluster:
 
 ```bash
-bash k8s/scripts/erctl.sh schedule recommend random-walk --group incremental
+bash k8s/erctl.sh schedule recommend random-walk --group incremental
 ```
 
 For H2, `--live` reads `kubectl top nodes`. H1 accepts current power measurements from a
@@ -341,8 +348,8 @@ nodes:
 ```
 
 ```bash
-bash k8s/scripts/erctl.sh schedule adapt random-walk --group incremental
-bash k8s/scripts/erctl.sh schedule adapt random-walk --group incremental --apply
+bash k8s/erctl.sh schedule adapt random-walk --group incremental
+bash k8s/erctl.sh schedule adapt random-walk --group incremental --apply
 ```
 
 `--apply` is limited to tasks explicitly marked `migratable: true`; it recreates the
@@ -360,18 +367,18 @@ The source manifests in k8s/pipeline/batch/ and k8s/pipeline/incremental/ are ke
 
 Add arg `--energy-monitor` in the commande line to activate automatic energy measurement. For example,
 ```bash
-bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> --energy-monitor --results-summary
+bash k8s/erctl.sh pipeline start -c <config.yaml> --energy-monitor --results-summary
 ```
 
 `--energy-monitor` keeps EcoFLOC as the default. Select a backend explicitly with:
 
 ```bash
 # Existing behavior
-bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> \
+bash k8s/erctl.sh pipeline start -c <config.yaml> \
   --energy-monitor ecofloc --results-summary
 
 # Cluster-wide Alumet deployment
-bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> \
+bash k8s/erctl.sh pipeline start -c <config.yaml> \
   --energy-monitor alumet --results-summary
 ```
 
@@ -382,8 +389,8 @@ For installation instructions, see [:link:](https://github.com/hhumbertoAv/ecofl
 When using `--energy-monitor`, copy and edit the node access list:
 
 ```bash
-cp k8s/scripts/energy-nodes.conf.example k8s/scripts/energy-nodes.conf
-vim k8s/scripts/energy-nodes.conf
+cp k8s/monitoring/ecofloc/energy-nodes.conf.example k8s/monitoring/ecofloc/energy-nodes.conf
+vim k8s/monitoring/ecofloc/energy-nodes.conf
 ```
 
 For every `ssh` node, first verify the host key with its administrator, connect once
@@ -436,7 +443,12 @@ export ERCTL_ALUMET_TOKEN_SECRET=eaer-alumet-influxdb2-auth
 export ERCTL_ALUMET_INFLUX_POD=<influxdb-pod-name>
 ```
 
-Configuration file is under `k8s/monitoring/alumet-values.yaml`
+Create the local Helm values file and adjust its monitoring node and storage class:
+
+```bash
+cp k8s/monitoring/alumet/values.yaml.example k8s/monitoring/alumet/values.yaml
+vim k8s/monitoring/alumet/values.yaml
+```
 
 Install Alumet once with the official chart before selecting that backend:
 
@@ -446,28 +458,28 @@ helm repo update
 kubectl create namespace alumet --dry-run=client -o yaml | kubectl apply -f -
 helm upgrade --install eaer-alumet alumet/alumet \
   --namespace alumet \
-  -f k8s/monitoring/alumet-values.yaml
+  -f k8s/monitoring/alumet/values.yaml
 
 kubectl rollout status daemonset/eaer-alumet-alumet-relay-client \
   -n alumet --timeout=5m
 kubectl get pods -n alumet -o wide
-python3 k8s/scripts/alumet.py preflight
+python3 k8s/monitoring/alumet/alumet.py preflight
 ```
 
 Control continuous collection without deleting InfluxDB or its PVC:
 
 ```bash
 # Label eligible nodes, start the relay server/clients, and enforce 7-day retention.
-bash k8s/scripts/erctl.sh alumet start
+bash k8s/erctl.sh alumet start
 
 # Show collector Pods, PVC/PV backing location, and bucket retention.
-bash k8s/scripts/erctl.sh alumet status
+bash k8s/erctl.sh alumet status
 
 # Stop relay clients/server. InfluxDB remains available with existing data.
-bash k8s/scripts/erctl.sh alumet stop
+bash k8s/erctl.sh alumet stop
 
 # Change retention explicitly (7d is the project default).
-bash k8s/scripts/erctl.sh alumet retention 7d
+bash k8s/erctl.sh alumet retention 7d
 ```
 
 The InfluxDB process stores its database at `/var/lib/influxdb2` on the
@@ -477,8 +489,8 @@ The InfluxDB process stores its database at `/var/lib/influxdb2` on the
 Rebuild the categorized summary of an existing Alumet run without querying the cluster:
 
 ```bash
-python3 k8s/scripts/alumet.py summarize k8s/results/<run-id>
-python3 k8s/scripts/results.py show --root k8s/results --run <run-id>
+python3 k8s/monitoring/alumet/alumet.py summarize k8s/results/<run-id>
+python3 k8s/monitoring/results.py show --root k8s/results --run <run-id>
 ```
 
 # Data storage
@@ -519,16 +531,16 @@ off the control node. Archive failure is reported separately and does not change
 Display available erctl commands:
 
 ```bash
-bash k8s/scripts/erctl.sh help
+bash k8s/erctl.sh help
 ```
 
 Build or push Docker images:
 
 ```bash
-bash k8s/scripts/erctl.sh images --build
-bash k8s/scripts/erctl.sh images --push
+bash k8s/erctl.sh images --build
+bash k8s/erctl.sh images --push
 # Actions can be combined; base is built before its component images.
-bash k8s/scripts/erctl.sh images --build --push
+bash k8s/erctl.sh images --build --push
 ```
 
 The active image hierarchy is `kevinoulai/erctl:base` followed by the
@@ -592,7 +604,7 @@ Argo cannot find ConfigMaps
 Regenerate the ConfigMaps and execution manifests by starting the pipeline again:
 
 ```bash
-bash k8s/scripts/erctl.sh pipeline start -c <config.yaml>
+bash k8s/erctl.sh pipeline start -c <config.yaml>
 ```
 
 GPU/BERT tasks stay pending
@@ -606,7 +618,7 @@ kubectl describe node <node-name> | grep -i nvidia
 Also verify the scheduling rules in:
 
 ```text
-k8s/scripts/scheduling/scheduling.yaml
+k8s/scheduling/scheduling.yaml
 ```
 
 They are regenerated automatically on the next `pipeline start`.
