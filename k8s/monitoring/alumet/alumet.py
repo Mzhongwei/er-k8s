@@ -164,8 +164,7 @@ def set_retention(duration: str) -> None:
     if not bucket:
         raise RuntimeError(f"InfluxDB bucket not found: {BUCKET}")
     run_influx(
-        "bucket", "update", "--id", bucket["id"], "--org", ORG,
-        "--retention", duration,
+        "bucket", "update", "--id", bucket["id"], "--retention", duration,
     )
     print(f"InfluxDB bucket {BUCKET}: retention={duration}")
 

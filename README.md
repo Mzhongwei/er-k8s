@@ -234,7 +234,14 @@ strategy there, then maintain node capabilities in `nodes.yaml`, task properties
 `workloads.yaml`, and data placement in `data.yaml`. Carbon-region confirmation is kept
 separately in `carbon-intensity.yaml`.
 
-## 7. Start and observe the pipeline
+## 7. Check pipeline configuration file
+
+Check congiguration (for example, kafka boostrap server) for ER pipeline:
+```bash 
+vim code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml
+```
+
+## 8. Start and observe the pipeline
 
 ```bash
 bash k8s/erctl.sh pipeline start \
