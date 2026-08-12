@@ -24,7 +24,7 @@ USAGE:
 COMMANDS:
     images      Manage the Docker images for EAER components
     pipeline    Manage the Argo pipeline workflow and its storage.
-                  start --energy-monitor [ecofloc|alumet]
+                  start --energy-monitor [ecofloc|alumet|ecofloc-alumet]
                                              auto-monitor energy + save under k8s/results/
                   start --results-summary  print matching, placement, and energy summary
     alumet      Manage the cluster-wide Alumet collector.

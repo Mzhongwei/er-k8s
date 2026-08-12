@@ -145,7 +145,9 @@ def _historical_profiles(
     """Return mean per-run relative node energy; normalization allows mixed monitors."""
     samples: dict[str, list[float]] = defaultdict(list)
     used_runs = 0
-    for path in sorted(results_dir.glob("*/energy/summary.json")):
+    paths = list(results_dir.glob("*/energy/*-summary.json"))
+    paths.extend(results_dir.glob("*/energy/summary.json"))
+    for path in sorted(paths):
         try:
             summary = json.loads(path.read_text(encoding="utf-8"))
             raw = summary.get("by_node_j") or {}

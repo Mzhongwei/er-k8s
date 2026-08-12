@@ -99,6 +99,12 @@ def is_ready(pod: dict) -> bool:
 
 
 def preflight() -> tuple[str, str, int]:
+    servers = [
+        item for item in cluster_objects("deployments")
+        if "alumet-relay-server" in item.get("metadata", {}).get("name", "")
+    ]
+    if not servers or not servers[0].get("status", {}).get("readyReplicas"):
+        raise RuntimeError("Alumet relay server is not running; run 'erctl alumet start'")
     clients = alumet_clients()
     ready = [pod for pod in clients if is_ready(pod)]
     if not clients:
@@ -391,7 +397,7 @@ def summarize(run_dir: Path, raw: str) -> bool:
             "consumers are system, and consumers without a Pod name are unknown."
         ),
     }
-    path = run_dir / "energy" / "summary.json"
+    path = run_dir / "energy" / "alumet-summary.json"
     path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return points > 0
 

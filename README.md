@@ -237,7 +237,7 @@ separately in `carbon-intensity.yaml`.
 ## 7. Check pipeline configuration file
 
 Check congiguration (for example, kafka boostrap server) for ER pipeline:
-```bash 
+```bash
 vim code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml
 ```
 
@@ -320,7 +320,7 @@ Carbon-Aware Placement. A strategy list such as
 relative importance. B0 applies no scoring policy and leaves placement to the Kubernetes
 default scheduler among nodes not marked `schedulable: false`.
 
-`C7` reads every usable `k8s/results/<run-id>/energy/summary.json`, normalizes each run's
+`C7` reads every usable `k8s/results/<run-id>/energy/*-summary.json`, normalizes each report's
 `by_node_j` values, and averages the relative node energy index. It falls back to B0 with a
 terminal warning when no usable history exists; manually entered historical-energy classes
 are not required.
@@ -404,7 +404,20 @@ bash k8s/erctl.sh pipeline start -c <config.yaml> \
 # Cluster-wide Alumet deployment
 bash k8s/erctl.sh pipeline start -c <config.yaml> \
   --energy-monitor alumet --results-summary
+
+# Both backends, with independent reports
+bash k8s/erctl.sh pipeline start -c <config.yaml> \
+  --energy-monitor ecofloc-alumet --results-summary
 ```
+
+Selecting `alumet` or `ecofloc-alumet` requires the existing Alumet deployment to be
+actively collecting before the workload starts. Selecting `ecofloc` or
+`ecofloc-alumet` requires at least one usable EcoFLOC node. A requested backend that
+fails its preflight stops the command before any workload is submitted.
+
+Reports are never combined or added together. EcoFLOC writes
+`energy/ecofloc-summary.json`; Alumet writes `energy/alumet-summary.json`. Joint mode
+writes both files and `results show` displays both independently.
 
 ## EcoFLOC [:link:](https://github.com/hhumbertoAv/ecofloc)
 
@@ -450,7 +463,7 @@ INEXISTENT` and `0.00 Joules` is an invalid measurement; the preflight now rejec
 
 ## Alumet [:link:](https://github.com/alumet-dev)
 
-Alumet is a persistent cluster service rather than a per-run child process. `erctl` checks that its node clients and InfluxDB are ready, records the pipeline's UTC time window, exports that window to `energy/alumet-raw.csv`, and writes the common `energy/summary.json`. Hardware and attributed energy are kept separate because adding them would double-count energy.
+Alumet is a persistent cluster service rather than a per-run child process. `erctl` checks that its node clients and InfluxDB are ready, records the pipeline's UTC time window, exports that window to `energy/alumet-raw.csv`, and writes `energy/alumet-summary.json`. Hardware and attributed energy are kept separate because adding them would double-count energy.
 Attributed energy is split into EAER Pods found in `placement.tsv`, named system consumers, and consumers that Alumet could not map to a Pod (`unknown`). The raw InfluxDB export and the complete per-consumer breakdown remain available for auditing.
 
 
@@ -508,7 +521,7 @@ bash k8s/erctl.sh alumet retention 7d
 
 The InfluxDB process stores its database at `/var/lib/influxdb2` on the
 `eaer-alumet-influxdb2` PVC. With `nfs-client`, the corresponding PV identifies the NFS server and dynamically provisioned directory; `erctl alumet status` prints that mapping. InfluxDB automatically expires raw points older than seven days. Every completed `--energy-monitor alumet` run first exports its selected window to
-`k8s/results/<run-id>/energy/alumet-raw.csv` and `summary.json`; these exported files are not deleted by InfluxDB retention. A run that was never exported before its raw window expires cannot later reconstruct its Alumet report from InfluxDB.
+`k8s/results/<run-id>/energy/alumet-raw.csv` and `alumet-summary.json`; these exported files are not deleted by InfluxDB retention. A run that was never exported before its raw window expires cannot later reconstruct its Alumet report from InfluxDB.
 
 Rebuild the categorized summary of an existing Alumet run without querying the cluster:
 

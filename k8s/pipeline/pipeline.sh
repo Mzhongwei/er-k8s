@@ -77,7 +77,8 @@ SCHEDULING_COMPILER="$K8S_DIR/scheduling/compiler.py"
 
 # Root under which each run's permanent results are stored, one directory per run:
 #   k8s/results/<mode>-<timestamp>/
-#     energy/summary.json  normalized totals from the selected monitor
+#     energy/ecofloc-summary.json normalized EcoFLOC totals (when selected)
+#     energy/alumet-summary.json  normalized Alumet totals (when selected)
 #     energy/sessions.tsv  EcoFLOC session records (EcoFLOC backend only)
 #     energy/alumet-raw.csv raw InfluxDB export (Alumet backend only)
 #     monitor.log          EcoFLOC coordinator diagnostics (EcoFLOC backend only)
@@ -85,11 +86,12 @@ SCHEDULING_COMPILER="$K8S_DIR/scheduling/compiler.py"
 #     placement.tsv        task Pod -> Kubernetes node mapping and timestamps
 RESULTS_DIR="$K8S_DIR/results"
 
-# --energy-monitor: use EcoFLOC (default) or export an Alumet time window, then permanently
-#   save the summary under RESULTS_DIR. Off by default.
+# --energy-monitor: use EcoFLOC (default), Alumet, or both, then permanently save each
+#   provider's independent report under RESULTS_DIR. Off by default.
 ENERGY_MONITOR=false
 ENERGY_MONITOR_TOOL="ecofloc"
-ENERGY_MONITOR_ACTIVE=false
+ECOFLOC_MONITOR_ACTIVE=false
+ALUMET_MONITOR_ACTIVE=false
 # --results-summary: after the workload finishes, print the matching result (and, if energy
 #   was monitored, the energy summary). Independent of --energy-monitor. Off by default.
 RESULTS_SUMMARY=false
@@ -122,8 +124,8 @@ Actions:
 Options (start):
     -c, --config PATH        Path to the pipeline config YAML (required); its `mode:` field
                              decides the ConfigMaps and batch vs incremental dispatch
-    --energy-monitor [TOOL]  Save energy for the whole workload. TOOL is ecofloc (default)
-                             or alumet. Also accepts --energy-monitor=TOOL.
+    --energy-monitor [TOOL]  Save energy for the whole workload. TOOL is ecofloc (default),
+                             alumet, or ecofloc-alumet. Also accepts --energy-monitor=TOOL.
     --results-summary        After the workload finishes, print matching, Pod placement,
                              and energy (when monitored).
     --results-archive DEST   Copy this run's results dir to a durable/remote location after
@@ -367,7 +369,7 @@ archive_results() {
 
 stop_energy_monitor_on_exit() {
     # Preserve partial measurements when the pipeline fails or is interrupted.
-    if [ "$ENERGY_MONITOR_ACTIVE" = true ]; then
+    if [ "$ECOFLOC_MONITOR_ACTIVE" = true ] || [ "$ALUMET_MONITOR_ACTIVE" = true ]; then
         stop_energy_monitor >/dev/null 2>&1 || true
     fi
     if [ -n "$RUN_DIR" ] && [ "$PIPELINE_STATUS" != "Succeeded" ]; then
@@ -388,16 +390,18 @@ start_run() {
 }
 
 start_energy_monitor() {
-    # Start the cluster monitor before workload Pods are created.
+    # Every requested backend must be ready before workload Pods are created.
     [ "$ENERGY_MONITOR" = true ] || return 0
-    if [ "$ENERGY_MONITOR_TOOL" = "alumet" ]; then
-        if python3 "$ALUMET_SCRIPT" start "$RUN_DIR"; then
-            ENERGY_MONITOR_ACTIVE=true
-        else
-            echo "Warning: Alumet is unavailable; continuing without energy data." >&2
+
+    if [ "$ENERGY_MONITOR_TOOL" = "alumet" ] || [ "$ENERGY_MONITOR_TOOL" = "ecofloc-alumet" ]; then
+        if ! python3 "$ALUMET_SCRIPT" start "$RUN_DIR"; then
+            echo "Alumet was requested but is not ready; pipeline will not start." >&2
+            return 1
         fi
-        return 0
+        ALUMET_MONITOR_ACTIVE=true
     fi
+
+    [ "$ENERGY_MONITOR_TOOL" = "ecofloc" ] || [ "$ENERGY_MONITOR_TOOL" = "ecofloc-alumet" ] || return 0
     local run_id
     run_id="$(basename "$RUN_DIR")"
     MONITOR_READY_FILE="$RUN_DIR/.energy-ready"
@@ -412,26 +416,24 @@ start_energy_monitor() {
         --k8s-only \
         > "$RUN_DIR/monitor.log" 2>&1 &
     MONITOR_PID=$!
-    ENERGY_MONITOR_ACTIVE=true
+    ECOFLOC_MONITOR_ACTIVE=true
 
     local ticks=0
     local ready_timeout_ticks=150   # 150 x 0.2s = 30s
     while [ ! -f "$MONITOR_READY_FILE" ]; do
         if ! kill -0 "$MONITOR_PID" 2>/dev/null; then
-            echo "Warning: energy monitor exited before becoming ready; continuing without energy data." >&2
+            echo "EcoFLOC exited before becoming ready; pipeline will not start." >&2
             wait "$MONITOR_PID" 2>/dev/null || true
             MONITOR_PID=""
-            ENERGY_MONITOR_ACTIVE=false
-            python3 "$RESULTS_SCRIPT" energy "$RUN_DIR" 2>/dev/null || true
-            return 0
+            ECOFLOC_MONITOR_ACTIVE=false
+            return 1
         fi
         if [ "$ticks" -ge "$ready_timeout_ticks" ]; then
-            echo "Warning: energy monitor was not ready after 30s; continuing without energy data." >&2
+            echo "EcoFLOC was not ready after 30s; pipeline will not start." >&2
             reap_monitor "$MONITOR_PID"
             MONITOR_PID=""
-            ENERGY_MONITOR_ACTIVE=false
-            python3 "$RESULTS_SCRIPT" energy "$RUN_DIR" 2>/dev/null || true
-            return 0
+            ECOFLOC_MONITOR_ACTIVE=false
+            return 1
         fi
         sleep 0.2
         ticks=$((ticks + 1))
@@ -442,34 +444,36 @@ start_energy_monitor() {
     if [ -n "$ready_nodes" ] && [ "$ready_nodes" -gt 0 ] 2>/dev/null; then
         echo "Energy monitor ready (measuring $ready_nodes node(s)); results dir: $RUN_DIR"
     else
-        echo "Warning: energy monitor has no usable node; continuing without energy data." >&2
+        echo "EcoFLOC has no usable node; pipeline will not start." >&2
         reap_monitor "$MONITOR_PID"
         MONITOR_PID=""
-        ENERGY_MONITOR_ACTIVE=false
-        python3 "$RESULTS_SCRIPT" energy "$RUN_DIR" 2>/dev/null || true
-        return 0
+        ECOFLOC_MONITOR_ACTIVE=false
+        return 1
     fi
 }
 
 stop_energy_monitor() {
-    # Drain every agent, then build the persistent summary.
-    [ "$ENERGY_MONITOR_ACTIVE" = true ] || return 0
-    ENERGY_MONITOR_ACTIVE=false
-    if [ "$ENERGY_MONITOR_TOOL" = "alumet" ]; then
+    # Close and summarize each requested backend independently.
+    if [ "$ALUMET_MONITOR_ACTIVE" = true ]; then
+        ALUMET_MONITOR_ACTIVE=false
         if python3 "$ALUMET_SCRIPT" stop "$RUN_DIR"; then
-            echo "Alumet energy summary saved: $RUN_DIR/energy/summary.json"
+            echo "Alumet energy summary saved: $RUN_DIR/energy/alumet-summary.json"
         else
             echo "Warning: Alumet returned no usable energy data; workload results remain valid." >&2
         fi
-        return 0
     fi
-    [ -n "${MONITOR_PID:-}" ] || return 0
-    reap_monitor "$MONITOR_PID"
-    MONITOR_PID=""
-    if python3 "$RESULTS_SCRIPT" energy "$RUN_DIR"; then
-        echo "Energy summary saved: $RUN_DIR/energy/summary.json"
-    else
-        echo "Warning: no valid energy measurement; workload results remain valid (see $RUN_DIR/energy/summary.json)." >&2
+
+    if [ "$ECOFLOC_MONITOR_ACTIVE" = true ]; then
+        ECOFLOC_MONITOR_ACTIVE=false
+        if [ -n "${MONITOR_PID:-}" ]; then
+            reap_monitor "$MONITOR_PID"
+            MONITOR_PID=""
+            if python3 "$RESULTS_SCRIPT" energy "$RUN_DIR"; then
+                echo "EcoFLOC energy summary saved: $RUN_DIR/energy/ecofloc-summary.json"
+            else
+                echo "Warning: EcoFLOC returned no usable energy data; workload results remain valid." >&2
+            fi
+        fi
     fi
 }
 
@@ -666,7 +670,7 @@ start_pipeline() {
             || echo "Warning: matching-result artifacts could not be collected." >&2
     fi
 
-    # Energy measurement is auxiliary: its own failed/partial status is stored in summary.json.
+    # Energy measurement is auxiliary: each backend stores its own failed/partial status.
     stop_energy_monitor
 
     if [ -n "$RUN_DIR" ]; then
@@ -788,7 +792,7 @@ if [ "$ACTION" = "start" ]; then
                 ;;
             --energy-monitor)
                 ENERGY_MONITOR=true
-                if [ $# -ge 2 ] && { [ "$2" = "ecofloc" ] || [ "$2" = "alumet" ]; }; then
+                if [ $# -ge 2 ] && { [ "$2" = "ecofloc" ] || [ "$2" = "alumet" ] || [ "$2" = "ecofloc-alumet" ]; }; then
                     ENERGY_MONITOR_TOOL="$2"
                     shift 2
                 else
@@ -865,8 +869,12 @@ if [ "$ACTION" = "start" ]; then
             alumet)
                 [ -f "$ALUMET_SCRIPT" ] || { echo "Alumet adapter not found: $ALUMET_SCRIPT"; exit 1; }
                 ;;
+            ecofloc-alumet)
+                [ -f "$PROCESS_SCRIPT" ] || { echo "Energy monitor engine not found: $PROCESS_SCRIPT"; exit 1; }
+                [ -f "$ALUMET_SCRIPT" ] || { echo "Alumet adapter not found: $ALUMET_SCRIPT"; exit 1; }
+                ;;
             *)
-                echo "Unknown energy monitor: $ENERGY_MONITOR_TOOL (expected ecofloc or alumet)"
+                echo "Unknown energy monitor: $ENERGY_MONITOR_TOOL (expected ecofloc, alumet, or ecofloc-alumet)"
                 exit 1
                 ;;
         esac

@@ -98,11 +98,16 @@ def energy_summary(run_dir: Path) -> None:
         ),
         "sessions": sessions,
     }
-    (energy_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (energy_dir / "ecofloc-summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
     if measurement_status == "failed":
         raise RuntimeError("EcoFLOC produced no valid measurement sessions")
     if measurement_status == "partial":
-        print("Warning: EcoFLOC measurement is partial; inspect summary.json and raw logs.", file=sys.stderr)
+        print(
+            "Warning: EcoFLOC measurement is partial; inspect ecofloc-summary.json and raw logs.",
+            file=sys.stderr,
+        )
 
 
 def detect_artifacts(run_dir: Path) -> dict[str, bool]:
@@ -115,7 +120,7 @@ def detect_artifacts(run_dir: Path) -> dict[str, bool]:
     if (matching / "communication").exists():
         report = next((matching / "communication").rglob("evaluation_report.json"), None)
     return {
-        "energy_summary": (run_dir / "energy" / "summary.json").exists(),
+        "energy_summary": any(energy_summary_paths(run_dir)),
         "matching_graph": graph is not None,
         "evaluation_report": report is not None,
         "pod_placement": (run_dir / "placement.tsv").exists(),
@@ -232,11 +237,18 @@ def edge_count(path: Path) -> int:
     return sum(1 for element in ET.parse(path).iter() if element.tag.endswith("edge"))
 
 
+def energy_summary_paths(run_dir: Path) -> list[Path]:
+    energy_dir = run_dir / "energy"
+    paths = sorted(energy_dir.glob("*-summary.json"))
+    old_path = energy_dir / "summary.json"
+    return paths or ([old_path] if old_path.exists() else [])
+
+
 def show(run_dir: Path) -> None:
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
-    summary_path = run_dir / "energy" / "summary.json"
-    summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
+    summary_paths = energy_summary_paths(run_dir)
+    summaries = [json.loads(path.read_text(encoding="utf-8")) for path in summary_paths]
     matching = run_dir / "matching"
     graph = next((matching / "predicted").rglob("predicted_matching.graphml"), None) if (matching / "predicted").exists() else None
     report = next((matching / "communication").rglob("evaluation_report.json"), None) if (matching / "communication").exists() else None
@@ -261,7 +273,7 @@ def show(run_dir: Path) -> None:
         print(f"Placement: {len(placement)} pod(s)  file={placement_path}")
         for row in placement:
             print(f"  {row['phase']:<11} {row['task']:<34} -> {row['node'] or '(unscheduled)'}")
-    if summary:
+    for summary in summaries:
         provider = summary.get("provider", "ecofloc")
         if provider == "alumet":
             print(
