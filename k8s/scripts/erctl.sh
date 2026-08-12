@@ -10,7 +10,7 @@ fi
 set -euo pipefail
 
 # Defines all top-level commands supported by the current management tool.
-ACTIONS=("images" "pipeline" "schedule" "help")
+ACTIONS=("images" "pipeline" "alumet" "schedule" "help")
 
 print_help() {
     cat << 'EOF'
@@ -27,6 +27,8 @@ COMMANDS:
                   start --energy-monitor [ecofloc|alumet]
                                              auto-monitor energy + save under k8s/results/
                   start --results-summary  print matching, placement, and energy summary
+    alumet      Manage the cluster-wide Alumet collector.
+                  start | stop | status | retention [DURATION]
     schedule    Explain placement or run H1/H2 adaptation
     help        Display this help message
 
@@ -109,6 +111,27 @@ case "$COMMAND" in
 
     pipeline)
         run_script "pipeline.sh" "$@"
+        ;;
+
+    alumet)
+        action="${1:-status}"
+        case "$action" in
+            start|stop|status)
+                [ $# -le 1 ] || { echo "Usage: erctl alumet $action"; exit 1; }
+                run_script "alumet.py" "$action"
+                ;;
+            retention)
+                [ $# -le 2 ] || { echo "Usage: erctl alumet retention [DURATION]"; exit 1; }
+                run_script "alumet.py" retention --duration "${2:-7d}"
+                ;;
+            -h|--help|help)
+                echo "Usage: erctl alumet [start|stop|status|retention [DURATION]]"
+                ;;
+            *)
+                echo "Unknown Alumet action: $action"
+                exit 1
+                ;;
+        esac
         ;;
 
     schedule)

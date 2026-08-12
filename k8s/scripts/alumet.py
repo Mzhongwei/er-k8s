@@ -23,6 +23,8 @@ INFLUX_POD = os.environ.get("ERCTL_ALUMET_INFLUX_POD", "")
 TOKEN_SECRET = os.environ.get("ERCTL_ALUMET_TOKEN_SECRET", "")
 TOKEN_KEY = os.environ.get("ERCTL_ALUMET_TOKEN_KEY", "admin-token")
 DRAIN_SECONDS = float(os.environ.get("ERCTL_ALUMET_DRAIN_SECONDS", "3"))
+RETENTION = os.environ.get("ERCTL_ALUMET_RETENTION", "7d")
+ENABLE_LABEL = "eaer.alumet/enabled"
 
 
 def kubectl(*args: str, input_text: str | None = None) -> str:
@@ -39,6 +41,15 @@ def utc_now() -> str:
 
 def cluster_objects(kind: str) -> list[dict]:
     return json.loads(kubectl("get", kind, "-n", NAMESPACE, "-o", "json")).get("items", [])
+
+
+def resource_name(kind: str, fragment: str) -> str:
+    items = cluster_objects(kind)
+    names = [item.get("metadata", {}).get("name", "") for item in items]
+    matches = [name for name in names if fragment in name]
+    if not matches:
+        raise RuntimeError(f"no {kind} containing {fragment!r} found in namespace {NAMESPACE}")
+    return matches[0]
 
 
 def influx_pod() -> str:
@@ -137,6 +148,111 @@ def run_query(flux: str, pod: str | None = None) -> str:
     )
 
 
+def run_influx(*args: str) -> str:
+    pod = influx_pod()
+    _, token = token_secret()
+    script = 'IFS= read -r INFLUX_TOKEN; export INFLUX_TOKEN; exec influx "$@"'
+    return kubectl(
+        "exec", "-i", "-n", NAMESPACE, pod, "--", "sh", "-c", script,
+        "alumet-influx", *args, input_text=f"{token}\n",
+    )
+
+
+def set_retention(duration: str) -> None:
+    buckets = json.loads(run_influx("bucket", "list", "--org", ORG, "--json"))
+    bucket = next((item for item in buckets if item.get("name") == BUCKET), None)
+    if not bucket:
+        raise RuntimeError(f"InfluxDB bucket not found: {BUCKET}")
+    run_influx(
+        "bucket", "update", "--id", bucket["id"], "--org", ORG,
+        "--retention", duration,
+    )
+    print(f"InfluxDB bucket {BUCKET}: retention={duration}")
+
+
+def eligible_nodes() -> list[str]:
+    nodes = json.loads(kubectl("get", "nodes", "-o", "json")).get("items", [])
+    result = []
+    for node in nodes:
+        spec = node.get("spec", {})
+        disabled = any(
+            taint.get("key") == "eaer.alumet/disabled"
+            and taint.get("effect") in {"NoSchedule", "NoExecute"}
+            for taint in spec.get("taints", [])
+        )
+        if not spec.get("unschedulable") and not disabled:
+            result.append(node["metadata"]["name"])
+    return result
+
+
+def enable_collection() -> None:
+    daemonset = resource_name("daemonsets", "alumet-relay-client")
+    server = resource_name("deployments", "alumet-relay-server")
+    influx = resource_name("statefulsets", "influxdb")
+    selector = json.dumps({"spec": {"template": {"spec": {"nodeSelector": {ENABLE_LABEL: "true"}}}}})
+    kubectl("patch", "daemonset", daemonset, "-n", NAMESPACE, "--type=merge", "-p", selector)
+    kubectl("scale", "statefulset", influx, "-n", NAMESPACE, "--replicas=1")
+    kubectl("rollout", "status", f"statefulset/{influx}", "-n", NAMESPACE, "--timeout=5m")
+    kubectl("scale", "deployment", server, "-n", NAMESPACE, "--replicas=1")
+    kubectl("rollout", "status", f"deployment/{server}", "-n", NAMESPACE, "--timeout=5m")
+    nodes = eligible_nodes()
+    if not nodes:
+        raise RuntimeError("no schedulable Alumet node is enabled")
+    for node in nodes:
+        kubectl("label", "node", node, f"{ENABLE_LABEL}=true", "--overwrite")
+    kubectl("rollout", "status", f"daemonset/{daemonset}", "-n", NAMESPACE, "--timeout=5m")
+    set_retention(RETENTION)
+    print(f"Alumet collection started on {len(nodes)} node(s)")
+
+
+def disable_collection() -> None:
+    daemonset = resource_name("daemonsets", "alumet-relay-client")
+    server = resource_name("deployments", "alumet-relay-server")
+    selector = json.dumps({"spec": {"template": {"spec": {"nodeSelector": {ENABLE_LABEL: "true"}}}}})
+    kubectl("patch", "daemonset", daemonset, "-n", NAMESPACE, "--type=merge", "-p", selector)
+    nodes = json.loads(kubectl("get", "nodes", "-o", "json")).get("items", [])
+    for node in nodes:
+        if ENABLE_LABEL in node.get("metadata", {}).get("labels", {}):
+            kubectl("label", "node", node["metadata"]["name"], f"{ENABLE_LABEL}-")
+    kubectl("scale", "deployment", server, "-n", NAMESPACE, "--replicas=0")
+    print("Alumet collection stopped; InfluxDB and its PVC remain running")
+
+
+def storage_location() -> str:
+    pvcs = cluster_objects("pvc")
+    pvc = next((item for item in pvcs if "influxdb" in item.get("metadata", {}).get("name", "")), None)
+    if not pvc:
+        return "InfluxDB PVC: not found"
+    spec = pvc.get("spec", {})
+    volume = spec.get("volumeName", "")
+    location = "unbound"
+    if volume:
+        pv = json.loads(kubectl("get", "pv", volume, "-o", "json"))
+        source = pv.get("spec", {})
+        if source.get("nfs"):
+            location = f"nfs://{source['nfs'].get('server')}{source['nfs'].get('path')}"
+        elif source.get("local"):
+            location = source["local"].get("path", "local volume")
+        elif source.get("hostPath"):
+            location = source["hostPath"].get("path", "hostPath")
+        elif source.get("csi"):
+            location = f"csi:{source['csi'].get('driver')}:{source['csi'].get('volumeHandle')}"
+    return (
+        f"InfluxDB PVC: {pvc['metadata']['name']} status={pvc.get('status', {}).get('phase', '')} "
+        f"class={spec.get('storageClassName', '')} volume={volume}\n"
+        f"Pod mount: /var/lib/influxdb2\nPhysical backing: {location}"
+    )
+
+
+def status() -> None:
+    print(storage_location())
+    print(kubectl("get", "pods", "-n", NAMESPACE, "-o", "wide").rstrip())
+    try:
+        print(run_influx("bucket", "list", "--org", ORG).rstrip())
+    except (RuntimeError, subprocess.CalledProcessError):
+        print("InfluxDB bucket status: unavailable", file=sys.stderr)
+
+
 def query_window(window: dict) -> str:
     stop = window["ended_at"]
     flux = (
@@ -184,13 +300,27 @@ def rapl_total(domains: dict[str, float]) -> float:
     return sum(domains.values())
 
 
+def workload_pods(run_dir: Path) -> set[str]:
+    path = run_dir / "placement.tsv"
+    if not path.exists():
+        return set()
+    with path.open(encoding="utf-8") as stream:
+        return {row.get("pod", "") for row in csv.DictReader(stream, delimiter="\t") if row.get("pod")}
+
+
 def summarize(run_dir: Path, raw: str) -> bool:
     by_metric: dict[str, float] = defaultdict(float)
     by_node: dict[str, float] = defaultdict(float)
-    by_task: dict[str, float] = defaultdict(float)
+    by_consumer: dict[str, float] = defaultdict(float)
+    by_workload_pod: dict[str, float] = defaultdict(float)
+    by_system_consumer: dict[str, float] = defaultdict(float)
     rapl_by_node: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    eaer_pods = workload_pods(run_dir)
     hardware_total = 0.0
     attributed_total = 0.0
+    workload_total = 0.0
+    system_total = 0.0
+    unknown_total = 0.0
     points = 0
 
     for row in influx_rows(raw):
@@ -211,7 +341,15 @@ def summarize(run_dir: Path, raw: str) -> bool:
         if attributed:
             attributed_total += value
             task = next((row.get(key, "") for key in ("name", "pod", "pod_name", "k8s_pod_name") if row.get(key)), "unknown")
-            by_task[task] += value
+            by_consumer[task] += value
+            if task in eaer_pods:
+                workload_total += value
+                by_workload_pod[task] += value
+            elif task == "unknown":
+                unknown_total += value
+            else:
+                system_total += value
+                by_system_consumer[task] += value
         else:
             node = row.get("node") or row.get("node_name") or "unknown"
             if metric.lower().startswith("rapl_"):
@@ -231,8 +369,16 @@ def summarize(run_dir: Path, raw: str) -> bool:
         "total_energy_j": round(hardware_total if hardware_total else attributed_total, 6),
         "hardware_energy_j": round(hardware_total, 6),
         "attributed_energy_j": round(attributed_total, 6),
+        "workload_attributed_energy_j": round(workload_total, 6),
+        "system_attributed_energy_j": round(system_total, 6),
+        "unknown_attributed_energy_j": round(unknown_total, 6),
         "energy_point_count": points,
-        "by_task_j": {key: round(value, 6) for key, value in sorted(by_task.items())},
+        "by_task_j": {key: round(value, 6) for key, value in sorted(by_workload_pod.items())},
+        "by_workload_pod_j": {key: round(value, 6) for key, value in sorted(by_workload_pod.items())},
+        "by_system_consumer_j": {
+            key: round(value, 6) for key, value in sorted(by_system_consumer.items())
+        },
+        "by_consumer_j": {key: round(value, 6) for key, value in sorted(by_consumer.items())},
         "by_node_j": {key: round(value, 6) for key, value in sorted(by_node.items())},
         "by_metric_j": {key: round(value, 6) for key, value in sorted(by_metric.items())},
         "rapl_domains_j": {
@@ -241,7 +387,9 @@ def summarize(run_dir: Path, raw: str) -> bool:
         },
         "note": (
             "Hardware and attributed energy are reported separately. RAPL total prefers "
-            "platform, otherwise package+dram, to avoid adding overlapping sub-domains."
+            "platform, otherwise package+dram, to avoid adding overlapping sub-domains. "
+            "Workload consumers are matched exactly against placement.tsv; unmatched named "
+            "consumers are system, and consumers without a Pod name are unknown."
         ),
     }
     path = run_dir / "energy" / "summary.json"
@@ -266,18 +414,38 @@ def stop(run_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("preflight", "start", "stop"))
+    parser.add_argument(
+        "command", choices=("preflight", "start", "stop", "status", "retention", "summarize")
+    )
     parser.add_argument("run_dir", nargs="?", type=Path)
+    parser.add_argument("--duration", default=RETENTION)
     args = parser.parse_args()
     try:
         if args.command == "preflight":
             pod, secret, clients = preflight()
             print(f"ready_clients={clients} influx_pod={pod} token_secret={secret}")
-        elif not args.run_dir:
-            parser.error("run_dir is required for start/stop")
         elif args.command == "start":
-            start(args.run_dir)
+            if args.run_dir:
+                start(args.run_dir)
+            else:
+                enable_collection()
+        elif args.command == "stop" and not args.run_dir:
+            disable_collection()
+        elif args.command == "status":
+            status()
+        elif args.command == "retention":
+            set_retention(args.duration)
+        elif args.command == "summarize":
+            if not args.run_dir:
+                parser.error("run_dir is required for summarize")
+            raw_path = args.run_dir / "energy" / "alumet-raw.csv"
+            if not raw_path.exists():
+                raise RuntimeError(f"Alumet raw export not found: {raw_path}")
+            if not summarize(args.run_dir, raw_path.read_text(encoding="utf-8")):
+                raise RuntimeError("Alumet raw export contains no energy measurements")
         else:
+            if not args.run_dir:
+                parser.error("run_dir is required for stop")
             stop(args.run_dir)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         if isinstance(error, subprocess.CalledProcessError) and error.stderr:

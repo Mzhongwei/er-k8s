@@ -166,6 +166,13 @@ kubectl apply -n argo -f k8s/rbac-configmaps.yaml
 `pipeline start` generates scheduled manifests and ConfigMaps automatically.
 
 ## 4. Configure the static dataset volume
+Copy the simulator and image repository examples, then edit the copies:
+```bash
+cp k8s/datasets/dataset-volume.yaml.example k8s/datasets/dataset-volume.yaml
+vim k8s/datasets/dataset-volume.yaml
+```
+Check nfs server ip address `{spec:{nfs:{server: <your nfs server ip>}}}` .
+Check datasets path and configure `{spec:{nfs:{path: <your path>}}}` in file `k8s/datasets/dataset-volume.yaml`
 
 Before applying the volume, verify the NFS `server` and `path` in
 `k8s/datasets/dataset-volume.yaml`. All Kubernetes nodes that can run EAER Pods must be
@@ -202,8 +209,7 @@ experiment. The static dataset volume is retained across pipeline runs.
 
 ## 5. Prepare images
 
-Build and push the complete image set when the images do not yet exist or their source
-code/Dockerfiles changed:
+Build and push the complete image set when the images do not yet exist or their source code/Dockerfiles changed:
 
 ```bash
 sudo docker login
@@ -214,88 +220,25 @@ When compatible tags already exist in the configured repository, skip this build
 `pipeline start` will reuse/pull those tags. `docker login` is only needed for pushing.
 A private registry additionally requires Kubernetes image-pull credentials on the cluster.
 
-## 6. Validate EcoFLOC (optional)
+## 6. Check scheduling strategies
 
-Only perform this step when using `--energy-monitor`. Copy and edit the node access list:
+Check placement configuration under `k8s/scripts/scheduling/scheduling.yaml` and change node
+properties according to the examples. Carbon-region confirmation is kept separately in
+`k8s/scripts/scheduling/carbon-intensity.yaml`.
 
-```bash
-cp k8s/scripts/energy-nodes.conf.example k8s/scripts/energy-nodes.conf
-vim k8s/scripts/energy-nodes.conf
-```
-
-For every `ssh` node, first verify the host key with its administrator, connect once
-interactively if needed, then verify non-interactive SSH and passwordless EcoFLOC:
-
-```bash
-ssh -o BatchMode=yes user@node true
-```
-
-Test a live PID on each node:
-
-```bash
-sleep 10 & PID=$!
-sudo -n /usr/local/bin/ecofloc --cpu -p "$PID" -i 1000 -t 2
-wait "$PID"
-```
-or
-```bash
-sleep 10 & PID=$!
-sudo -n /bin/execute ecofloc --cpu -p "$PID" -i 1000 -t 2
-wait "$PID"
-```
-
-The output must contain `Average Power` and `Total Energy` and must not contain
-`CLOSED OR INEXISTENT`. The pipeline performs the same functional preflight and skips a
-node whose executable starts but cannot measure the PID.
-
-A `vm` entry requires both SSH hops to work non-interactively. If the VM has no SSH
-account and is reachable only through Kubernetes, remove it from `energy-nodes.conf`;
-the current collector cannot measure that host through the Kubernetes API. This does not
-affect pipeline execution or Pod placement recording.
-
-## 7. Start and observe the pipeline
+## 6. Start and observe the pipeline
 
 ```bash
 bash k8s/scripts/erctl.sh pipeline start \
   -c code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml \
-  --energy-monitor \
   --results-summary
 ```
-
-If EcoFLOC has not been configured, omit `--energy-monitor`; matching and placement are
-still saved.
 
 In another terminal, observe Jobs and Pods:
 
 ```bash
 kubectl get jobs,pods -n argo -w
 ```
-
-# Dataset storage
-
-The read-only dataset volume is defined in `k8s/datasets/dataset-volume.yaml`. Its current
-NFS-to-Pod mapping is:
-
-```text
-NFS <ip>:/srv/nfs/k8s/data → Pod: /data
-└── exp_datasets/           → Pod: /data/exp_datasets/
-    ├── 2-fordors_zagats/
-    └── 4-1_dirty_dblp_acm/
-```
-
-Kubernetes uses the static PV `eaer-datasets-pv` and PVC `pipeline-data-claim`; Pods mount
-the PVC read-only at `/data`. Dataset paths in an experiment config therefore use the Pod
-path, for example:
-
-```yaml
-data_source_A: "/data/exp_datasets/2-fordors_zagats/tableA.csv"
-data_source_B: "/data/exp_datasets/2-fordors_zagats/tableB.csv"
-ground_truth: "/data/exp_datasets/2-fordors_zagats/matches.txt"
-```
-
-The static dataset PVC is retained across runs. Runtime PVCs for buffers, models, graphs,
-indexes, communication files, and predictions are mounted separately under `/app/data/*`
-and are recreated by `pipeline start`.
 
 # Usage
 
@@ -330,10 +273,11 @@ persistent state remains available for inspection or a later new run.
 Node placement is configured in:
 
 ```text
-k8s/scripts/scheduling.yaml
+k8s/scripts/scheduling/scheduling.yaml
 ```
 
-Select a strategy with one setting (`B0`, `C1` ... `C7`, `H1`, or `H2`):
+Select a strategy with one setting (`B0`, `C1` ... `C8`, `H1`, or `H2`). C8 is
+Carbon-Aware Placement:
 
 ```yaml
 version: 2
@@ -345,6 +289,31 @@ live under `batch.templates` / `incremental.templates`. A strategy list such as
 `strategy: [C3, C7]` composes policies; optional `preferences.weights` controls their
 relative importance. B0 applies no scoring policy and leaves placement to the Kubernetes
 default scheduler among nodes not marked `schedulable: false`.
+
+`C7` reads every usable `k8s/results/<run-id>/energy/summary.json`, normalizes each run's
+`by_node_j` values, and averages the relative node energy index. It falls back to B0 with a
+terminal warning when no usable history exists; manually entered historical-energy classes
+are not required.
+
+`C8` and H1 regenerate the node inventory in `scheduling/carbon-intensity.yaml` from
+`kubectl get nodes` before compilation. Existing confirmed zone choices are preserved;
+Kubernetes country/carbon labels and public-IP geolocation can suggest a zone, while private
+or unresolved IPs are marked `NEEDS_CONFIRMATION`. The complete file and source links are
+shown and the user must answer `yes` or `no` every time. `yes` continues; `no` opens
+`$EDITOR` (or `vi`) and shows the edited file again. IP location is only a suggestion—the
+zone must describe the node's physical electricity supply, not its VPN/NAT endpoint.
+
+RTE éCO2mix supplies current FR intensity automatically. Other detected countries use
+Electricity Maps and require `ELECTRICITY_MAPS_API_TOKEN`; when multiple countries are
+present, FR is also queried through Electricity Maps so all nodes use a comparable data
+method. A zone may instead define a
+manual `intensity_g_per_kwh`, timestamp, and official `source_url`. C8 gives the lowest
+current intensity the strongest Kubernetes node-affinity preference. Nodes in the same
+electricity zone tie, and Kubernetes still applies resource, taint, and availability rules.
+
+C8 needs read-only cluster access; verify it with `kubectl auth can-i list nodes`. Public-IP
+geolocation sends that IP to the configured `ip_geolocation.source_url`; private IPs are
+never sent and require labels, a preserved mapping, or manual editing.
 
 Temporarily exclude one node from all EAER strategies, including B0:
 
@@ -389,16 +358,7 @@ The source manifests in k8s/pipeline/batch/ and k8s/pipeline/incremental/ are ke
 
 # Automatic energy measurement
 
-Set the configuration
-
-```
-mv k8s/scripts/energy-nodes.conf.example k8s/scripts/energy-nodes.conf
-vim k8s/scripts/energy-nodes.conf
-```
-
-Measure the pipeline from before its Pods are created until all Jobs finish, and save matching,
-Pod placement, and energy results under `k8s/results/<run-id>/`:
-
+Add arg `--energy-monitor` in the commande line to activate automatic energy measurement. For example,
 ```bash
 bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> --energy-monitor --results-summary
 ```
@@ -415,10 +375,68 @@ bash k8s/scripts/erctl.sh pipeline start -c <config.yaml> \
   --energy-monitor alumet --results-summary
 ```
 
-Alumet is a persistent cluster service rather than a per-run child process. `erctl` checks
-that its node clients and InfluxDB are ready, records the pipeline's UTC time window, exports
-that window to `energy/alumet-raw.csv`, and writes the common `energy/summary.json`. Hardware
-and attributed energy are kept separate because adding them would double-count energy.
+## EcoFLOC [:link:](https://github.com/hhumbertoAv/ecofloc)
+
+For installation instructions, see [:link:](https://github.com/hhumbertoAv/ecofloc)
+
+When using `--energy-monitor`, copy and edit the node access list:
+
+```bash
+cp k8s/scripts/energy-nodes.conf.example k8s/scripts/energy-nodes.conf
+vim k8s/scripts/energy-nodes.conf
+```
+
+For every `ssh` node, first verify the host key with its administrator, connect once
+interactively if needed, then verify non-interactive SSH and passwordless EcoFLOC:
+
+```bash
+ssh -o BatchMode=yes user@node true
+```
+
+Test a live PID on each node:
+
+```bash
+sleep 10 & PID=$!
+sudo -n /usr/local/bin/ecofloc --cpu -p "$PID" -i 1000 -t 2
+wait "$PID"
+```
+or
+```bash
+sleep 10 & PID=$!
+sudo -n /bin/execute ecofloc --cpu -p "$PID" -i 1000 -t 2
+wait "$PID"
+```
+
+The output must contain `Average Power` and `Total Energy` and must not contain
+`CLOSED OR INEXISTENT`. The pipeline performs the same functional preflight and skips a node whose executable starts but cannot measure the PID.
+
+The current EcoFLOC collector runs on the control host (`local`) or through SSH (`ssh` and
+two-hop `vm`). Kubernetes API access alone is not host measurement access: a VM without an
+SSH account is recorded as unavailable and needs either an SSH route or a separately
+designed privileged host-PID collector. EcoFLOC output containing `PID ... CLOSED OR
+INEXISTENT` and `0.00 Joules` is an invalid measurement; the preflight now rejects it.
+
+
+## Alumet [:link:](https://github.com/alumet-dev)
+
+Alumet is a persistent cluster service rather than a per-run child process. `erctl` checks that its node clients and InfluxDB are ready, records the pipeline's UTC time window, exports that window to `energy/alumet-raw.csv`, and writes the common `energy/summary.json`. Hardware and attributed energy are kept separate because adding them would double-count energy.
+Attributed energy is split into EAER Pods found in `placement.tsv`, named system consumers, and consumers that Alumet could not map to a Pod (`unknown`). The raw InfluxDB export and the complete per-consumer breakdown remain available for auditing.
+
+
+The chart creates a privileged, host-PID relay-client DaemonSet, read-only Kubernetes RBAC, the relay server, and persistent InfluxDB. This avoids per-run SSH and passwordless `sudo`, but a cluster administrator must authorize the one-time privileged deployment. RAPL must be available on each node; a VM whose hypervisor does not expose RAPL can report resource usage but not measured CPU energy. The values file does not enable NVML because enabling the chart's GPU resource limit on a mixed cluster would restrict the DaemonSet to GPU-capable nodes.
+
+If the release uses a different namespace, bucket, organization, secret, or InfluxDB pod, set these before running `erctl`:
+
+```bash
+export ERCTL_ALUMET_NAMESPACE=alumet
+export ERCTL_ALUMET_ORG=influxdata
+export ERCTL_ALUMET_BUCKET=default
+# Normally auto-detected; only set when the deployment uses nonstandard names:
+export ERCTL_ALUMET_TOKEN_SECRET=eaer-alumet-influxdb2-auth
+export ERCTL_ALUMET_INFLUX_POD=<influxdb-pod-name>
+```
+
+Configuration file is under `k8s/monitoring/alumet-values.yaml`
 
 Install Alumet once with the official chart before selecting that backend:
 
@@ -436,37 +454,65 @@ kubectl get pods -n alumet -o wide
 python3 k8s/scripts/alumet.py preflight
 ```
 
-The chart creates a privileged, host-PID relay-client DaemonSet, read-only Kubernetes RBAC,
-the relay server, and persistent InfluxDB. This avoids per-run SSH and passwordless `sudo`,
-but a cluster administrator must authorize the one-time privileged deployment. RAPL must be
-available on each node; a VM whose hypervisor does not expose RAPL can report resource usage
-but not measured CPU energy. The values file does not enable NVML because enabling the chart's
-GPU resource limit on a mixed cluster would restrict the DaemonSet to GPU-capable nodes.
-
-If the release uses a different namespace, bucket, organization, secret, or InfluxDB pod,
-set these before running `erctl`:
+Control continuous collection without deleting InfluxDB or its PVC:
 
 ```bash
-export ERCTL_ALUMET_NAMESPACE=alumet
-export ERCTL_ALUMET_ORG=influxdata
-export ERCTL_ALUMET_BUCKET=default
-# Normally auto-detected; only set when the deployment uses nonstandard names:
-export ERCTL_ALUMET_TOKEN_SECRET=eaer-alumet-influxdb2-auth
-export ERCTL_ALUMET_INFLUX_POD=<influxdb-pod-name>
+# Label eligible nodes, start the relay server/clients, and enforce 7-day retention.
+bash k8s/scripts/erctl.sh alumet start
+
+# Show collector Pods, PVC/PV backing location, and bucket retention.
+bash k8s/scripts/erctl.sh alumet status
+
+# Stop relay clients/server. InfluxDB remains available with existing data.
+bash k8s/scripts/erctl.sh alumet stop
+
+# Change retention explicitly (7d is the project default).
+bash k8s/scripts/erctl.sh alumet retention 7d
 ```
+
+The InfluxDB process stores its database at `/var/lib/influxdb2` on the
+`eaer-alumet-influxdb2` PVC. With `nfs-client`, the corresponding PV identifies the NFS server and dynamically provisioned directory; `erctl alumet status` prints that mapping. InfluxDB automatically expires raw points older than seven days. Every completed `--energy-monitor alumet` run first exports its selected window to
+`k8s/results/<run-id>/energy/alumet-raw.csv` and `summary.json`; these exported files are not deleted by InfluxDB retention. A run that was never exported before its raw window expires cannot later reconstruct its Alumet report from InfluxDB.
+
+Rebuild the categorized summary of an existing Alumet run without querying the cluster:
+
+```bash
+python3 k8s/scripts/alumet.py summarize k8s/results/<run-id>
+python3 k8s/scripts/results.py show --root k8s/results --run <run-id>
+```
+
+# Data storage
+## Datasets sources
+The read-only dataset volume is defined in `k8s/datasets/dataset-volume.yaml`. Its current
+NFS-to-Pod mapping is:
+
+```text
+NFS <ip>:/srv/nfs/k8s/data → Pod: /data
+└── exp_datasets/           → Pod: /data/exp_datasets/
+    ├── 2-fordors_zagats/
+    └── 4-1_dirty_dblp_acm/
+```
+
+Kubernetes uses the static PV `eaer-datasets-pv` and PVC `pipeline-data-claim`; Pods mount
+the PVC read-only at `/data`. Dataset paths in an experiment config therefore use the Pod
+path, for example:
+
+```yaml
+data_source_A: "/data/exp_datasets/2-fordors_zagats/tableA.csv"
+data_source_B: "/data/exp_datasets/2-fordors_zagats/tableB.csv"
+ground_truth: "/data/exp_datasets/2-fordors_zagats/matches.txt"
+```
+
+The static dataset PVC is retained across runs. Runtime PVCs for buffers, models, graphs,
+indexes, communication files, and predictions are mounted separately under `/app/data/*`
+and are recreated by `pipeline start`.
+
+## Results
+All results, including, matching, Pod placement, and energy results if measured are stored under `k8s/results/<run-id>/`
 
 Add `--results-archive <path-or-user@host:path>` when the run directory must also be copied
 off the control node. Archive failure is reported separately and does not change workload status.
 
-Every run writes `placement.tsv`, including each task's Pod, node, phase, status, and
-timestamps. `--results-summary` displays those mappings after the run. Energy monitoring is optional;
-matching and placement results are still saved when `--energy-monitor` is omitted.
-
-The current EcoFLOC collector runs on the control host (`local`) or through SSH (`ssh` and
-two-hop `vm`). Kubernetes API access alone is not host measurement access: a VM without an
-SSH account is recorded as unavailable and needs either an SSH route or a separately
-designed privileged host-PID collector. EcoFLOC output containing `PID ... CLOSED OR
-INEXISTENT` and `0.00 Joules` is an invalid measurement; the preflight now rejects it.
 
 # Useful commands
 
@@ -560,7 +606,7 @@ kubectl describe node <node-name> | grep -i nvidia
 Also verify the scheduling rules in:
 
 ```text
-k8s/scripts/scheduling.yaml
+k8s/scripts/scheduling/scheduling.yaml
 ```
 
 They are regenerated automatically on the next `pipeline start`.

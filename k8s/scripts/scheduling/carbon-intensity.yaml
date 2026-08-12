@@ -1,0 +1,14 @@
+# C8 regenerates this node inventory from the current cluster, then asks for confirmation.
+# Existing zone choices are preserved; public-IP geolocation is only a suggestion.
+ip_geolocation:
+  source_url: https://ipapi.co/api/
+  api_url: https://ipapi.co/{ip}/json/
+nodes:
+  server2-labo: {zone: FR}
+  zhongwei-lap: {zone: FR}
+  server1-k3s-worker: {zone: FR}
+zones:
+  FR:
+    provider: rte-eco2mix
+    source_url: https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/api/
+    api_url: https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/eco2mix-national-tr/records?select=taux_co2,date_heure&where=taux_co2%20is%20not%20null&order_by=date_heure%20desc&limit=1

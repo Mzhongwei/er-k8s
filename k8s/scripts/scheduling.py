@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from placement_config import prepare_policy_config
 from scheduler import rank_nodes
 
 
@@ -25,7 +26,9 @@ def load_config(path: Path) -> dict[str, Any]:
         config = yaml.safe_load(stream) or {}
     if config.get("version") != 2:
         raise ValueError("runtime scheduling requires scheduling.yaml version: 2")
-    return config
+    return prepare_policy_config(
+        config, path, Path(__file__).resolve().parent.parent / "results"
+    )
 
 
 def mapping(raw: Any, id_key: str) -> dict[str, dict[str, Any]]:
@@ -185,7 +188,9 @@ def adapt_once(config: dict[str, Any], args: argparse.Namespace) -> int:
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="EAER placement recommendation/runtime adaptation")
-    parser.add_argument("--config", default=str(script_dir / "scheduling.yaml"))
+    parser.add_argument(
+        "--config", default=str(script_dir / "scheduling" / "scheduling.yaml")
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     inspect = sub.add_parser("recommend", help="rank nodes for one configured task")
     inspect.add_argument("task")

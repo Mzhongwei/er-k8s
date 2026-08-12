@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from placement_config import prepare_policy_config
 from scheduler import compile_policy_config
 
 
@@ -195,7 +196,9 @@ def parse_group(group_name: str, group_content: Any) -> dict[str, dict[str, list
     return rules
 
 
-def load_scheduling_config(path: Path) -> dict[str, dict[str, dict[str, list[str]]]]:
+def load_scheduling_config(
+    path: Path, results_dir: Path | None = None
+) -> dict[str, dict[str, dict[str, list[str]]]]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
@@ -206,6 +209,9 @@ def load_scheduling_config(path: Path) -> dict[str, dict[str, dict[str, list[str
         raise ValueError("scheduling.yaml root must be a YAML object")
 
     if data.get("version") == 2:
+        data = prepare_policy_config(
+            data, path, results_dir or Path(__file__).resolve().parent.parent / "results"
+        )
         return compile_policy_config(data)
 
     parsed: dict[str, dict[str, dict[str, list[str]]]] = {}
@@ -718,7 +724,7 @@ def main() -> int:
 
     parser.add_argument(
         "--config",
-        default=str(script_dir / "scheduling.yaml"),
+        default=str(script_dir / "scheduling" / "scheduling.yaml"),
         help="Path to scheduling.yaml",
     )
 
@@ -756,7 +762,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        config = load_scheduling_config(Path(args.config).resolve())
+        config = load_scheduling_config(Path(args.config).resolve(), k8s_dir / "results")
 
         warnings: list[str] = []
 

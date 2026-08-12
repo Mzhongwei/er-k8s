@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
-STRATEGIES = {"B0", *(f"C{i}" for i in range(1, 8)), "H1", "H2"}
+STRATEGIES = {"B0", *(f"C{i}" for i in range(1, 9)), "H1", "H2"}
 LEVEL = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
 
@@ -137,6 +137,8 @@ def _score_one(
         if isinstance(profile, dict):
             profile = profile.get(task.get("task_id"), profile.get("default", 0.5))
         return _energy(profile), True, "historical energy"
+    if strategy == "C8":
+        return _energy(node.get("carbon_intensity")), True, "grid carbon intensity"
     if strategy == "H1":
         power = node.get("power_watts", node.get("metrics", {}).get("power_watts"))
         carbon = _energy(node.get("carbon_intensity", "medium"))

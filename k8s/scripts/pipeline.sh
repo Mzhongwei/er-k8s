@@ -538,7 +538,7 @@ start_pipeline() {
     # Measure total script wall-clock time.
     script_start_time=$(date +%s)
 
-    # Generate executable manifests from scheduling.yaml.
+    # Generate executable manifests from scheduling/scheduling.yaml.
     python3 "$SCRIPT_DIR/compiler.py"
 
     # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty

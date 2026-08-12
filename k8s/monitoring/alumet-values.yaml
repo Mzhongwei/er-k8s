@@ -2,6 +2,8 @@
 # The relay clients run once per Kubernetes node and InfluxDB stores measurements.
 alumet-relay-client:
   hostPID: true
+  nodeSelector:
+    eaer.alumet/enabled: "true"
   securityContext:
     privileged: true
   plugins:
@@ -39,3 +41,4 @@ influxdb2:
   adminUser:
     organization: influxdata
     bucket: default
+    retention_policy: 7d

@@ -262,10 +262,24 @@ def show(run_dir: Path) -> None:
         for row in placement:
             print(f"  {row['phase']:<11} {row['task']:<34} -> {row['node'] or '(unscheduled)'}")
     if summary:
-        print(
-            f"Energy ({summary.get('provider', 'ecofloc')}): {summary.get('measurement_status', 'unknown')}  "
-            f"total={summary.get('total_energy_j', 0):.3f} J"
-        )
+        provider = summary.get("provider", "ecofloc")
+        if provider == "alumet":
+            print(
+                f"Energy (alumet): {summary.get('measurement_status', 'unknown')}  "
+                f"hardware={summary.get('hardware_energy_j', 0):.3f} J"
+            )
+            print(
+                "Attributed: "
+                f"EAER={summary.get('workload_attributed_energy_j', 0):.3f} J  "
+                f"system={summary.get('system_attributed_energy_j', 0):.3f} J  "
+                f"unknown={summary.get('unknown_attributed_energy_j', 0):.3f} J  "
+                f"all={summary.get('attributed_energy_j', 0):.3f} J"
+            )
+        else:
+            print(
+                f"Energy ({provider}): {summary.get('measurement_status', 'unknown')}  "
+                f"total={summary.get('total_energy_j', 0):.3f} J"
+            )
         for task, value in summary.get("by_task_j", {}).items():
             print(f"  {task:<32} {value:.3f} J")
         by_metric = summary.get("by_metric_j", {})
