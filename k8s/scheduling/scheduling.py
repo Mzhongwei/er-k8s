@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from placement_config import prepare_policy_config
+from placement_config import load_policy_config, prepare_policy_config
 from scheduler import rank_nodes
 
 
@@ -22,10 +22,10 @@ def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProces
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as stream:
-        config = yaml.safe_load(stream) or {}
-    if config.get("version") != 2:
-        raise ValueError("runtime scheduling requires scheduling.yaml version: 2")
+    # Resolve first (compiler.py already does): a relative --config must resolve its includes
+    # and carbon-intensity.yaml next to the config file, not relative to the current directory.
+    path = path.resolve()
+    config = load_policy_config(path)
     return prepare_policy_config(
         config, path, Path(__file__).resolve().parent.parent / "results"
     )

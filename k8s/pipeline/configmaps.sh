@@ -25,21 +25,8 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 NAMESPACE="argo"
 
-# --- legacy: distributions/ (superseded by entries/worker + entries/batch). The
-# corresponding templates in batch/pipeline.yaml are commented out too, so these
-# ConfigMaps are disabled here as well; kept as comments for migration reference. ---
-# NORMALIZATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/normalization_distribution.py"
-# BERT_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/bert_distribution.py"
+# BERT training entry script (used by the bert-training-evaluation mode).
 BERT_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/pipeline/bert_training.py"
-# CG_FEATURE_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/cg_feature_distribution.py"
-# FEATURE_INDEX_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/featureindex_candidate.py"
-# GRAPH_RANDOMWALK_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/graph_randomwalk.py"
-# EMBEDDING_TRAINING_ENTRY_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/embedding_training_entry.py"
-# CALCULATING_SIMILARITY_ENTRY_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/calculating_similarity_entry.py"
-# DECISION_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/decision_evaluation.py"
-# EMBEDDING_COMMON_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/embedding_common.py"
-# was state_io/embedding_state.py; that module moved to distributions/embedding_state.py
-# EMBEDDING_STATE_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/distributions/embedding_state.py"
 
 # --- entries/worker: incremental pipeline step scripts (one script per step, no
 # runtime --mode/--function branching) ---
@@ -145,18 +132,7 @@ if [ -n "$VERSION_NAME" ]; then
     CONFIG_FILE_TO_USE="$(prepare_config_file "$CONFIG_FILE" "$VERSION_NAME")"
 fi
 
-# --- legacy: distributions/ (disabled, see variable block above) ---
-# create_or_update_configmap "eaer-normalization-distribution" "normalization_distribution.py" "$NORMALIZATION_SCRIPT"
-# create_or_update_configmap "eaer-bert-distribution" "bert_distribution.py" "$BERT_SCRIPT"
 create_or_update_configmap "eaer-bert-training" "bert_training.py" "$BERT_TRAINING_SCRIPT"
-# create_or_update_configmap "eaer-cg-feature-distribution" "cg_feature_distribution.py" "$CG_FEATURE_SCRIPT"
-# create_or_update_configmap "eaer-feature-index" "featureindex_candidate.py" "$FEATURE_INDEX_SCRIPT"
-# create_or_update_configmap "eaer-graph-distribution" "graph_randomwalk.py" "$GRAPH_RANDOMWALK_SCRIPT"
-# create_or_update_configmap "eaer-embedding-training-entry" "embedding_training_entry.py" "$EMBEDDING_TRAINING_ENTRY_SCRIPT"
-# create_or_update_configmap "eaer-calculating-similarity-entry" "calculating_similarity_entry.py" "$CALCULATING_SIMILARITY_ENTRY_SCRIPT"
-# create_or_update_configmap "eaer-decision-evaluation" "decision_evaluation.py" "$DECISION_EVALUATION_SCRIPT"
-# create_or_update_configmap "eaer-embedding-common" "embedding_common.py" "$EMBEDDING_COMMON_SCRIPT"
-# create_or_update_configmap "eaer-embedding-state" "embedding_state.py" "$EMBEDDING_STATE_SCRIPT"
 
 # --- entries/worker ---
 create_or_update_configmap "eaer-worker-normalization" "normalization_embedding.py" "$WORKER_NORMALIZATION_SCRIPT"

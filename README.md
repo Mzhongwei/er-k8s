@@ -229,9 +229,10 @@ A private registry additionally requires Kubernetes image-pull credentials on th
 
 ## 6. Check scheduling strategies
 
-Check placement configuration under `k8s/scheduling/scheduling.yaml` and change node
-properties according to the examples. Carbon-region confirmation is kept separately in
-`k8s/scheduling/carbon-intensity.yaml`.
+Use `k8s/scheduling/scheduling.yaml` as the only scheduling entry point. Select the
+strategy there, then maintain node capabilities in `nodes.yaml`, task properties in
+`workloads.yaml`, and data placement in `data.yaml`. Carbon-region confirmation is kept
+separately in `carbon-intensity.yaml`.
 
 ## 7. Start and observe the pipeline
 
@@ -283,16 +284,31 @@ Node placement is configured in:
 k8s/scheduling/scheduling.yaml
 ```
 
-Select a strategy with one setting (`B0`, `C1` ... `C8`, `H1`, or `H2`). C8 is
-Carbon-Aware Placement:
+This remains the only file passed to the compiler and scheduling commands. It selects a
+strategy and includes three focused files using paths relative to itself:
 
 ```yaml
 version: 2
 strategy: C3
+preferences:
+  allow_gpu_for_cpu: false
+includes:
+  nodes: nodes.yaml
+  workloads: workloads.yaml
+  data: data.yaml
 ```
 
-`nodes` contains stable capabilities, `data` contains storage location, and task overrides
-live under `batch.templates` / `incremental.templates`. A strategy list such as
+The included files have distinct responsibilities:
+
+- `nodes.yaml`: stable node capabilities and `schedulable` state;
+- `workloads.yaml`: `batch` and `incremental` defaults and per-template task properties;
+- `data.yaml`: storage class and node locations of shared data.
+
+The loader rejects missing includes, extra top-level keys, and fields placed in the wrong
+fragment; it does not silently merge duplicate definitions. Only the version 2 split
+format is supported; the previous monolithic and compact rule formats are not accepted.
+Select a strategy with one setting (`B0`, `C1` ... `C8`, `H1`, or `H2`). C8 is
+Carbon-Aware Placement. A strategy list such as
 `strategy: [C3, C7]` composes policies; optional `preferences.weights` controls their
 relative importance. B0 applies no scoring policy and leaves placement to the Kubernetes
 default scheduler among nodes not marked `schedulable: false`.
@@ -325,6 +341,7 @@ never sent and require labels, a preserved mapping, or manual editing.
 Temporarily exclude one node from all EAER strategies, including B0:
 
 ```yaml
+# k8s/scheduling/nodes.yaml
 nodes:
   zhongwei-lap:
     schedulable: false
@@ -619,6 +636,9 @@ Also verify the scheduling rules in:
 
 ```text
 k8s/scheduling/scheduling.yaml
+k8s/scheduling/nodes.yaml
+k8s/scheduling/workloads.yaml
+k8s/scheduling/data.yaml
 ```
 
 They are regenerated automatically on the next `pipeline start`.

@@ -31,6 +31,69 @@ ELECTRICITY_MAPS_API = "https://api.electricitymaps.com/v4/carbon-intensity/late
 IP_GEOLOCATION_SOURCE = "https://ipapi.co/api/"
 IP_GEOLOCATION_API = "https://ipapi.co/{ip}/json/"
 UNCONFIRMED_ZONE = "NEEDS_CONFIRMATION"
+INCLUDE_KEYS = {
+    "nodes": {"nodes"},
+    "workloads": {"batch", "incremental"},
+    "data": {"data"},
+}
+
+
+def load_policy_config(path: Path) -> dict[str, Any]:
+    """Load one scheduling entry point and its strictly scoped YAML fragments."""
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    main = _read_yaml(path)
+    allowed_main = {"version", "strategy", "preferences", "includes"}
+    unknown_main = set(main) - allowed_main
+    if unknown_main:
+        raise ValueError(
+            f"Unexpected key(s) in {path}: {', '.join(sorted(unknown_main))}; "
+            "put nodes, workloads, and data in their included files"
+        )
+    if main.get("version") != 2:
+        raise ValueError("scheduling configuration requires version: 2")
+    includes = main.get("includes")
+    if not isinstance(includes, dict):
+        raise ValueError(f"{path} requires an includes mapping")
+    missing = set(INCLUDE_KEYS) - set(includes)
+    unknown = set(includes) - set(INCLUDE_KEYS)
+    if missing or unknown:
+        details = []
+        if missing:
+            details.append(f"missing {', '.join(sorted(missing))}")
+        if unknown:
+            details.append(f"unknown {', '.join(sorted(unknown))}")
+        raise ValueError(f"Invalid includes in {path}: {'; '.join(details)}")
+
+    merged = {key: value for key, value in main.items() if key != "includes"}
+    for include_name, allowed_keys in INCLUDE_KEYS.items():
+        raw_path = includes[include_name]
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError(f"includes.{include_name} must be a YAML file path")
+        include_path = Path(raw_path)
+        if not include_path.is_absolute():
+            include_path = path.parent / include_path
+        include_path = include_path.resolve()
+        if not include_path.exists():
+            raise FileNotFoundError(
+                f"Included config file not found: {include_path} (includes.{include_name})"
+            )
+        fragment = _read_yaml(include_path)
+        unexpected = set(fragment) - allowed_keys
+        if unexpected:
+            raise ValueError(
+                f"Unexpected key(s) in {include_path}: {', '.join(sorted(unexpected))}; "
+                f"allowed: {', '.join(sorted(allowed_keys))}"
+            )
+        # Require at least one allowed key, not all of them: a workloads fragment may define
+        # only `batch` or only `incremental` (the downstream compile skips an absent group).
+        if not set(fragment) & allowed_keys:
+            raise ValueError(
+                f"{include_path} (includes.{include_name}) must define at least one of: "
+                f"{', '.join(sorted(allowed_keys))}"
+            )
+        merged.update(fragment)
+    return merged
 
 
 def _strategy_names(value: Any) -> set[str]:

@@ -540,7 +540,7 @@ start_pipeline() {
     # Measure total script wall-clock time.
     script_start_time=$(date +%s)
 
-    # Generate executable manifests from k8s/scheduling/scheduling.yaml.
+    # Generate manifests through the single scheduling.yaml entry point.
     python3 "$SCHEDULING_COMPILER"
 
     # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty

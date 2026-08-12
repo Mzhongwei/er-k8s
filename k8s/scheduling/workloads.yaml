@@ -1,0 +1,56 @@
+batch:
+  defaults:
+    task:
+      workload_mode: batch
+      cpu_request: low
+      memory_request: low
+      io_intensity: medium
+      deadline_class: none
+      deferrable: true
+      migratable: false
+  templates:
+    normalization: {}
+    graph-construction:
+      task: {io_intensity: high, data_ids: [graph_snapshot]}
+    random-walk:
+      task: {cpu_request: medium, io_intensity: high, data_ids: [graph_snapshot]}
+    embedding-training:
+      task: {cpu_request: high, memory_request: medium, data_ids: [graph_snapshot]}
+    cg-feature-extraction: {}
+    feature-index-construction:
+      task: {io_intensity: high}
+    bert-normalization-training: {}
+    bert-training:
+      task: {gpu_required: true, cpu_request: high, memory_request: high}
+    bert-normalization-b-evaluation: {}
+    bert-evaluation:
+      task: {gpu_required: true, deadline_class: strict}
+
+incremental:
+  defaults:
+    task:
+      workload_mode: service
+      cpu_request: low
+      memory_request: low
+      io_intensity: medium
+      deadline_class: flexible
+      deferrable: true
+      migratable: true
+      data_ids: [pipeline_buffers]
+  templates:
+    producer: {}
+    consumer: {}
+    normalization: {}
+    graph-construction:
+      task: {io_intensity: high, data_ids: [graph_snapshot, pipeline_buffers]}
+    random-walk:
+      task: {cpu_request: medium, io_intensity: high, data_ids: [graph_snapshot, pipeline_buffers]}
+    embedding-training:
+      task: {cpu_request: high, memory_request: medium}
+    cg-feature-extraction: {}
+    candidate-enumeration: {}
+    calculating-similarity:
+      task: {deadline_class: strict}
+    decision-making:
+      task: {deadline_class: strict}
+    evaluation: {}

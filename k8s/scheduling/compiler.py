@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from placement_config import prepare_policy_config
+from placement_config import load_policy_config, prepare_policy_config
 from scheduler import compile_policy_config
 
 
@@ -46,180 +46,12 @@ def slug(value: str) -> str:
     return str(value).strip().lower().replace("_", "-").replace(" ", "-")
 
 
-def as_list(
-    value: Any,
-    path: str,
-    *,
-    null_means_override_empty: bool = False,
-) -> list[str] | None:
-    """
-    Defaults:
-      null / [] -> []
-
-    Template/task fields:
-      []      -> inherit defaults
-      null    -> explicit empty override, so do not inherit
-      value   -> [value]
-      [a, b]  -> [a, b]
-    """
-    if value is None:
-        if null_means_override_empty:
-            return None
-        return []
-
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-
-    if isinstance(value, str):
-        value = value.strip()
-        return [value] if value else []
-
-    raise ValueError(f"{path} must be a list, a string, null, or []")
-
-
-def normalize_rule(
-    raw: dict[str, Any],
-    path: str,
-    *,
-    null_means_override_empty: bool = False,
-) -> dict[str, list[str] | None]:
-    return {
-        field: as_list(
-            raw.get(field, []),
-            f"{path}.{field}",
-            null_means_override_empty=null_means_override_empty,
-        )
-        for field in FIELDS
-    }
-
-
-def merge_rule(
-    defaults: dict[str, list[str] | None],
-    override: dict[str, list[str] | None],
-) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-
-    for field in FIELDS:
-        default_values = defaults[field] or []
-        override_values = override[field]
-
-        if override_values is None:
-            result[field] = []
-        elif override_values:
-            result[field] = list(override_values)
-        else:
-            result[field] = list(default_values)
-
-    return result
-
-
-def parse_group(group_name: str, group_content: Any) -> dict[str, dict[str, list[str]]]:
-    if group_content is None:
-        return {}
-
-    if not isinstance(group_content, dict):
-        raise ValueError(f"Group '{group_name}' must be a YAML object")
-
-    # Explicit format:
-    #
-    # batch:
-    #   defaults:
-    #     prefer: [server2-labo]
-    #   templates:
-    #     normalization:
-    #       prefer: null
-    if "templates" in group_content or "defaults" in group_content:
-        defaults_raw = group_content.get("defaults", {}) or {}
-        templates_raw = group_content.get("templates", {}) or {}
-
-        if not isinstance(defaults_raw, dict):
-            raise ValueError(f"{group_name}.defaults must be a YAML object")
-
-        if not isinstance(templates_raw, dict):
-            raise ValueError(f"{group_name}.templates must be a YAML object")
-
-        defaults = normalize_rule(
-            defaults_raw,
-            f"{group_name}.defaults",
-            null_means_override_empty=False,
-        )
-
-        template_items = templates_raw.items()
-
-    # Compact format:
-    #
-    # batch:
-    #   tags: []
-    #   prefer: [server2-labo]
-    #   fallback: [fedora]
-    #   avoid: [server1-k3s-worker]
-    #
-    #   normalization:
-    #     prefer: null
-    else:
-        defaults_raw = {
-            field: group_content.get(field, [])
-            for field in FIELDS
-        }
-
-        defaults = normalize_rule(
-            defaults_raw,
-            f"{group_name}.defaults",
-            null_means_override_empty=False,
-        )
-
-        template_items = (
-            (name, value)
-            for name, value in group_content.items()
-            if name not in FIELDS
-        )
-
-    rules: dict[str, dict[str, list[str]]] = {}
-
-    for template_name, template_content in template_items:
-        if template_content is None:
-            template_content = {}
-
-        if not isinstance(template_content, dict):
-            raise ValueError(f"{group_name}.{template_name} must be a YAML object")
-
-        raw_rule = normalize_rule(
-            template_content,
-            f"{group_name}.{template_name}",
-            null_means_override_empty=True,
-        )
-
-        effective_rule = merge_rule(defaults, raw_rule)
-
-        rules[slug(template_name)] = effective_rule
-
-    return rules
-
-
 def load_scheduling_config(
-    path: Path, results_dir: Path | None = None
+    path: Path, results_dir: Path
 ) -> dict[str, dict[str, dict[str, list[str]]]]:
-    if not path.exists():
-        raise FileNotFoundError(f"Config file not found: {path}")
-
-    with path.open("r", encoding="utf-8") as file:
-        data = yaml.safe_load(file) or {}
-
-    if not isinstance(data, dict):
-        raise ValueError("scheduling.yaml root must be a YAML object")
-
-    if data.get("version") == 2:
-        data = prepare_policy_config(
-            data, path, results_dir or Path(__file__).resolve().parent.parent / "results"
-        )
-        return compile_policy_config(data)
-
-    parsed: dict[str, dict[str, dict[str, list[str]]]] = {}
-
-    for group_name, group_content in data.items():
-        parsed[slug(group_name)] = parse_group(group_name, group_content)
-
-    return parsed
+    data = load_policy_config(path)
+    data = prepare_policy_config(data, path, results_dir)
+    return compile_policy_config(data)
 
 
 def build_node_affinity(rule: dict[str, list[str]]) -> dict[str, Any] | None:
@@ -768,15 +600,6 @@ def main() -> int:
 
         warnings: list[str] = []
 
-        known_top_level_keys = {"batch", "incremental"}
-        unknown_top_level_keys = set(config.keys()) - known_top_level_keys
-
-        for key in sorted(unknown_top_level_keys):
-            warnings.append(
-                f"Unknown top-level scheduling key '{key}'. "
-                "Expected 'batch' or 'incremental'."
-            )
-
         batch_rules = config.get("batch", {})
         incremental_rules = config.get("incremental", {})
 
@@ -798,7 +621,7 @@ def main() -> int:
                     image_repository,
                 )
             else:
-                warnings.append("No 'batch' section found in scheduling.yaml")
+                warnings.append("No 'batch' section found in scheduling configuration")
 
         if args.mode in ("incremental", "all"):
             if incremental_rules:
@@ -809,7 +632,7 @@ def main() -> int:
                     image_repository,
                 )
             else:
-                warnings.append("No 'incremental' section found in scheduling.yaml")
+                warnings.append("No 'incremental' section found in scheduling configuration")
 
         print(f"Generated manifests in: {output_dir}")
 

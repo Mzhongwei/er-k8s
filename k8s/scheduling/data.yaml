@@ -1,0 +1,9 @@
+data:
+  graph_snapshot:
+    storage_class: nfs
+    size_class: GB
+    locations: [server2-labo]
+  pipeline_buffers:
+    storage_class: nfs
+    size_class: MB
+    locations: [server1-k3s-worker]
