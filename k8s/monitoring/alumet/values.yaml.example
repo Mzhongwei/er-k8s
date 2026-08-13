@@ -14,7 +14,7 @@ alumet-relay-client:
 
 alumet-relay-server:
   nodeSelector:
-    kubernetes.io/hostname: <monitoring-node>
+    kubernetes.io/hostname: server2-labo
   plugins:
     influxdb:
       enable: true
@@ -25,10 +25,10 @@ alumet-relay-server:
 influxdb2:
   enabled: true
   nodeSelector:
-    kubernetes.io/hostname: <monitoring-node>
+    kubernetes.io/hostname: server2-labo
   persistence:
     enabled: true
-    storageClass: <storage-class>
+    storageClass: nfs-client
   adminUser:
     organization: influxdata
     bucket: default

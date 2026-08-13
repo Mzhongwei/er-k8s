@@ -1,6 +1,7 @@
-# Must be supplied via --build-arg (images.sh reads image-repository.conf); no default
-# so a stale hardcoded username can't silently sneak back in.
-ARG IMAGE_REPOSITORY
+# images.sh overrides this from image-repository.conf. The deliberately unavailable
+# default keeps both FROM expressions syntactically valid for Dockerfile linting while
+# still making an invocation that omits --build-arg fail instead of using a stale image.
+ARG IMAGE_REPOSITORY=invalid.invalid/eaer
 FROM ${IMAGE_REPOSITORY}:base AS builder
 
 COPY code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-base.txt \
@@ -8,11 +9,10 @@ COPY code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-b
      /app/requirements/for_entries/
 
 RUN /opt/venv/bin/pip install --no-cache-dir \
-        -r /app/requirements/for_entries/requirements-bert.txt \
-    && /opt/venv/bin/pip uninstall -y torch torchvision torchaudio \
+        torch==2.5.1 \
+        --index-url https://download.pytorch.org/whl/cu121 \
     && /opt/venv/bin/pip install --no-cache-dir \
-        torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-        --index-url https://download.pytorch.org/whl/cu121
+        -r /app/requirements/for_entries/requirements-bert.txt
 
 FROM ${IMAGE_REPOSITORY}:base
 

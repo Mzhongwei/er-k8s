@@ -90,6 +90,7 @@ def alumet_clients() -> list[dict]:
     return [
         pod for pod in cluster_objects("pods")
         if "alumet-relay-client" in pod.get("metadata", {}).get("name", "")
+        and not pod.get("metadata", {}).get("deletionTimestamp")
     ]
 
 
@@ -110,7 +111,23 @@ def preflight() -> tuple[str, str, list[dict[str, str]]]:
     if not clients:
         raise RuntimeError(f"no Alumet relay client pods found in namespace {NAMESPACE}")
     if len(ready) != len(clients):
-        raise RuntimeError(f"only {len(ready)}/{len(clients)} Alumet relay clients are Ready")
+        details = []
+        for item in clients:
+            if is_ready(item):
+                continue
+            status = item.get("status", {})
+            restarts = sum(
+                container.get("restartCount", 0)
+                for container in status.get("containerStatuses", [])
+            )
+            details.append(
+                f"{item['metadata']['name']}@{item.get('spec', {}).get('nodeName', 'unknown')} "
+                f"phase={status.get('phase', 'unknown')} restarts={restarts}"
+            )
+        raise RuntimeError(
+            f"only {len(ready)}/{len(clients)} Alumet relay clients are Ready; "
+            f"not ready: {', '.join(details)}"
+        )
     pod = influx_pod()
     secret, _ = token_secret()
     kubectl("exec", "-n", NAMESPACE, pod, "--", "influx", "ping")
