@@ -99,34 +99,42 @@ def is_ready(pod: dict) -> bool:
     return any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
 
 
-def preflight() -> tuple[str, str, list[dict[str, str]]]:
+def client_coverage() -> tuple[list[dict], list[dict]]:
+    clients = alumet_clients()
+    ready = []
+    uncovered = []
+    for item in clients:
+        status = item.get("status", {})
+        detail = {
+            "pod": item["metadata"]["name"],
+            "node": item.get("spec", {}).get("nodeName", "unknown"),
+        }
+        if is_ready(item):
+            ready.append(detail)
+        else:
+            detail["phase"] = status.get("phase", "unknown")
+            detail["restarts"] = sum(
+                container.get("restartCount", 0)
+                for container in status.get("containerStatuses", [])
+            )
+            uncovered.append(detail)
+    return ready, uncovered
+
+
+def preflight() -> tuple[str, str, list[dict], list[dict]]:
     servers = [
         item for item in cluster_objects("deployments")
         if "alumet-relay-server" in item.get("metadata", {}).get("name", "")
     ]
     if not servers or not servers[0].get("status", {}).get("readyReplicas"):
         raise RuntimeError("Alumet relay server is not running; run 'erctl alumet start'")
-    clients = alumet_clients()
-    ready = [pod for pod in clients if is_ready(pod)]
-    if not clients:
+    ready, uncovered = client_coverage()
+    if not ready and not uncovered:
         raise RuntimeError(f"no Alumet relay client pods found in namespace {NAMESPACE}")
-    if len(ready) != len(clients):
-        details = []
-        for item in clients:
-            if is_ready(item):
-                continue
-            status = item.get("status", {})
-            restarts = sum(
-                container.get("restartCount", 0)
-                for container in status.get("containerStatuses", [])
-            )
-            details.append(
-                f"{item['metadata']['name']}@{item.get('spec', {}).get('nodeName', 'unknown')} "
-                f"phase={status.get('phase', 'unknown')} restarts={restarts}"
-            )
+    if not ready:
         raise RuntimeError(
-            f"only {len(ready)}/{len(clients)} Alumet relay clients are Ready; "
-            f"not ready: {', '.join(details)}"
+            "no Alumet relay client is Ready; "
+            + ", ".join(f"{item['pod']}@{item['node']}" for item in uncovered)
         )
     pod = influx_pod()
     secret, _ = token_secret()
@@ -139,18 +147,11 @@ def preflight() -> tuple[str, str, list[dict[str, str]]]:
     )
     if not any(True for _ in influx_rows(recent)):
         raise RuntimeError("InfluxDB has no Alumet energy measurement from the last 2 minutes")
-    client_details = [
-        {
-            "pod": item["metadata"]["name"],
-            "node": item.get("spec", {}).get("nodeName", "unknown"),
-        }
-        for item in ready
-    ]
-    return pod, secret, client_details
+    return pod, secret, ready, uncovered
 
 
 def start(run_dir: Path) -> None:
-    pod, secret, clients = preflight()
+    pod, secret, clients, uncovered = preflight()
     energy_dir = run_dir / "energy"
     energy_dir.mkdir(parents=True, exist_ok=True)
     window = {
@@ -162,11 +163,19 @@ def start(run_dir: Path) -> None:
         "organization": ORG,
         "bucket": BUCKET,
         "ready_clients": clients,
+        "uncovered_clients": uncovered,
     }
     (energy_dir / "alumet-window.json").write_text(json.dumps(window, indent=2), encoding="utf-8")
     print(f"Alumet ready ({len(clients)} client pod(s)):")
     for client in clients:
         print(f"  {client['pod']} -> {client['node']}")
+    if uncovered:
+        print("Alumet partial coverage; client(s) not Ready:")
+        for client in uncovered:
+            print(
+                f"  {client['pod']} -> {client['node']} "
+                f"phase={client['phase']} restarts={client['restarts']}"
+            )
     print(f"Results dir: {run_dir}")
 
 
@@ -354,6 +363,10 @@ def summarize(run_dir: Path, raw: str) -> bool:
     system_total = 0.0
     unknown_total = 0.0
     points = 0
+    window_path = run_dir / "energy" / "alumet-window.json"
+    window = json.loads(window_path.read_text(encoding="utf-8")) if window_path.exists() else {}
+    ready_clients = window.get("ready_clients", [])
+    uncovered_clients = window.get("uncovered_clients", [])
 
     for row in influx_rows(raw):
         metric = row.get("_measurement", "")
@@ -397,7 +410,13 @@ def summarize(run_dir: Path, raw: str) -> bool:
 
     summary = {
         "provider": "alumet",
-        "measurement_status": "complete" if points else "failed",
+        "measurement_status": "failed" if not points else (
+            "partial" if uncovered_clients else "complete"
+        ),
+        "ready_clients": ready_clients,
+        "uncovered_clients": uncovered_clients,
+        "covered_nodes": sorted({item.get("node", "unknown") for item in ready_clients}),
+        "uncovered_nodes": sorted({item.get("node", "unknown") for item in uncovered_clients}),
         "total_energy_j": round(hardware_total if hardware_total else attributed_total, 6),
         "hardware_energy_j": round(hardware_total, 6),
         "attributed_energy_j": round(attributed_total, 6),
@@ -435,6 +454,21 @@ def stop(run_dir: Path) -> None:
         raise RuntimeError(f"Alumet window not found: {path}")
     window = json.loads(path.read_text(encoding="utf-8"))
     window["ended_at"] = utc_now()
+    ended_ready, ended_uncovered = client_coverage()
+    window["ended_ready_clients"] = ended_ready
+    known_uncovered = {
+        (item.get("pod"), item.get("node")): item
+        for item in window.get("uncovered_clients", [])
+    }
+    for item in ended_uncovered:
+        known_uncovered[(item.get("pod"), item.get("node"))] = item
+    ended_ready_nodes = {item.get("node") for item in ended_ready}
+    ended_uncovered_nodes = {item.get("node") for item in ended_uncovered}
+    for item in window.get("ready_clients", []):
+        if item.get("node") not in ended_ready_nodes | ended_uncovered_nodes:
+            missing = {**item, "phase": "missing", "restarts": 0}
+            known_uncovered[(missing.get("pod"), missing.get("node"))] = missing
+    window["uncovered_clients"] = list(known_uncovered.values())
     path.write_text(json.dumps(window, indent=2), encoding="utf-8")
     # Let the relay client flush samples that already belong to the recorded window.
     time.sleep(DRAIN_SECONDS)
@@ -454,10 +488,12 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "preflight":
-            pod, secret, clients = preflight()
+            pod, secret, clients, uncovered = preflight()
             names = ",".join(f"{item['pod']}@{item['node']}" for item in clients)
+            missing = ",".join(f"{item['pod']}@{item['node']}" for item in uncovered)
             print(
                 f"ready_clients={len(clients)} clients={names} "
+                f"uncovered_clients={len(uncovered)} uncovered={missing} "
                 f"influx_pod={pod} token_secret={secret}"
             )
         elif args.command == "start":

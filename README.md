@@ -410,10 +410,11 @@ bash k8s/erctl.sh pipeline start -c <config.yaml> \
   --energy-monitor ecofloc-alumet --results-summary
 ```
 
-Selecting `alumet` or `ecofloc-alumet` requires the existing Alumet deployment to be
-actively collecting before the workload starts. Selecting `ecofloc` or
-`ecofloc-alumet` requires at least one usable EcoFLOC node. A requested backend that
-fails its preflight stops the command before any workload is submitted.
+Selecting `alumet` or `ecofloc-alumet` requires the relay server, InfluxDB, recent energy
+data, and at least one Ready Alumet client. Non-Ready clients are skipped and recorded as
+uncovered nodes with a `partial` report. Selecting `ecofloc` or `ecofloc-alumet` likewise
+requires at least one usable EcoFLOC node. A requested backend with no usable client stops
+the command before any workload is submitted.
 
 Reports are never combined or added together. EcoFLOC writes
 `energy/ecofloc-summary.json`; Alumet writes `energy/alumet-summary.json`. Joint mode

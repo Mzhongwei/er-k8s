@@ -332,6 +332,8 @@ def show(run_dir: Path) -> None:
                 f"unknown={summary.get('unknown_attributed_energy_j', 0):.3f} J  "
                 f"all={summary.get('attributed_energy_j', 0):.3f} J"
             )
+            if summary.get("uncovered_nodes"):
+                print("Uncovered nodes: " + ", ".join(summary["uncovered_nodes"]))
         else:
             print(
                 f"Energy ({provider}): {summary.get('measurement_status', 'unknown')}  "
