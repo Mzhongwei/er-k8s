@@ -9,8 +9,8 @@ COPY code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-b
      /app/requirements/for_entries/
 
 RUN /opt/venv/bin/pip install --no-cache-dir \
-        torch==2.5.1 \
-        --index-url https://download.pytorch.org/whl/cu121 \
+        torch==2.5.1+cu121 \
+        --extra-index-url https://download.pytorch.org/whl/cu121 \
     && /opt/venv/bin/pip install --no-cache-dir \
         -r /app/requirements/for_entries/requirements-bert.txt
 

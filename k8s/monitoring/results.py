@@ -26,6 +26,34 @@ PLACEMENT_FIELDS = (
 )
 
 
+def task_from_pod_name(pod: str, workflow: str) -> str:
+    name = pod.removeprefix(f"{workflow}-") if workflow else pod
+    parts = name.rsplit("-", 1)
+    return parts[0] if len(parts) == 2 and parts[1].isdigit() else name
+
+
+def workflow_tasks(namespace: str, workflow: str) -> tuple[dict[str, str], dict[str, str]]:
+    result = subprocess.run(
+        ["kubectl", "get", "workflow", "-n", namespace, workflow, "-o", "json"],
+        text=True, capture_output=True, check=True,
+    )
+    nodes = json.loads(result.stdout).get("status", {}).get("nodes", {}) or {}
+    by_pod: dict[str, str] = {}
+    by_node_name: dict[str, str] = {}
+    for node_id, node in nodes.items():
+        if node.get("type") != "Pod":
+            continue
+        task = node.get("templateName") or node.get("displayName") or ""
+        if not task:
+            continue
+        for pod_name in (node.get("podName"), node.get("id"), node_id):
+            if pod_name:
+                by_pod[pod_name] = task
+        if node.get("name"):
+            by_node_name[node["name"]] = task
+    return by_pod, by_node_name
+
+
 def energy_summary(run_dir: Path) -> None:
     energy_dir = run_dir / "energy"
     energy_dir.mkdir(parents=True, exist_ok=True)
@@ -133,10 +161,15 @@ def collect_placement(run_dir: Path, namespace: str, phase: str, workflow: str) 
         text=True, capture_output=True, check=True,
     )
     items = json.loads(result.stdout).get("items", [])
+    tasks_by_pod: dict[str, str] = {}
+    tasks_by_node_name: dict[str, str] = {}
+    if phase == "batch" and workflow:
+        tasks_by_pod, tasks_by_node_name = workflow_tasks(namespace, workflow)
     rows = []
     for pod in items:
         metadata = pod.get("metadata", {})
         labels = metadata.get("labels", {}) or {}
+        annotations = metadata.get("annotations", {}) or {}
         pod_workflow = labels.get("workflows.argoproj.io/workflow", "")
         job = labels.get("job-name", "")
         if phase == "batch":
@@ -152,10 +185,21 @@ def collect_placement(run_dir: Path, namespace: str, phase: str, workflow: str) 
              for state in [container.get("state", {})]),
             default="",
         )
+        pod_name = metadata.get("name", "")
+        node_name = annotations.get("workflows.argoproj.io/node-name", "")
+        task = (
+            tasks_by_pod.get(pod_name)
+            or tasks_by_node_name.get(node_name)
+            or labels.get("workflows.argoproj.io/template")
+            or labels.get("app")
+            or job
+        )
+        if phase == "batch" and not task:
+            task = task_from_pod_name(pod_name, workflow)
         rows.append({
             "phase": phase,
-            "task": labels.get("workflows.argoproj.io/template") or labels.get("app") or job,
-            "pod": metadata.get("name", ""),
+            "task": task,
+            "pod": pod_name,
             "node": pod.get("spec", {}).get("nodeName", ""),
             "pod_ip": status.get("podIP", ""),
             "status": status.get("phase", ""),
@@ -272,7 +316,8 @@ def show(run_dir: Path) -> None:
             placement = list(csv.DictReader(stream, delimiter="\t"))
         print(f"Placement: {len(placement)} pod(s)  file={placement_path}")
         for row in placement:
-            print(f"  {row['phase']:<11} {row['task']:<34} -> {row['node'] or '(unscheduled)'}")
+            task = row["task"] or task_from_pod_name(row["pod"], row.get("workflow", ""))
+            print(f"  {row['phase']:<11} {task:<34} -> {row['node'] or '(unscheduled)'}")
     for summary in summaries:
         provider = summary.get("provider", "ecofloc")
         if provider == "alumet":
