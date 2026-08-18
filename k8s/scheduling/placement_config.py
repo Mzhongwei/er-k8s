@@ -38,6 +38,26 @@ INCLUDE_KEYS = {
 }
 
 
+def _cpu_millicores(value: Any) -> int:
+    text = str(value or "0").strip()
+    factors = {"n": 0.000001, "u": 0.001, "m": 1.0}
+    suffix = text[-1:] if text[-1:] in factors else ""
+    number = float(text[:-1] if suffix else text)
+    return round(number * factors.get(suffix, 1000.0))
+
+
+def _memory_bytes(value: Any) -> int:
+    match = re.fullmatch(
+        r"([0-9]+(?:\.[0-9]+)?)([KMGTPE]i?|)", str(value or "0")
+    )
+    if not match:
+        raise ValueError(f"Unsupported Kubernetes memory quantity: {value}")
+    number, suffix = match.groups()
+    powers = {"": 0, "K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
+    base = 1024 if suffix.endswith("i") else 1000
+    return round(float(number) * base ** powers[suffix.removesuffix("i")])
+
+
 def load_policy_config(path: Path) -> dict[str, Any]:
     """Load one scheduling entry point and its strictly scoped YAML fragments."""
     if not path.exists():
@@ -111,16 +131,17 @@ def _strategy_names(value: Any) -> set[str]:
     return set()
 
 
-def _replace_c7(value: Any) -> None:
+def _remove_c7(value: Any) -> None:
     if not isinstance(value, dict):
         return
     for key, child in value.items():
         if key == "strategy":
             methods = child if isinstance(child, list) else [child]
             if any(str(item).upper() == "C7" for item in methods):
-                value[key] = ["B0"] if isinstance(child, list) else "B0"
+                remaining = [item for item in methods if str(item).upper() != "C7"]
+                value[key] = (remaining or ["B0"]) if isinstance(child, list) else "B0"
         elif isinstance(child, dict):
-            _replace_c7(child)
+            _remove_c7(child)
 
 
 def _nodes(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -173,10 +194,10 @@ def _apply_history(config: dict[str, Any], results_dir: Path) -> bool:
     nodes = _nodes(config)
     profiles, run_count = _historical_profiles(results_dir, set(nodes))
     if not profiles:
-        _replace_c7(config)
+        _remove_c7(config)
         print(
             f"Warning: C7 selected but no usable energy summaries were found under "
-            f"{results_dir}; falling back to B0.",
+            f"{results_dir}; removing C7 (using B0 only when no strategy remains).",
             file=sys.stderr,
         )
         return False
@@ -209,6 +230,61 @@ def _cluster_nodes() -> list[dict[str, Any]]:
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or "kubectl get nodes failed")
     return json.loads(result.stdout).get("items", [])
+
+
+def _apply_cluster_capabilities(
+    config: dict[str, Any], cluster_nodes: list[dict[str, Any]]
+) -> None:
+    """Merge Kubernetes-reported capacity and availability into configured nodes."""
+    configured = _nodes(config)
+    cluster = {
+        str(item.get("metadata", {}).get("name")): item
+        for item in cluster_nodes
+        if item.get("metadata", {}).get("name")
+    }
+    cpu: dict[str, int] = {}
+    memory: dict[str, int] = {}
+
+    for name, properties in configured.items():
+        node = cluster.get(name)
+        manually_disabled = properties.get("schedulable") is False
+        if node is None:
+            properties.update({"schedulable": False, "kubernetes_status": "not-found"})
+            continue
+
+        allocatable = node.get("status", {}).get("allocatable", {}) or {}
+        cpu_value = _cpu_millicores(allocatable.get("cpu"))
+        memory_value = _memory_bytes(allocatable.get("memory"))
+        gpu_count = int(float(allocatable.get("nvidia.com/gpu", 0)))
+        labels = node.get("metadata", {}).get("labels", {}) or {}
+        ready = any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in node.get("status", {}).get("conditions", [])
+        )
+        available = ready and not bool(node.get("spec", {}).get("unschedulable"))
+        schedulable = available and not manually_disabled
+        properties.update({
+            "cpu_allocatable_m": cpu_value,
+            "memory_allocatable_bytes": memory_value,
+            "gpu_count": gpu_count,
+            "gpu_type": labels.get(
+                "nvidia.com/gpu.product", "generic" if gpu_count else "none"
+            ),
+            "schedulable": schedulable,
+            "kubernetes_status": "ready" if available else "unavailable",
+        })
+        if schedulable:
+            cpu[name] = cpu_value
+            memory[name] = memory_value
+
+    max_cpu = max(cpu.values(), default=0)
+    max_memory = max(memory.values(), default=0)
+    for name, properties in configured.items():
+        if name in cpu:
+            properties["cpu_capacity"] = cpu[name] / max_cpu if max_cpu else 0.0
+            properties["memory_capacity"] = (
+                memory[name] / max_memory if max_memory else 0.0
+            )
 
 
 def _addresses(node: dict[str, Any]) -> tuple[str, str]:
@@ -300,13 +376,15 @@ def _ensure_zone_sources(carbon: dict[str, Any]) -> bool:
     return changed
 
 
-def _sync_carbon_config(path: Path) -> dict[str, Any]:
+def _sync_carbon_config(
+    path: Path, cluster_nodes: list[dict[str, Any]]
+) -> dict[str, Any]:
     previous = _read_yaml(path)
     old_nodes = previous.get("nodes") or {}
     geolocation_api = str(previous.get("ip_geolocation", {}).get("api_url", IP_GEOLOCATION_API))
     nodes: dict[str, dict[str, Any]] = {}
     detected_zones: set[str] = set()
-    for node in _cluster_nodes():
+    for node in cluster_nodes:
         name = str(node.get("metadata", {}).get("name", ""))
         if not name:
             continue
@@ -314,9 +392,12 @@ def _sync_carbon_config(path: Path) -> dict[str, Any]:
         old = _old_node_entry(old_nodes.get(name))
         internal_ip, external_ip = _addresses(node)
         zone, source = _detected_zone(labels, old)
-        location = _ip_location(_public_ip(external_ip, internal_ip), geolocation_api)
-        if not zone and location.get("zone"):
-            zone, source = str(location["zone"]), "public-ip-geolocation"
+        # Only hit the geolocation endpoint when the zone is still unknown; when labels or
+        # existing config already resolved it, this per-node HTTP round-trip is pure waste.
+        if not zone:
+            location = _ip_location(_public_ip(external_ip, internal_ip), geolocation_api)
+            if location.get("zone"):
+                zone, source = str(location["zone"]), "public-ip-geolocation"
         zone = zone or UNCONFIRMED_ZONE
         nodes[name] = {
             "internal_ip": internal_ip,
@@ -419,8 +500,10 @@ def _zone_intensity(zone: str, source: dict[str, Any]) -> tuple[float, str]:
     raise ValueError(f"Unsupported carbon provider for zone {zone}: {provider or 'missing'}")
 
 
-def _apply_carbon(config: dict[str, Any], path: Path) -> None:
-    _sync_carbon_config(path)
+def _apply_carbon(
+    config: dict[str, Any], path: Path, cluster_nodes: list[dict[str, Any]]
+) -> None:
+    _sync_carbon_config(path, cluster_nodes)
     carbon = _confirm_carbon(path)
     node_zones = carbon.get("nodes") or {}
     zones = carbon.get("zones") or {}
@@ -455,9 +538,13 @@ def prepare_policy_config(
 ) -> dict[str, Any]:
     """Return a resolved copy without rewriting the user's scheduling configuration."""
     resolved = copy.deepcopy(config)
-    methods = _strategy_names(resolved) or {"B0"}
+    cluster_nodes = _cluster_nodes()
+    _apply_cluster_capabilities(resolved, cluster_nodes)
+    methods = _strategy_names(resolved)
     if "C7" in methods:
         _apply_history(resolved, results_dir)
     if methods & {"H1", "C8"}:
-        _apply_carbon(resolved, config_path.parent / "carbon-intensity.yaml")
+        _apply_carbon(
+            resolved, config_path.parent / "carbon-intensity.yaml", cluster_nodes
+        )
     return resolved

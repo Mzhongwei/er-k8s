@@ -43,7 +43,7 @@ def workflow_tasks(namespace: str, workflow: str) -> tuple[dict[str, str], dict[
     for node_id, node in nodes.items():
         if node.get("type") != "Pod":
             continue
-        task = node.get("templateName") or node.get("displayName") or ""
+        task = node.get("displayName") or node.get("templateName") or ""
         if not task:
             continue
         for pod_name in (node.get("podName"), node.get("id"), node_id):
@@ -151,6 +151,7 @@ def detect_artifacts(run_dir: Path) -> dict[str, bool]:
         "energy_summary": any(energy_summary_paths(run_dir)),
         "matching_graph": graph is not None,
         "evaluation_report": report is not None,
+        "scheduling_plan": (run_dir / "scheduling-plan.tsv").exists(),
         "pod_placement": (run_dir / "placement.tsv").exists(),
     }
 
@@ -310,6 +311,22 @@ def show(run_dir: Path) -> None:
     # A Succeeded run with missing matching artifacts is an honest caveat, not a lie.
     if status == "Succeeded" and not (graph and report):
         print("Note: workload Succeeded but some matching artifacts were not saved (see manifest.artifacts).")
+    plan_path = run_dir / "scheduling-plan.tsv"
+    if plan_path.exists():
+        with plan_path.open(encoding="utf-8") as stream:
+            plan = list(csv.DictReader(stream, delimiter="\t"))
+        tasks: dict[tuple[str, str, str, str], dict[str, list[str]]] = {}
+        for row in plan:
+            key = (row["phase"], row["task"], row["strategies"], row["weights"])
+            roles = tasks.setdefault(key, defaultdict(list))
+            roles[row["role"]].append(row["node"])
+        print(f"Scheduling plan: {len(tasks)} task(s)  file={plan_path}")
+        for (phase, task, strategies, weights), roles in tasks.items():
+            preferred = roles.get("preferred") or roles.get("allowed") or []
+            detail = f"prefer={','.join(preferred) or '-'}"
+            if roles.get("fallback"):
+                detail += f" fallback={','.join(roles['fallback'])}"
+            print(f"  {phase:<11} {task:<34} [{strategies} {weights}] {detail}")
     placement_path = run_dir / "placement.tsv"
     if placement_path.exists():
         with placement_path.open(encoding="utf-8") as stream:

@@ -167,7 +167,7 @@ def adapt_once(config: dict[str, Any], args: argparse.Namespace) -> int:
     eligible = [item for item in ranking if item.eligible]
     if not eligible:
         raise RuntimeError(f"No eligible node for {args.task}")
-    if not eligible or current not in {item.node for item in eligible}:
+    if current not in {item.node for item in eligible}:
         current_score = 0.0
     else:
         current_score = next(item.score for item in eligible if item.node == current)

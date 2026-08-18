@@ -38,8 +38,8 @@ incremental:
       migratable: true
       data_ids: [pipeline_buffers]
   templates:
-    producer: {}
-    consumer: {}
+    kafka-producer: {}
+    kafka-consumer: {}
     normalization: {}
     graph-construction:
       task: {io_intensity: high, data_ids: [graph_snapshot, pipeline_buffers]}

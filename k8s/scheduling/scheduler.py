@@ -2,12 +2,14 @@
 """Small, dependency-free placement engine shared by the scheduling tools."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 
 STRATEGIES = {"B0", *(f"C{i}" for i in range(1, 9)), "H1", "H2"}
 LEVEL = {"none": 0, "low": 1, "medium": 2, "high": 3}
+RESOURCE_REQUEST = {"low": 0.0, "medium": 0.5, "high": 1.0}
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,12 @@ class Placement:
     score: float
     eligible: bool = True
     reason: str = ""
+    strategy_scores: tuple[tuple[str, float], ...] = ()
+
+
+def slug(value: str) -> str:
+    """Canonical task/rule-name normalization, shared with compiler.py."""
+    return str(value).strip().lower().replace("_", "-").replace(" ", "-")
 
 
 def _level(value: Any, default: int = 1) -> int:
@@ -35,7 +43,7 @@ def _ratio(value: Any, default: float = 0.5) -> float:
 
 
 def _gpu(node: dict[str, Any]) -> bool:
-    return str(node.get("gpu_type", "none")).lower() != "none" or bool(node.get("gpu"))
+    return float(node.get("gpu_count", 0) or 0) > 0
 
 
 def _data_objects(task: dict[str, Any], data: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -61,14 +69,14 @@ def _energy(value: Any) -> float:
 
 
 def _resource_score(task: dict[str, Any], node: dict[str, Any]) -> tuple[float, bool, str]:
-    pairs = (("cpu_request", "cpu_class"), ("memory_request", "memory_class"))
+    pairs = (("cpu_request", "cpu_capacity"), ("memory_request", "memory_capacity"))
     scores: list[float] = []
     for request_key, capacity_key in pairs:
-        requested = _level(task.get(request_key), 1)
-        capacity = _level(node.get(capacity_key), 2)
+        requested = RESOURCE_REQUEST.get(str(task.get(request_key, "low")).lower(), 0.0)
+        capacity = _ratio(node.get(capacity_key), 0.0)
         if capacity < requested:
             return 0.0, False, f"{capacity_key} below request"
-        scores.append(1.0 - abs(capacity - requested) / 3.0)
+        scores.append(1.0 - abs(capacity - requested))
     if task.get("gpu_required") and not _gpu(node):
         return 0.0, False, "GPU required"
     if str(task.get("io_intensity", "low")).lower() == "high":
@@ -128,8 +136,8 @@ def _score_one(
         deadline = str(task.get("deadline_class", "none")).lower()
         if deadline in {"none", "flexible"}:
             return 0.5, True, "no strict deadline"
-        cpu = _level(node.get("cpu_class"), 2) / 3.0
-        memory = _level(node.get("memory_class"), 2) / 3.0
+        cpu = _ratio(node.get("cpu_capacity"))
+        memory = _ratio(node.get("memory_capacity"))
         io = _level(node.get("io_class"), 1) / 3.0
         return (0.5 * cpu + 0.25 * memory + 0.25 * io), True, "deadline performance"
     if strategy == "C7":
@@ -159,7 +167,50 @@ def _strategies(value: Any) -> list[str]:
     unknown = set(result) - STRATEGIES
     if unknown:
         raise ValueError(f"Unknown strategies: {', '.join(sorted(unknown))}")
+    if len(result) != len(set(result)):
+        raise ValueError("Duplicate strategies are not allowed")
+    if "B0" in result and len(result) != 1:
+        raise ValueError("B0 is an independent baseline and cannot be composed")
     return result
+
+
+def _strategy_weights(methods: list[str], value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        raise ValueError("preferences.weights must be a mapping")
+    raw = {str(key).upper(): weight for key, weight in value.items()}
+    unknown = set(raw) - STRATEGIES
+    if unknown:
+        raise ValueError(f"Unknown strategy weights: {', '.join(sorted(unknown))}")
+    weights: dict[str, float] = {}
+    for method in methods:
+        try:
+            weight = float(raw.get(method, 1.0))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Weight for {method} must be a positive number") from error
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError(f"Weight for {method} must be a positive finite number")
+        weights[method] = weight
+    return weights
+
+
+def _normalize_scores(
+    results: dict[str, tuple[float, bool, str]],
+) -> dict[str, float]:
+    eligible = [score for score, allowed, _ in results.values() if allowed]
+    if any(not math.isfinite(score) for score in eligible):
+        raise ValueError("Strategy scores must be finite numbers")
+    if not eligible:
+        return {name: 0.0 for name in results}
+    low, high = min(eligible), max(eligible)
+    if math.isclose(low, high):
+        return {
+            name: 0.5 if allowed else 0.0
+            for name, (_, allowed, _) in results.items()
+        }
+    return {
+        name: (score - low) / (high - low) if allowed else 0.0
+        for name, (score, allowed, _) in results.items()
+    }
 
 
 def rank_nodes(
@@ -171,34 +222,43 @@ def rank_nodes(
 ) -> list[Placement]:
     """Return deterministic best-first placement candidates.
 
-    A list of strategies is a simple equal-weight composition. Ineligible in any selected
-    strategy means ineligible overall; numeric weights can be supplied in
-    preferences.weights, e.g. {C3: 2, C7: 1}.
+    Each strategy is min-max normalized across its eligible nodes before weighted
+    composition. Ineligible in any selected strategy means ineligible overall.
     """
     data = data or {}
     preferences = preferences or {}
     methods = _strategies(strategy)
-    weights = preferences.get("weights", {})
+    weights = _strategy_weights(methods, preferences.get("weights", {}))
+    by_method: dict[str, dict[str, tuple[float, bool, str]]] = {}
+    normalized: dict[str, dict[str, float]] = {}
+    for method in methods:
+        results = {
+            node_name: _score_one(method, task, node_name, node or {}, data, preferences)
+            for node_name, node in nodes.items()
+        }
+        by_method[method] = results
+        normalized[method] = _normalize_scores(results)
+
+    total_weight = sum(weights.values())
     placements: list[Placement] = []
-    for node_name, node in nodes.items():
+    for node_name in nodes:
         total = 0.0
-        total_weight = 0.0
         eligible = True
         reasons: list[str] = []
         for method in methods:
-            score, method_eligible, reason = _score_one(
-                method, task, node_name, node or {}, data, preferences
-            )
-            weight = float(weights.get(method, 1.0))
-            total += score * weight
-            total_weight += weight
+            _, method_eligible, reason = by_method[method][node_name]
+            total += normalized[method][node_name] * weights[method]
             eligible = eligible and method_eligible
             reasons.append(f"{method}: {reason}")
         placements.append(Placement(
             node=node_name,
-            score=round(total / total_weight if total_weight else 0.0, 6),
+            score=round(total / total_weight, 6),
             eligible=eligible,
             reason="; ".join(reasons),
+            strategy_scores=tuple(
+                (method, round(normalized[method][node_name], 6))
+                for method in methods
+            ),
         ))
     return sorted(placements, key=lambda item: (not item.eligible, -item.score, item.node))
 
@@ -216,13 +276,16 @@ def _objects_by_id(raw: Any, id_key: str) -> dict[str, dict[str, Any]]:
     raise ValueError(f"'{id_key.removesuffix('_id')}s' must be a mapping or list")
 
 
-def compile_policy_config(config: dict[str, Any]) -> dict[str, dict[str, dict[str, list[str]]]]:
-    """Compile version-2 preference config into compiler.py's small affinity rule form."""
+def compile_policy_config_with_plan(
+    config: dict[str, Any],
+) -> tuple[dict[str, dict[str, dict[str, list[str]]]], list[dict[str, Any]]]:
+    """Compile affinity rules and a human-readable per-task candidate plan."""
     nodes = _objects_by_id(config.get("nodes"), "node_id")
     data = _objects_by_id(config.get("data"), "data_id")
     global_strategy = config.get("strategy", "B0")
     global_preferences = config.get("preferences", {}) or {}
     output: dict[str, dict[str, dict[str, list[str]]]] = {}
+    plan: list[dict[str, Any]] = []
 
     for group_name in ("batch", "incremental"):
         group = config.get(group_name)
@@ -243,6 +306,7 @@ def compile_policy_config(config: dict[str, Any]) -> dict[str, dict[str, dict[st
             preferences.update(defaults.get("preferences", {}) or {})
             preferences.update(raw.get("preferences", {}) or {})
             methods = _strategies(method)
+            selected_weights = _strategy_weights(methods, preferences.get("weights", {}))
 
             if methods == ["B0"]:
                 # B0 leaves ranking to Kubernetes, but still honors the configured node
@@ -262,6 +326,7 @@ def compile_policy_config(config: dict[str, Any]) -> dict[str, dict[str, dict[st
                     "fallback": [],
                     "avoid": [],
                 }
+                ranking = rank_nodes(task, nodes, data, methods, preferences)
             else:
                 if not nodes:
                     raise ValueError("At least one node is required for strategies other than B0")
@@ -286,6 +351,40 @@ def compile_policy_config(config: dict[str, Any]) -> dict[str, dict[str, dict[st
                 if key in raw:
                     value = raw[key]
                     rule[key] = [str(value)] if isinstance(value, str) else list(value or [])
-            rules[str(task_name).strip().lower().replace("_", "-")] = rule
+            task_key = slug(task_name)
+            rules[task_key] = rule
+
+            required = set(rule["require"])
+            for placement in ranking:
+                allowed = placement.node in required if required else placement.eligible
+                if not allowed:
+                    role = "blocked"
+                elif placement.node in rule["prefer"]:
+                    role = "preferred"
+                elif placement.node in rule["fallback"]:
+                    role = "fallback"
+                elif placement.node in rule["avoid"]:
+                    role = "avoid"
+                else:
+                    role = "allowed"
+                reason = placement.reason
+                if any(key in raw for key in ("require", "prefer", "fallback", "avoid")):
+                    reason += "; explicit placement override"
+                plan.append({
+                    "phase": group_name,
+                    "task": task_key,
+                    "strategies": "+".join(methods),
+                    "weights": ",".join(
+                        f"{name}={selected_weights[name]:g}" for name in methods
+                    ),
+                    "strategy_scores": ",".join(
+                        f"{name}={score:g}" for name, score in placement.strategy_scores
+                    ),
+                    "node": placement.node,
+                    "score": f"{placement.score:.6f}",
+                    "eligible": str(allowed).lower(),
+                    "role": role,
+                    "reason": reason,
+                })
         output[group_name] = rules
-    return output
+    return output, plan

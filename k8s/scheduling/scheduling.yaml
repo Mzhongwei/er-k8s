@@ -1,6 +1,6 @@
 # EAER placement configuration. Change `strategy` to select one policy:
 # B0, C1, C2, C3, C4, C5, C6, C7, C8, H1, H2.
-# lists compose policies, e.g. [C3, C7].
+# Lists compose C/H policies, e.g. [C3, C7]. B0 must be used alone.
 # Every strategy honors `schedulable: false`; B0 otherwise leaves placement to Kubernetes.
 version: 2
 strategy: B0
@@ -9,7 +9,7 @@ preferences:
   allow_gpu_for_cpu: false
   migration_threshold: 0.15
   max_power_watts: 500
-  # Optional composition weights: {C3: 2, C7: 1}
+  # Optional positive composition weights: {C3: 2, C7: 1}
 
 # Relative paths are resolved from this file. This remains the only CLI entry point.
 includes:

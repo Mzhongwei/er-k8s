@@ -6,4 +6,4 @@ data:
   pipeline_buffers:
     storage_class: nfs
     size_class: MB
-    locations: [server1-k3s-worker]
+    locations: [server2-labo]

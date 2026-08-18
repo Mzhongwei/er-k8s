@@ -27,6 +27,7 @@ COMMANDS:
                   start --energy-monitor [ecofloc|alumet|ecofloc-alumet]
                                              auto-monitor energy + save under k8s/results/
                   start --results-summary  print matching, placement, and energy summary
+                  start --plan-only        show placement plan without starting workloads
     alumet      Manage the cluster-wide Alumet collector.
                   start | stop | status | retention [DURATION]
     schedule    Explain placement or run H1/H2 adaptation

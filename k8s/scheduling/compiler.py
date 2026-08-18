@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import csv
 import os
 import shutil
 import sys
@@ -12,10 +13,14 @@ from typing import Any
 import yaml
 
 from placement_config import load_policy_config, prepare_policy_config
-from scheduler import compile_policy_config
+from scheduler import compile_policy_config_with_plan, slug
 
 
 FIELDS = ("require", "tags", "prefer", "fallback", "avoid")
+PLAN_FIELDS = (
+    "phase", "task", "strategies", "weights", "strategy_scores", "node", "score",
+    "eligible", "role", "reason",
+)
 HOSTNAME_KEY = "kubernetes.io/hostname"
 
 GPU_TOLERATION = {
@@ -42,16 +47,41 @@ def literal_str_representer(dumper: yaml.Dumper, data: LiteralString):
 NoAliasSafeDumper.add_representer(LiteralString, literal_str_representer)
 
 
-def slug(value: str) -> str:
-    return str(value).strip().lower().replace("_", "-").replace(" ", "-")
 
 
-def load_scheduling_config(
+def load_scheduling_bundle(
     path: Path, results_dir: Path
-) -> dict[str, dict[str, dict[str, list[str]]]]:
+) -> tuple[dict[str, dict[str, dict[str, list[str]]]], list[dict[str, Any]]]:
     data = load_policy_config(path)
     data = prepare_policy_config(data, path, results_dir)
-    return compile_policy_config(data)
+    return compile_policy_config_with_plan(data)
+
+
+def write_plan(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=PLAN_FIELDS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def print_plan(rows: list[dict[str, Any]]) -> None:
+    print("Scheduling plan:")
+    tasks: dict[tuple[str, str, str, str], dict[str, list[str]]] = {}
+    for row in rows:
+        key = (row["phase"], row["task"], row["strategies"], row["weights"])
+        roles = tasks.setdefault(key, {})
+        roles.setdefault(row["role"], []).append(f"{row['node']}({row['score']})")
+    for (phase, task, strategies, weights), roles in tasks.items():
+        parts = [
+            f"{role}={','.join(roles[role])}"
+            for role in ("preferred", "allowed", "fallback", "avoid", "blocked")
+            if roles.get(role)
+        ]
+        print(
+            f"  {phase:<11} {task:<34} [{strategies} {weights}] "
+            + " ".join(parts)
+        )
 
 
 def build_node_affinity(rule: dict[str, list[str]]) -> dict[str, Any] | None:
@@ -588,15 +618,55 @@ def main() -> int:
     )
 
     parser.add_argument(
+        "--pipeline-mode",
+        choices=(
+            "embedding-training-inference-evaluation",
+            "bert-training-evaluation",
+        ),
+        help="Limit plan rows to tasks executed by this business pipeline mode",
+    )
+
+    parser.add_argument(
         "--print-rules",
         action="store_true",
         help="Print parsed scheduling rules",
     )
 
+    parser.add_argument(
+        "--print-plan",
+        action="store_true",
+        help="Print a compact per-task candidate summary",
+    )
+
+    parser.add_argument(
+        "--plan-output",
+        help="Write the scheduling plan as TSV",
+    )
+
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Generate the scheduling plan without writing executable manifests",
+    )
+
     args = parser.parse_args()
 
     try:
-        config = load_scheduling_config(Path(args.config).resolve(), k8s_dir / "results")
+        config, plan = load_scheduling_bundle(
+            Path(args.config).resolve(), k8s_dir / "results"
+        )
+        if args.mode != "all":
+            plan = [row for row in plan if row["phase"] == args.mode]
+        if args.pipeline_mode == "embedding-training-inference-evaluation":
+            plan = [
+                row for row in plan
+                if row["phase"] == "incremental" or not row["task"].startswith("bert-")
+            ]
+        elif args.pipeline_mode == "bert-training-evaluation":
+            plan = [
+                row for row in plan
+                if row["phase"] == "batch" and row["task"].startswith("bert-")
+            ]
 
         warnings: list[str] = []
 
@@ -608,6 +678,15 @@ def main() -> int:
             print()
             print_rules("Incremental rules:", incremental_rules)
             print()
+
+        if args.print_plan:
+            print_plan(plan)
+        if args.plan_output:
+            plan_path = Path(args.plan_output).resolve()
+            write_plan(plan_path, plan)
+            print(f"Scheduling plan saved: {plan_path}")
+        if args.plan_only:
+            return 0
 
         output_dir = Path(args.output).resolve()
         image_repository = read_image_repository(script_dir)

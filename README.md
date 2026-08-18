@@ -230,9 +230,9 @@ A private registry additionally requires Kubernetes image-pull credentials on th
 ## 6. Check scheduling strategies
 
 Use `k8s/scheduling/scheduling.yaml` as the only scheduling entry point. Select the
-strategy there, then maintain node capabilities in `nodes.yaml`, task properties in
-`workloads.yaml`, and data placement in `data.yaml`. Carbon-region confirmation is kept
-separately in `carbon-intensity.yaml`.
+strategy there, then maintain non-discoverable node properties in `nodes.yaml`, task
+properties in `workloads.yaml`, and data placement in `data.yaml`. Carbon-region
+confirmation is kept separately in `carbon-intensity.yaml`.
 
 ## 7. Check pipeline configuration file
 
@@ -307,7 +307,7 @@ includes:
 
 The included files have distinct responsibilities:
 
-- `nodes.yaml`: stable node capabilities and `schedulable` state;
+- `nodes.yaml`: storage/I/O and workload-mode properties Kubernetes cannot discover;
 - `workloads.yaml`: `batch` and `incremental` defaults and per-template task properties;
 - `data.yaml`: storage class and node locations of shared data.
 
@@ -317,13 +317,29 @@ format is supported; the previous monolithic and compact rule formats are not ac
 Select a strategy with one setting (`B0`, `C1` ... `C8`, `H1`, or `H2`). C8 is
 Carbon-Aware Placement. A strategy list such as
 `strategy: [C3, C7]` composes policies; optional `preferences.weights` controls their
-relative importance. B0 applies no scoring policy and leaves placement to the Kubernetes
-default scheduler among nodes not marked `schedulable: false`.
+relative importance. Each strategy is first min-max normalized over its eligible nodes;
+equal scores become the neutral value 0.5, then positive finite weights produce the final
+weighted average. A node rejected by any selected strategy remains ineligible regardless
+of weight. B0 is an independent baseline and cannot appear in a strategy list; it applies
+no scoring policy and leaves placement to the Kubernetes default scheduler among nodes not
+marked `schedulable: false`.
+
+Before every compile or recommendation, the scheduler reads `kubectl get nodes` and
+automatically merges each configured node's allocatable CPU, memory, NVIDIA GPU count,
+Ready state, and cordon state. CPU and memory are converted to relative
+capacities from 0 to 1 against the largest available configured node. C3 maps task requests
+to `low=0`, `medium=0.5`, and `high=1`; C6 uses the normalized values directly. A node that is
+missing, NotReady, or cordoned is excluded. Keep `schedulable: false` only when an
+otherwise healthy node must be excluded from an experiment. `io_class`, `storage_access`,
+and `workload_modes` remain explicit because Kubernetes does not expose them as standard
+allocatable resources. This discovery requires `kubectl auth can-i list nodes` to return
+`yes`.
 
 `C7` reads every usable `k8s/results/<run-id>/energy/*-summary.json`, normalizes each report's
 `by_node_j` values, and averages the relative node energy index. It falls back to B0 with a
-terminal warning when no usable history exists; manually entered historical-energy classes
-are not required.
+terminal warning when used alone and no usable history exists. In a composition, only C7
+is removed and the remaining strategies continue; manually entered historical-energy
+classes are not required.
 
 `C8` and H1 regenerate the node inventory in `k8s/scheduling/carbon-intensity.yaml` from
 `kubectl get nodes` before compilation. Existing confirmed zone choices are preserved;
@@ -357,6 +373,21 @@ nodes:
 `pipeline start` compiles this configuration into executable manifests before creating
 the workload.
 
+Preview the complete Cold Start/B0 plan without deleting PVCs, creating ConfigMaps, or
+submitting any Workflow or Job:
+
+```bash
+bash k8s/erctl.sh pipeline start \
+  -c code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml \
+  --plan-only
+```
+
+The command prints every task/node candidate and writes the latest preview to
+`k8s/pipeline/exec/scheduling-plan.tsv`. It still reads Kubernetes Nodes because CPU,
+memory, GPU, Ready, and cordon state are live scheduling inputs. C8 also retains its
+required location confirmation. A normal run creates the same plan before any destructive
+setup and copies it permanently to `k8s/results/<run-id>/scheduling-plan.tsv`.
+
 Explain a placement decision without changing the cluster:
 
 ```bash
@@ -386,6 +417,11 @@ k8s/pipeline/exec/
 ```
 
 The source manifests in k8s/pipeline/batch/ and k8s/pipeline/incremental/ are kept unchanged.
+
+`scheduling-plan.tsv` records `phase`, `task`, selected strategies and weights, each
+strategy's normalized score, every candidate node, normalized final score, eligibility,
+role (`preferred`, `fallback`, `allowed`, or `blocked`), and the strategy reasons. This is
+the pre-run plan, not a claim that Kubernetes will choose the preferred node.
 
 # Automatic energy measurement
 
@@ -558,7 +594,18 @@ indexes, communication files, and predictions are mounted separately under `/app
 and are recreated by `pipeline start`.
 
 ## Results
-All results, including, matching, Pod placement, and energy results if measured are stored under `k8s/results/<run-id>/`
+
+All results, including matching, scheduling, actual Pod placement, and measured energy are
+stored under `k8s/results/<run-id>/`:
+
+- `scheduling-plan.tsv`: pre-run strategies, weights, candidate scores, roles, and reasons;
+- `placement.tsv`: actual Pod-to-node placement, status, IP, and timestamps observed after
+  Kubernetes scheduling;
+- `matching/` and `matching-result.txt`: persisted entity-resolution outputs;
+- `energy/`: provider summaries and raw measurement data when monitoring was selected.
+
+Keeping plan and actual placement separate makes fallback decisions visible without
+changing the `placement.tsv` format consumed by the Alumet attribution code.
 
 Add `--results-archive <path-or-user@host:path>` when the run directory must also be copied
 off the control node. Archive failure is reported separately and does not change workload status.

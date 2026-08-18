@@ -74,6 +74,7 @@ PROCESS_SCRIPT="$K8S_DIR/monitoring/ecofloc/process.sh"
 ALUMET_SCRIPT="$K8S_DIR/monitoring/alumet/alumet.py"
 RESULTS_SCRIPT="$K8S_DIR/monitoring/results.py"
 SCHEDULING_COMPILER="$K8S_DIR/scheduling/compiler.py"
+SCHEDULING_PLAN_PATH="$K8S_DIR/pipeline/exec/scheduling-plan.tsv"
 
 # Root under which each run's permanent results are stored, one directory per run:
 #   k8s/results/<mode>-<timestamp>/
@@ -83,6 +84,7 @@ SCHEDULING_COMPILER="$K8S_DIR/scheduling/compiler.py"
 #     energy/alumet-raw.csv raw InfluxDB export (Alumet backend only)
 #     monitor.log          EcoFLOC coordinator diagnostics (EcoFLOC backend only)
 #     matching-result.txt  the pipeline's own [Result]/[RESULT] line
+#     scheduling-plan.tsv  strategy candidates, normalized scores, roles, and reasons
 #     placement.tsv        task Pod -> Kubernetes node mapping and timestamps
 RESULTS_DIR="$K8S_DIR/results"
 
@@ -95,6 +97,7 @@ ALUMET_MONITOR_ACTIVE=false
 # --results-summary: after the workload finishes, print the matching result (and, if energy
 #   was monitored, the energy summary). Independent of --energy-monitor. Off by default.
 RESULTS_SUMMARY=false
+PLAN_ONLY=false
 
 # --results-archive DEST (or env ERCTL_RESULTS_ARCHIVE): after the run, copy this run's
 # results dir to a durable/remote location -- a local/mounted path, or user@host:/path
@@ -128,6 +131,8 @@ Options (start):
                              alumet, or ecofloc-alumet. Also accepts --energy-monitor=TOOL.
     --results-summary        After the workload finishes, print matching, Pod placement,
                              and energy (when monitored).
+    --plan-only              Show and save the scheduling plan without creating workloads
+                             or changing PVCs, ConfigMaps, Workflows, or Jobs.
     --results-archive DEST   Copy this run's results dir to a durable/remote location after
                              the run (local/mounted path, or user@host:/path). Also settable
                              via ERCTL_RESULTS_ARCHIVE.
@@ -542,13 +547,42 @@ ensure_dataset_volume() {
 start_pipeline() {
     # Start either the batch Argo workflow or the incremental Kubernetes Jobs.
     local config_mode
+    local compiler_mode="all"
+    local compiler_args
     local workflow_status
 
     # Measure total script wall-clock time.
     script_start_time=$(date +%s)
 
-    # Generate manifests through the single scheduling.yaml entry point.
-    python3 "$SCHEDULING_COMPILER"
+    config_mode="$(extract_mode_from_config "$CONFIG_PATH")"
+    if [ -z "$config_mode" ]; then
+        echo "Unable to read mode from config file: $CONFIG_PATH"
+        exit 1
+    fi
+    case "$config_mode" in
+        "$EMBEDDING_PIPELINE_MODE") compiler_mode="all" ;;
+        "$BERT_PIPELINE_MODE") compiler_mode="batch" ;;
+        *)
+            echo "Unsupported mode in $CONFIG_PATH: $config_mode"
+            echo "Supported modes: $EMBEDDING_PIPELINE_MODE, $BERT_PIPELINE_MODE"
+            exit 1
+            ;;
+    esac
+
+    # Resolve and display the plan before any cluster mutation. The same plan is used to
+    # generate manifests and, for a real run, copied into the permanent result directory.
+    compiler_args=(
+        --mode "$compiler_mode"
+        --pipeline-mode "$config_mode"
+        --plan-output "$SCHEDULING_PLAN_PATH"
+        --print-plan
+    )
+    [ "$PLAN_ONLY" = true ] && compiler_args+=(--plan-only)
+    python3 "$SCHEDULING_COMPILER" "${compiler_args[@]}"
+    if [ "$PLAN_ONLY" = true ]; then
+        echo "Plan-only complete; no Kubernetes workload or storage resource was changed."
+        return 0
+    fi
 
     # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty
     # PVCs ready for this one. See delete_pipeline_storage() for exactly what this deletes.
@@ -557,25 +591,6 @@ start_pipeline() {
     # Create the long-lived dataset PV/PVC if needed. Re-applying is idempotent and does
     # not copy or clear any dataset files.
     ensure_dataset_volume
-
-    # Read mode from the edited config. This is now the sole source of truth for the
-    # ConfigMap contents and batch vs incremental dispatch.
-    config_mode="$(extract_mode_from_config "$CONFIG_PATH")"
-
-    # Stop early if the config has no mode field.
-    if [ -z "$config_mode" ]; then
-        echo "Unable to read mode from config file: $CONFIG_PATH"
-        exit 1
-    fi
-
-    case "$config_mode" in
-        "$EMBEDDING_PIPELINE_MODE"|"$BERT_PIPELINE_MODE") ;;
-        *)
-            echo "Unsupported mode in $CONFIG_PATH: $config_mode"
-            echo "Supported modes: $EMBEDDING_PIPELINE_MODE, $BERT_PIPELINE_MODE"
-            exit 1
-            ;;
-    esac
 
     # Delete old EAER script ConfigMaps to avoid stale mounted code, and the previous
     # pipeline config ConfigMap.
@@ -590,6 +605,7 @@ start_pipeline() {
 
     # Every run gets a result directory, even when energy monitoring is disabled.
     start_run "$config_mode"
+    cp "$SCHEDULING_PLAN_PATH" "$RUN_DIR/scheduling-plan.tsv"
 
     # Start the background energy monitor (no-op unless --energy-monitor) so it covers the
     # whole workload -- both the batch Argo phase and the incremental worker phase.
@@ -812,6 +828,10 @@ if [ "$ACTION" = "start" ]; then
                 RESULTS_SUMMARY=true
                 shift
                 ;;
+            --plan-only)
+                PLAN_ONLY=true
+                shift
+                ;;
             --results-archive)
                 if [ $# -lt 2 ]; then
                     echo "Missing value for --results-archive. Expected a path or user@host:/path."
@@ -854,17 +874,17 @@ if [ "$ACTION" = "start" ]; then
     # Required for Kubernetes resource operations.
     require_cmd kubectl
 
-    # Required for submitting/stopping/terminating Argo workflows.
-    require_cmd argo
-
-    # Required by helper functions in this script.
-    require_cmd awk
-
     # Required to check the batch workflow's final status.
     require_cmd python3
+    require_cmd awk
+
+    if [ "$PLAN_ONLY" = false ]; then
+        # Required for submitting and observing Argo workflows.
+        require_cmd argo
+    fi
 
     # The energy monitor engine must exist when --energy-monitor is requested.
-    if [ "$ENERGY_MONITOR" = true ]; then
+    if [ "$PLAN_ONLY" = false ] && [ "$ENERGY_MONITOR" = true ]; then
         case "$ENERGY_MONITOR_TOOL" in
             ecofloc)
                 [ -f "$PROCESS_SCRIPT" ] || { echo "Energy monitor engine not found: $PROCESS_SCRIPT"; exit 1; }
@@ -884,8 +904,10 @@ if [ "$ACTION" = "start" ]; then
     fi
 
     # Execute the full start workflow.
-    trap 'interrupt_pipeline 130' INT
-    trap 'interrupt_pipeline 143' TERM
+    if [ "$PLAN_ONLY" = false ]; then
+        trap 'interrupt_pipeline 130' INT
+        trap 'interrupt_pipeline 143' TERM
+    fi
     start_pipeline
 elif [ "$ACTION" = "stop" ]; then
     # Stop accepts no extra arguments.
