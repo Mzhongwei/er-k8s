@@ -13,8 +13,6 @@ spec:
   ttlStrategy:
     secondsAfterSuccess: 3600 # 1 hour
     secondsAfterFailure: 86400 # 1 day
-  artifactGC:
-    strategy: OnWorkflowCompletion
   arguments:
     parameters:
     - name: mode

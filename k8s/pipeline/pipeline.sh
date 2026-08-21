@@ -289,6 +289,10 @@ delete_pipeline_storage() {
     local pvc_name
     local pvc_ref
     local pipeline_pvcs=()
+    local workflow_name
+    local workflow_state
+    local pipeline_workflows=()
+    local pipeline_workflow_refs=()
 
     # Use the manifest directory as the single source of truth for owned claim names.
     while IFS= read -r pvc_manifest; do
@@ -302,8 +306,8 @@ delete_pipeline_storage() {
         pipeline_pvcs+=("pvc/$pvc_name")
     done < <(find "$PVC_MANIFESTS" -maxdepth 1 -type f -name '*.yaml' -print | sort)
 
-    # `timeout 5` keeps deletion of disposable Pods/Workflows best-effort; `xargs -r`
-    # skips running kubectl when nothing matched.
+    # Pod cleanup is best-effort. Workflow deletion excludes objects already terminating
+    # and waits for newly requested deletions so a stuck finalizer is reported only once.
     #
     # PVC deletion is intentionally different: it must finish before manifests with the
     # same claim names are applied again. Previously the client was killed after five
@@ -312,7 +316,28 @@ delete_pipeline_storage() {
     # workload Pods Pending with "persistentvolumeclaim ... not found".
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs -r kubectl delete -n "$NAMESPACE" || true
     kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
-    timeout 5 kubectl get wf -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name | grep '^pipeline-' | xargs -r argo delete -n "$NAMESPACE" || true
+    while IFS= read -r workflow_name; do
+        [ -n "$workflow_name" ] || continue
+        pipeline_workflows+=("$workflow_name")
+        pipeline_workflow_refs+=("workflow/$workflow_name")
+    done < <(
+        timeout 5 kubectl get wf -n "$NAMESPACE" \
+            -o go-template='{{range .items}}{{if not .metadata.deletionTimestamp}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' \
+            | grep '^pipeline-' || true
+    )
+    if [ "${#pipeline_workflows[@]}" -gt 0 ] && ! kubectl delete -n "$NAMESPACE" \
+        "${pipeline_workflow_refs[@]}" --wait=true --timeout=60s; then
+        echo "Unable to finish deleting old pipeline Workflows." >&2
+        for workflow_name in "${pipeline_workflows[@]}"; do
+            workflow_state="$(
+                kubectl get wf -n "$NAMESPACE" "$workflow_name" \
+                    -o jsonpath='deleting={.metadata.deletionTimestamp} finalizers={.metadata.finalizers}' \
+                    2>/dev/null || true
+            )"
+            [ -n "$workflow_state" ] && echo "  $workflow_name: $workflow_state" >&2
+        done
+        return 1
+    fi
     if [ "${#pipeline_pvcs[@]}" -gt 0 ]; then
         kubectl delete -n "$NAMESPACE" "${pipeline_pvcs[@]}" \
             --ignore-not-found=true \
