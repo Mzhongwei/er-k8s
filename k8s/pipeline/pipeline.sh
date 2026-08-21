@@ -394,8 +394,19 @@ start_run() {
     trap stop_energy_monitor_on_exit EXIT
 }
 
+show_ecofloc_preflight_diagnostics() {
+    [ -f "$RUN_DIR/energy/agents.tsv" ] && cat "$RUN_DIR/energy/agents.tsv" >&2
+    local log
+    for log in "$RUN_DIR"/energy/*-agent.log "$RUN_DIR"/energy/logs/*/preflight.log; do
+        [ -s "$log" ] || continue
+        echo "--- ${log#"$RUN_DIR"/} ---" >&2
+        cat "$log" >&2
+    done
+}
+
 start_energy_monitor() {
-    # Every requested backend must be ready before workload Pods are created.
+    # Every requested backend must be ready before workload Pods are created. EcoFLOC is
+    # stricter than Alumet: every node listed in energy-nodes.conf must pass preflight.
     [ "$ENERGY_MONITOR" = true ] || return 0
 
     if [ "$ENERGY_MONITOR_TOOL" = "alumet" ] || [ "$ENERGY_MONITOR_TOOL" = "ecofloc-alumet" ]; then
@@ -438,6 +449,7 @@ start_energy_monitor() {
             reap_monitor "$MONITOR_PID"
             MONITOR_PID=""
             ECOFLOC_MONITOR_ACTIVE=false
+            show_ecofloc_preflight_diagnostics
             return 1
         fi
         sleep 0.2
@@ -452,10 +464,11 @@ start_energy_monitor() {
         echo "EcoFLOC ready (measuring $ready_nodes node(s)): $active_nodes"
         echo "Results dir: $RUN_DIR"
     else
-        echo "EcoFLOC has no usable node; pipeline will not start." >&2
+        echo "EcoFLOC preflight did not pass on every configured node; pipeline will not start." >&2
         reap_monitor "$MONITOR_PID"
         MONITOR_PID=""
         ECOFLOC_MONITOR_ACTIVE=false
+        show_ecofloc_preflight_diagnostics
         return 1
     fi
 }

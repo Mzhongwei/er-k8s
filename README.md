@@ -447,10 +447,11 @@ bash k8s/erctl.sh pipeline start -c <config.yaml> \
 ```
 
 Selecting `alumet` or `ecofloc-alumet` requires the relay server, InfluxDB, recent energy
-data, and at least one Ready Alumet client. Non-Ready clients are skipped and recorded as
-uncovered nodes with a `partial` report. Selecting `ecofloc` or `ecofloc-alumet` likewise
-requires at least one usable EcoFLOC node. A requested backend with no usable client stops
-the command before any workload is submitted.
+data, and at least one Ready Alumet client. Non-Ready Alumet clients are recorded as
+uncovered nodes with a `partial` report. EcoFLOC uses strict preflight: every node listed in
+`energy-nodes.conf` must provide non-interactive SSH when applicable, passwordless EcoFLOC,
+and a positive CPU measurement. Any failed or timed-out EcoFLOC node stops the command
+before workload submission.
 
 Reports are never combined or added together. EcoFLOC writes
 `energy/ecofloc-summary.json`; Alumet writes `energy/alumet-summary.json`. Joint mode
@@ -474,22 +475,24 @@ interactively if needed, then verify non-interactive SSH and passwordless EcoFLO
 ssh -o BatchMode=yes user@node true
 ```
 
-Test a live PID on each node:
+Test a CPU-active PID on each node:
 
 ```bash
-sleep 10 & PID=$!
+bash -c 'end=$((SECONDS + 10)); while (( SECONDS < end )); do :; done' & PID=$!
 sudo -n /usr/local/bin/ecofloc --cpu -p "$PID" -i 1000 -t 2
 wait "$PID"
 ```
 or
 ```bash
-sleep 10 & PID=$!
+bash -c 'end=$((SECONDS + 10)); while (( SECONDS < end )); do :; done' & PID=$!
 sudo -n /bin/execute ecofloc --cpu -p "$PID" -i 1000 -t 2
 wait "$PID"
 ```
 
 The output must contain `Average Power` and `Total Energy` and must not contain
-`CLOSED OR INEXISTENT`. The pipeline performs the same functional preflight and skips a node whose executable starts but cannot measure the PID.
+`CLOSED OR INEXISTENT`; both numeric values must be greater than zero. The pipeline performs
+the same functional preflight on every configured node. Agent stderr is saved as
+`k8s/results/<run-id>/energy/<node>-agent.log` for startup debugging.
 
 The current EcoFLOC collector runs on the control host (`local`) or through SSH (`ssh` and
 two-hop `vm`). Kubernetes API access alone is not host measurement access: a VM without an

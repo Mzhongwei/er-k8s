@@ -152,6 +152,7 @@ parse_log() {
 agent_main() {
   local node="" sudo_mode="" stop_path="" vm=false
   local sessions rows finished log_dir connector_pid="" finalized=false
+  local parsed avg total status test_pid
   while [ $# -gt 0 ]; do
     case "$1" in
       --node) node="$2"; shift 2 ;;
@@ -216,18 +217,29 @@ agent_main() {
   trap finalize_all EXIT
   trap 'exit 0' INT TERM HUP
 
-  # Preflight both sudo access and actual PID measurement. EcoFLOC may exit zero even when
-  # it reports "PID ... CLOSED OR INEXISTENT", which is not a usable measurement.
-  sleep 10 &
+  # Use real CPU work: a sleeping PID can legitimately report 0 J and therefore cannot
+  # prove that this host supports usable EcoFLOC CPU measurements.
+  bash -c 'end=$((SECONDS + 10)); while (( SECONDS < end )); do :; done' &
   test_pid="$!"
-  if ! "${ecofloc_cmd[@]}" --cpu -p "$test_pid" -i 1000 -t 2 > "$log_dir/preflight.log" 2>&1 \
-      || grep -qiE 'CLOSED OR INEXISTENT|inexistent' "$log_dir/preflight.log" \
-      || [ "$(parse_log "$log_dir/preflight.log" | awk -F'|' '{print $3}')" != "ok" ]; then
+  if ! "${ecofloc_cmd[@]}" --cpu -p "$test_pid" -i 1000 -t 2 > "$log_dir/preflight.log" 2>&1; then
     kill "$test_pid" 2>/dev/null || true
-    echo "EcoFLOC preflight produced no usable measurement on $node" >&2
+    wait "$test_pid" 2>/dev/null || true
+    echo "EcoFLOC preflight command failed on $node" >&2
+    exit 1
+  fi
+  parsed="$(parse_log "$log_dir/preflight.log")"
+  IFS='|' read -r avg total status <<< "$parsed"
+  if grep -qiE 'CLOSED OR INEXISTENT|inexistent' "$log_dir/preflight.log" \
+      || [ "$status" != "ok" ] \
+      || ! awk -v avg="$avg" -v total="$total" \
+          'BEGIN { exit !(avg + 0 > 0 && total + 0 > 0) }'; then
+    kill "$test_pid" 2>/dev/null || true
+    wait "$test_pid" 2>/dev/null || true
+    echo "EcoFLOC preflight produced no positive CPU measurement on $node" >&2
     exit 1
   fi
   kill "$test_pid" 2>/dev/null || true
+  wait "$test_pid" 2>/dev/null || true
   printf 'READY\t%s\n' "$node"
 
   while [ ! -f "$stop_path" ]; do
@@ -268,7 +280,7 @@ agent_main() {
 
 coordinator_main() {
   local fifo remote_script remote_stop ready_count=0 stop_sent=false alive
-  local processes_file sessions_file agents_file ready_signalled=false dead_count=0 pending
+  local processes_file sessions_file agents_file ready_signalled=false dead_count=0 pending total_nodes
   local -a child_pids=() child_nodes=()
   local -A ready_map=() dead_map=() configured_names=()
 
@@ -292,6 +304,7 @@ coordinator_main() {
   printf 'node\tpid\tprocess_start\tpod_uid\tcontainer_id\ttask\tcommand\n' > "$processes_file"
   printf 'node\tpid\tprocess_start\tpod_uid\tcontainer_id\tmetric\taverage_power_w\ttotal_energy_j\tstatus\tstarted_at\tended_at\ttask\n' > "$sessions_file"
   printf 'node\tstatus\n' > "$agents_file"
+  total_nodes="${#NODES[@]}"
   fifo="$(mktemp -u)"
   mkfifo "$fifo"
   exec 3<> "$fifo"
@@ -323,12 +336,14 @@ coordinator_main() {
       local)
         bash "$0" __agent__ --node "$name" --sudo-mode "$mode" --run-id "$RUN_ID" \
           --stop-file "$remote_stop" --metrics "$METRICS" --scan-interval "$SCAN_INTERVAL" \
-          --ecofloc-interval "$ECOFLOC_INTERVAL" $k8s_flag >&3 &
+          --ecofloc-interval "$ECOFLOC_INTERVAL" $k8s_flag \
+          >&3 2>"$RESULT_DIR/${name}-agent.log" &
         child_pids+=("$!"); child_nodes+=("$name")
         ;;
       ssh)
         if ssh "${SSH_OPTS[@]}" "$target" "cat > '$remote_script' && chmod +x '$remote_script'" < "$0" 2>/dev/null; then
-          ssh "${SSH_OPTS[@]}" "$target" "exec bash '$remote_script' __agent__ --node '$name' --sudo-mode '$mode' --run-id '$RUN_ID' --stop-file '$remote_stop' --metrics '$METRICS' --scan-interval '$SCAN_INTERVAL' --ecofloc-interval '$ECOFLOC_INTERVAL' $k8s_flag" >&3 &
+          ssh "${SSH_OPTS[@]}" "$target" "exec bash '$remote_script' __agent__ --node '$name' --sudo-mode '$mode' --run-id '$RUN_ID' --stop-file '$remote_stop' --metrics '$METRICS' --scan-interval '$SCAN_INTERVAL' --ecofloc-interval '$ECOFLOC_INTERVAL' $k8s_flag" \
+            >&3 2>"$RESULT_DIR/${name}-agent.log" &
           child_pids+=("$!"); child_nodes+=("$name")
         else
           echo "[warn] cannot reach node $name ($target); skipping it" >&2
@@ -337,7 +352,8 @@ coordinator_main() {
         ;;
       vm)
         if ssh "${SSH_OPTS[@]}" "$target" "ssh -o ConnectTimeout=5 -o BatchMode=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=2 vm \"cat > '$remote_script' && chmod +x '$remote_script'\"" < "$0" 2>/dev/null; then
-          ssh "${SSH_OPTS[@]}" "$target" "ssh -o ConnectTimeout=5 -o BatchMode=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=2 vm \"exec bash '$remote_script' __agent__ --vm --node '$name' --sudo-mode '$mode' --run-id '$RUN_ID' --stop-file '$remote_stop' --metrics '$METRICS' --scan-interval '$SCAN_INTERVAL' --ecofloc-interval '$ECOFLOC_INTERVAL' $k8s_flag\"" >&3 &
+          ssh "${SSH_OPTS[@]}" "$target" "ssh -o ConnectTimeout=5 -o BatchMode=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=2 vm \"exec bash '$remote_script' __agent__ --vm --node '$name' --sudo-mode '$mode' --run-id '$RUN_ID' --stop-file '$remote_stop' --metrics '$METRICS' --scan-interval '$SCAN_INTERVAL' --ecofloc-interval '$ECOFLOC_INTERVAL' $k8s_flag\"" \
+            >&3 2>"$RESULT_DIR/${name}-agent.log" &
           child_pids+=("$!"); child_nodes+=("$name")
         else
           echo "[warn] cannot reach VM node $name ($target); skipping it" >&2
@@ -414,11 +430,16 @@ coordinator_main() {
       fi
     done
 
-    # READY_FILE carries the number of live agents after every configured node has resolved.
+    # Strict preflight: every configured node must be Ready before workload creation. An
+    # unreachable or failed node produces 0 even if some other agents passed.
     if [ "$ready_signalled" = false ]; then
       pending=$(( ${#child_pids[@]} - ready_count - dead_count ))
       if [ "$pending" -le 0 ]; then
-        printf '%s\n' "$ready_count" > "$READY_FILE"
+        if [ "$ready_count" -eq "$total_nodes" ]; then
+          printf '%s\n' "$ready_count" > "$READY_FILE"
+        else
+          printf '0\n' > "$READY_FILE"
+        fi
         ready_signalled=true
       fi
     fi
