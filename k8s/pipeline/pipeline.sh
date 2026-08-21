@@ -192,6 +192,7 @@ wait_for_incremental_jobs() {
     local complete_status
     local failed_status
     local job_name
+    local migrating_jobs
     local job_names=(
         calculating-similarity
         candidate-enumeration
@@ -208,8 +209,16 @@ wait_for_incremental_jobs() {
 
     while true; do
         all_complete=true
+        migrating_jobs="$(
+            kubectl get configmap -n "$NAMESPACE" -l 'eaer.er/migration=true' \
+                -o jsonpath='{range .items[*]}{.data.job}{"\n"}{end}' 2>/dev/null || true
+        )"
 
         for job_name in "${job_names[@]}"; do
+            if grep -Fqx "$job_name" <<< "$migrating_jobs"; then
+                all_complete=false
+                continue
+            fi
             if ! kubectl get job -n "$NAMESPACE" "$job_name" >/dev/null 2>&1; then
                 echo "Incremental worker job/$job_name was deleted; stopping local execution." >&2
                 return 1

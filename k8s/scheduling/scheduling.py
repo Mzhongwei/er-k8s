@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,9 @@ import yaml
 
 from placement_config import load_policy_config, prepare_policy_config
 from scheduler import rank_nodes
+
+MIGRATION_LABEL = "eaer.er/migration"
+MIGRATION_MARKER_PREFIX = "eaer-hot-migration-"
 
 
 def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -88,7 +93,7 @@ def pod_for_task(task: str, namespace: str) -> dict[str, Any] | None:
     return running[0] if running else None
 
 
-def recreate_job(pod: dict[str, Any], node: str, namespace: str) -> None:
+def job_manifest(pod: dict[str, Any]) -> tuple[str, dict[str, Any], Path]:
     job_name = next(
         (owner.get("name") for owner in pod.get("metadata", {}).get("ownerReferences", [])
          if owner.get("kind") == "Job" and owner.get("name")),
@@ -111,24 +116,181 @@ def recreate_job(pod: dict[str, Any], node: str, namespace: str) -> None:
         raise RuntimeError(
             f"Generated manifest for Job '{job_name}' not found; run pipeline start first"
         )
+    return job_name, job, manifest_path
 
-    pod_spec = job["spec"]["template"]["spec"]
+
+def apply_document(document: dict[str, Any], namespace: str) -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as stream:
+        yaml.safe_dump(document, stream, sort_keys=False)
+        stream.flush()
+        result = run(["kubectl", "apply", "-f", stream.name, "-n", namespace], check=False)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+
+
+def marker_name(job_name: str) -> str:
+    safe = re.sub(r"[^a-z0-9-]", "-", job_name.lower()).strip("-")
+    return f"{MIGRATION_MARKER_PREFIX}{safe}"[:63].rstrip("-")
+
+
+def set_migration_marker(job_name: str, source: str, target: str, namespace: str) -> str:
+    name = marker_name(job_name)
+    apply_document({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": name, "labels": {MIGRATION_LABEL: "true"}},
+        "data": {"job": job_name, "source": source, "target": target},
+    }, namespace)
+    return name
+
+
+def delete_migration_marker(name: str, namespace: str) -> None:
+    run(["kubectl", "delete", "configmap", name, "-n", namespace,
+         "--ignore-not-found=true", "--wait=false"], check=False)
+
+
+def wait_for_pod(pod_name: str, namespace: str, timeout: int) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = run(["kubectl", "get", "pod", pod_name, "-n", namespace, "-o", "json"], check=False)
+        if result.returncode == 0:
+            pod = json.loads(result.stdout)
+            phase = pod.get("status", {}).get("phase")
+            if phase == "Succeeded":
+                return
+            if phase == "Failed":
+                raise RuntimeError(f"image pre-pull Pod {pod_name} failed")
+        time.sleep(1)
+    raise RuntimeError(f"image pre-pull Pod {pod_name} did not finish within {timeout}s")
+
+
+def pre_pull_image(job: dict[str, Any], task: str, node: str, namespace: str, timeout: int) -> None:
+    template_spec = job["spec"]["template"]["spec"]
+    container = template_spec["containers"][0]
+    suffix = str(time.time_ns())[-8:]
+    pod_name = f"eaer-prepull-{re.sub(r'[^a-z0-9-]', '-', task.lower())}-{suffix}"[:63].rstrip("-")
+    pod_spec: dict[str, Any] = {
+        "nodeName": node,
+        "restartPolicy": "Never",
+        "containers": [{
+            "name": "pull",
+            "image": container["image"],
+            "imagePullPolicy": container.get("imagePullPolicy", "IfNotPresent"),
+            "command": ["/bin/sh", "-c", "true"],
+        }],
+    }
+    if template_spec.get("imagePullSecrets"):
+        pod_spec["imagePullSecrets"] = copy.deepcopy(template_spec["imagePullSecrets"])
+    if template_spec.get("serviceAccountName"):
+        pod_spec["serviceAccountName"] = template_spec["serviceAccountName"]
+    if template_spec.get("tolerations"):
+        pod_spec["tolerations"] = copy.deepcopy(template_spec["tolerations"])
+    pod = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": pod_name, "labels": {"app": "eaer-image-prepull"}},
+        "spec": pod_spec,
+    }
+    print(f"pre-pull: {container['image']} on {node}")
+    try:
+        apply_document(pod, namespace)
+        wait_for_pod(pod_name, namespace, timeout)
+    finally:
+        run(["kubectl", "delete", "pod", pod_name, "-n", namespace,
+             "--ignore-not-found=true", "--wait=false"], check=False)
+
+
+def request_window_boundary_stop(pod: dict[str, Any], namespace: str) -> None:
+    pod_name = pod["metadata"]["name"]
+    result = run([
+        "kubectl", "exec", "-n", namespace, pod_name, "-c", "main", "--",
+        "/bin/sh", "-c", "kill -TERM 1",
+    ], check=False)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or f"failed to signal Pod {pod_name}")
+
+
+def wait_for_job_complete(job_name: str, namespace: str, timeout: int) -> None:
+    deadline = time.monotonic() + timeout if timeout > 0 else None
+    while deadline is None or time.monotonic() < deadline:
+        result = run(["kubectl", "get", "job", job_name, "-n", namespace, "-o", "json"], check=False)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or f"Job {job_name} disappeared while draining")
+        job = json.loads(result.stdout)
+        conditions = {
+            item.get("type"): item.get("status")
+            for item in job.get("status", {}).get("conditions", [])
+        }
+        if conditions.get("Complete") == "True":
+            return
+        if conditions.get("Failed") == "True":
+            raise RuntimeError(f"Job {job_name} failed while waiting for its mini-batch boundary")
+        time.sleep(1)
+    raise RuntimeError(f"Job {job_name} did not reach a mini-batch boundary within {timeout}s")
+
+
+def wait_for_replacement(job_name: str, node: str, namespace: str, timeout: int) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = run([
+            "kubectl", "get", "pods", "-n", namespace, "-l", f"job-name={job_name}",
+            "-o", "json",
+        ], check=False)
+        if result.returncode == 0:
+            for pod in json.loads(result.stdout).get("items", []):
+                if pod.get("metadata", {}).get("deletionTimestamp"):
+                    continue
+                assigned = pod.get("spec", {}).get("nodeName")
+                phase = pod.get("status", {}).get("phase")
+                if phase == "Failed":
+                    raise RuntimeError(f"replacement Pod for {job_name} failed on {assigned}")
+                if assigned == node and phase in {"Running", "Succeeded"}:
+                    return
+        time.sleep(1)
+    raise RuntimeError(f"replacement Job {job_name} was not running on {node} within {timeout}s")
+
+
+def recreate_job_at_boundary(
+    pod: dict[str, Any], node: str, namespace: str, pull_timeout: int, drain_timeout: int
+) -> None:
+    job_name, source_job, manifest_path = job_manifest(pod)
+    current = pod.get("spec", {}).get("nodeName", "")
+    replacement = copy.deepcopy(source_job)
+
+    pod_spec = replacement["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+    env = container.get("env") or []
+    if not isinstance(env, list):
+        raise RuntimeError(f"Job {job_name} container env must be a list")
+    container["env"] = env
+    hot_restart = next((item for item in env if item.get("name") == "EAER_HOT_RESTART"), None)
+    if hot_restart is None:
+        env.append({"name": "EAER_HOT_RESTART", "value": "true"})
+    else:
+        hot_restart["value"] = "true"
     affinity = pod_spec.setdefault("affinity", {}).setdefault("nodeAffinity", {})
     affinity["requiredDuringSchedulingIgnoredDuringExecution"] = {
         "nodeSelectorTerms": [{
             "matchFields": [{"key": "metadata.name", "operator": "In", "values": [node]}]
         }]
     }
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as stream:
-        yaml.safe_dump(job, stream, sort_keys=False)
-        stream.flush()
-        deleted = run(["kubectl", "delete", "job", job_name, "-n", namespace], check=False)
+    marker = set_migration_marker(job_name, current, node, namespace)
+    try:
+        pre_pull_image(source_job, job_name, node, namespace, pull_timeout)
+        print(f"drain: waiting for {job_name} to finish its current mini-batch on {current}")
+        request_window_boundary_stop(pod, namespace)
+        wait_for_job_complete(job_name, namespace, drain_timeout)
+        deleted = run([
+            "kubectl", "delete", "job", job_name, "-n", namespace,
+            "--wait=true", "--timeout=60s",
+        ], check=False)
         if deleted.returncode:
-            raise RuntimeError(deleted.stderr.strip())
-        applied = run(["kubectl", "apply", "-f", stream.name, "-n", namespace], check=False)
-        if applied.returncode:
-            raise RuntimeError(applied.stderr.strip())
-    print(f"Recreated Job {job_name} on {node} using {manifest_path}")
+            raise RuntimeError(deleted.stderr.strip() or f"failed to delete drained Job {job_name}")
+        apply_document(replacement, namespace)
+        wait_for_replacement(job_name, node, namespace, pull_timeout)
+    finally:
+        delete_migration_marker(marker, namespace)
+    print(f"migrated Job {job_name}: {current} -> {node}; manifest={manifest_path}")
 
 
 def recommend(
@@ -181,7 +343,9 @@ def adapt_once(config: dict[str, Any], args: argparse.Namespace) -> int:
     if not args.apply:
         print(f"recommend move to {best.node}; add --apply to recreate the Job")
         return 0
-    recreate_job(pod, best.node, args.namespace)
+    recreate_job_at_boundary(
+        pod, best.node, args.namespace, args.pull_timeout, args.drain_timeout
+    )
     return 0
 
 
@@ -199,9 +363,17 @@ def main() -> int:
     adapt.add_argument("task")
     adapt.add_argument("--group", choices=("batch", "incremental"), default="incremental")
     adapt.add_argument("--namespace", default="argo")
-    adapt.add_argument("--apply", action="store_true", help="recreate the Job on the selected node")
+    adapt.add_argument(
+        "--apply", action="store_true",
+        help="pre-pull the image, drain the current mini-batch, and move the Job",
+    )
     adapt.add_argument("--metrics", help="YAML/JSON node metrics (e.g. power_watts for H1)")
     adapt.add_argument("--watch", type=int, metavar="SECONDS", help="repeat at this interval")
+    adapt.add_argument("--pull-timeout", type=int, default=300, metavar="SECONDS")
+    adapt.add_argument(
+        "--drain-timeout", type=int, default=0, metavar="SECONDS",
+        help="maximum mini-batch drain time; 0 waits until the boundary (default)",
+    )
     args = parser.parse_args()
     try:
         config = load_config(Path(args.config))

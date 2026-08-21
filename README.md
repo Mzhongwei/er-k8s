@@ -252,7 +252,7 @@ bash k8s/erctl.sh pipeline start \
 In another terminal, observe Jobs and Pods:
 
 ```bash
-kubectl get jobs,pods -n argo -w
+kubectl get pods -n argo -w
 ```
 
 # Usage
@@ -407,8 +407,24 @@ bash k8s/erctl.sh schedule adapt random-walk --group incremental
 bash k8s/erctl.sh schedule adapt random-walk --group incremental --apply
 ```
 
-`--apply` is limited to tasks explicitly marked `migratable: true`; it recreates the
-Kubernetes Job, so application state must be stored in a PVC/checkpoint.
+`--apply` is limited to tasks explicitly marked `migratable: true`. Hot migration first
+starts a short-lived Pod on the target node to pull the task image. It then sends SIGTERM
+to the current worker; incremental workers finish the mini-batch already in progress and
+exit before the Job is recreated on the target node. The replacement continues from the
+shared PVC buffers and waits indefinitely for the next buffer or EOS instead of reapplying
+the initial startup timeout. The pipeline wait loop recognizes the temporary migration marker and
+does not mistake the drained Job for stream completion. `kafka-producer` and
+`kafka-consumer` are not migratable because their source position or partial in-memory
+window cannot yet be restored safely.
+
+The image-pull timeout is 300 seconds. Mini-batch draining has no timeout by default: the
+migration follows worker completion rather than elapsed time. An optional upper bound can
+be set for a manual migration:
+
+```bash
+bash k8s/erctl.sh schedule adapt random-walk --group incremental --apply \
+  --pull-timeout 600 --drain-timeout 3600
+```
 
 The compiler writes generated manifests into:
 
