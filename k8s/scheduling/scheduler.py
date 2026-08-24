@@ -284,6 +284,18 @@ def compile_policy_config_with_plan(
     data = _objects_by_id(config.get("data"), "data_id")
     global_strategy = config.get("strategy", "B0")
     global_preferences = config.get("preferences", {}) or {}
+    temporary = config.get("temporary_placement", {}) or {}
+    if not isinstance(temporary, dict):
+        raise ValueError("temporary_placement must be a mapping")
+    unknown_temporary = set(temporary) - {"enabled", "batch", "incremental"}
+    if unknown_temporary:
+        raise ValueError(
+            "Unexpected temporary_placement key(s): "
+            + ", ".join(sorted(unknown_temporary))
+        )
+    temporary_enabled = temporary.get("enabled", False)
+    if not isinstance(temporary_enabled, bool):
+        raise ValueError("temporary_placement.enabled must be true or false")
     output: dict[str, dict[str, dict[str, list[str]]]] = {}
     plan: list[dict[str, Any]] = []
 
@@ -295,6 +307,20 @@ def compile_policy_config_with_plan(
         templates = group.get("templates", {}) or {}
         if not isinstance(templates, dict):
             raise ValueError(f"{group_name}.templates must be a mapping")
+        raw_overrides = temporary.get(group_name, {}) or {}
+        if not isinstance(raw_overrides, dict):
+            raise ValueError(f"temporary_placement.{group_name} must be a mapping")
+        overrides = {
+            slug(name): str(node)
+            for name, node in raw_overrides.items()
+            if node is not None and str(node).strip()
+        } if temporary_enabled else {}
+        unknown_tasks = set(overrides) - {slug(name) for name in templates}
+        if unknown_tasks:
+            raise ValueError(
+                f"Unknown temporary placement task(s) in {group_name}: "
+                + ", ".join(sorted(unknown_tasks))
+            )
         rules: dict[str, dict[str, list[str]]] = {}
         for task_name, raw in templates.items():
             raw = raw or {}
@@ -352,6 +378,22 @@ def compile_policy_config_with_plan(
                     value = raw[key]
                     rule[key] = [str(value)] if isinstance(value, str) else list(value or [])
             task_key = slug(task_name)
+            override_node = overrides.get(task_key)
+            if override_node:
+                if override_node not in nodes:
+                    raise ValueError(
+                        f"Unknown temporary placement node for {group_name}.{task_name}: "
+                        f"{override_node}"
+                    )
+                if nodes[override_node].get("schedulable") is False:
+                    raise ValueError(
+                        f"Temporary placement node is not schedulable for "
+                        f"{group_name}.{task_name}: {override_node}"
+                    )
+                rule["require"] = [override_node]
+                rule["prefer"] = [override_node]
+                rule["fallback"] = []
+                rule["avoid"] = []
             rules[task_key] = rule
 
             required = set(rule["require"])
@@ -370,6 +412,8 @@ def compile_policy_config_with_plan(
                 reason = placement.reason
                 if any(key in raw for key in ("require", "prefer", "fallback", "avoid")):
                     reason += "; explicit placement override"
+                if override_node:
+                    reason += "; temporary placement override"
                 plan.append({
                     "phase": group_name,
                     "task": task_key,

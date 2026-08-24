@@ -16,3 +16,4 @@ includes:
   nodes: nodes.yaml
   workloads: workloads.yaml
   data: data.yaml
+  placement: temporary-placement.yaml

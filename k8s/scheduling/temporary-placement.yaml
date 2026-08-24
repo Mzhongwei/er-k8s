@@ -1,0 +1,29 @@
+# Optional exact task-to-node placement for short experiments.
+# Set enabled to true and replace null with Kubernetes node names.
+temporary_placement:
+  enabled: false
+
+  batch:
+    normalization: null
+    graph-construction: null
+    random-walk: null
+    embedding-training: null
+    cg-feature-extraction: null
+    feature-index-construction: null
+    bert-normalization-training: null
+    bert-training: null
+    bert-normalization-b-evaluation: null
+    bert-evaluation: null
+
+  incremental:
+    kafka-producer: null
+    kafka-consumer: null
+    normalization: null
+    graph-construction: null
+    random-walk: null
+    embedding-training: null
+    cg-feature-extraction: null
+    candidate-enumeration: null
+    calculating-similarity: null
+    decision-making: null
+    evaluation: null

@@ -231,8 +231,9 @@ A private registry additionally requires Kubernetes image-pull credentials on th
 
 Use `k8s/scheduling/scheduling.yaml` as the only scheduling entry point. Select the
 strategy there, then maintain non-discoverable node properties in `nodes.yaml`, task
-properties in `workloads.yaml`, and data placement in `data.yaml`. Carbon-region
-confirmation is kept separately in `carbon-intensity.yaml`.
+properties in `workloads.yaml`, data placement in `data.yaml`, and optional exact
+task-to-node overrides in `temporary-placement.yaml`. Carbon-region confirmation is kept
+separately in `carbon-intensity.yaml`.
 
 ## 7. Check pipeline configuration file
 
@@ -292,7 +293,7 @@ k8s/scheduling/scheduling.yaml
 ```
 
 This remains the only file passed to the compiler and scheduling commands. It selects a
-strategy and includes three focused files using paths relative to itself:
+strategy and includes focused files using paths relative to itself:
 
 ```yaml
 version: 2
@@ -303,6 +304,7 @@ includes:
   nodes: nodes.yaml
   workloads: workloads.yaml
   data: data.yaml
+  placement: temporary-placement.yaml
 ```
 
 The included files have distinct responsibilities:
@@ -310,6 +312,7 @@ The included files have distinct responsibilities:
 - `nodes.yaml`: storage/I/O and workload-mode properties Kubernetes cannot discover;
 - `workloads.yaml`: `batch` and `incremental` defaults and per-template task properties;
 - `data.yaml`: storage class and node locations of shared data.
+- `temporary-placement.yaml`: optional exact task-to-node assignments for short experiments.
 
 The loader rejects missing includes, extra top-level keys, and fields placed in the wrong
 fragment; it does not silently merge duplicate definitions. Only the version 2 split
@@ -323,6 +326,27 @@ weighted average. A node rejected by any selected strategy remains ineligible re
 of weight. B0 is an independent baseline and cannot appear in a strategy list; it applies
 no scoring policy and leaves placement to the Kubernetes default scheduler among nodes not
 marked `schedulable: false`.
+
+To pin selected tasks to exact Kubernetes nodes temporarily, edit
+`k8s/scheduling/temporary-placement.yaml` and enable it:
+
+```yaml
+temporary_placement:
+  enabled: true
+  batch:
+    normalization: server2-labo
+    embedding-training: zhongwei-lap
+  incremental:
+    random-walk: server1-k3s-worker
+    decision-making: server2-labo
+```
+
+A task set to `null` continues to use the selected scheduling strategy. With
+`enabled: false`, the entire file is ignored. Enabled assignments become required node
+affinity; unknown tasks, unknown nodes, and nodes currently NotReady, cordoned, or
+configured with `schedulable: false` stop compilation with an error. Use `--plan-only` to
+inspect the override before starting the workload; affected plan rows contain `temporary
+placement override`.
 
 Before every compile or recommendation, the scheduler reads `kubectl get nodes` and
 automatically merges each configured node's allocatable CPU, memory, NVIDIA GPU count,

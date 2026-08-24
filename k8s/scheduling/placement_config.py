@@ -35,6 +35,7 @@ INCLUDE_KEYS = {
     "nodes": {"nodes"},
     "workloads": {"batch", "incremental"},
     "data": {"data"},
+    "placement": {"temporary_placement"},
 }
 
 
