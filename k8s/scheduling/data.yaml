@@ -1,9 +1,33 @@
 data:
-  graph_snapshot:
+  datasets:
     storage_class: nfs
     size_class: GB
     locations: [server2-labo]
-  pipeline_buffers:
+  pipeline_intermediate:
     storage_class: nfs
     size_class: MB
+    locations: [server2-labo]
+  graph_snapshot:
+    storage_class: nfs
+    size_class: MB
+    locations: [server2-labo]
+  embedding_model:
+    storage_class: nfs
+    size_class: MB
+    locations: [server2-labo]
+  feature_index:
+    storage_class: nfs
+    size_class: MB
+    locations: [server2-labo]
+  bert_model:
+    storage_class: nfs
+    size_class: GB
+    locations: [server2-labo]
+  predicted_matching:
+    storage_class: nfs
+    size_class: MB
+    locations: [server2-labo]
+  pipeline_buffers:
+    storage_class: nfs
+    size_class: GB
     locations: [server2-labo]

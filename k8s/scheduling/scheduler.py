@@ -327,6 +327,8 @@ def compile_policy_config_with_plan(
             task = dict(defaults.get("task", {}) or {})
             task.update(raw.get("task", {}) or {})
             task["task_id"] = str(task_name)
+            task["workload_mode"] = "batch" if group_name == "batch" else "service"
+            task["deadline_class"] = str(group.get("deadline_class", "none"))
             method = raw.get("strategy", defaults.get("strategy", global_strategy))
             preferences = dict(global_preferences)
             preferences.update(defaults.get("preferences", {}) or {})

@@ -52,6 +52,8 @@ def task_config(config: dict[str, Any], group: str, name: str) -> tuple[dict[str
     task = dict(defaults.get("task", {}) or {})
     task.update(raw.get("task", {}) or {})
     task["task_id"] = name
+    task["workload_mode"] = "batch" if group == "batch" else "service"
+    task["deadline_class"] = str(section.get("deadline_class", "none"))
     strategy = raw.get("strategy", defaults.get("strategy", config.get("strategy", "B0")))
     preferences = dict(config.get("preferences", {}) or {})
     preferences.update(defaults.get("preferences", {}) or {})

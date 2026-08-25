@@ -1,58 +1,55 @@
 batch:
+  deadline_class: none
   defaults:
     task:
-      workload_mode: batch
-      cpu_request: low
-      memory_request: low
       io_intensity: medium
-      deadline_class: none
-      deferrable: true
       migratable: false
   templates:
-    normalization: {}
+    normalization:
+      task: {data_ids: [datasets, pipeline_intermediate]}
     graph-construction:
-      task: {io_intensity: high, data_ids: [graph_snapshot]}
+      task: {io_intensity: high, data_ids: [pipeline_intermediate, graph_snapshot]}
     random-walk:
-      task: {cpu_request: medium, io_intensity: high, data_ids: [graph_snapshot]}
+      task: {io_intensity: high, data_ids: [graph_snapshot, pipeline_intermediate]}
     embedding-training:
-      task: {cpu_request: high, memory_request: medium, data_ids: [graph_snapshot]}
-    cg-feature-extraction: {}
+      task: {data_ids: [pipeline_intermediate, embedding_model]}
+    cg-feature-extraction:
+      task: {data_ids: [pipeline_intermediate]}
     feature-index-construction:
-      task: {io_intensity: high}
-    bert-normalization-training: {}
+      task: {io_intensity: high, data_ids: [pipeline_intermediate, feature_index]}
+    bert-normalization-training:
+      task: {data_ids: [datasets, pipeline_intermediate]}
     bert-training:
-      task: {gpu_required: true, cpu_request: high, memory_request: high}
-    bert-normalization-b-evaluation: {}
+      task: {gpu_required: true, data_ids: [pipeline_intermediate, bert_model]}
+    bert-normalization-b-evaluation:
+      task: {data_ids: [datasets, pipeline_intermediate]}
     bert-evaluation:
-      task: {gpu_required: true, deadline_class: strict}
+      task: {gpu_required: true, data_ids: [pipeline_intermediate, bert_model]}
 
 incremental:
+  deadline_class: flexible
   defaults:
     task:
-      workload_mode: service
-      cpu_request: low
-      memory_request: low
       io_intensity: medium
-      deadline_class: flexible
-      deferrable: true
       migratable: true
       data_ids: [pipeline_buffers]
   templates:
     kafka-producer:
-      task: {migratable: false}
+      task: {migratable: false, data_ids: [datasets]}
     kafka-consumer:
       task: {migratable: false}
     normalization: {}
     graph-construction:
       task: {io_intensity: high, data_ids: [graph_snapshot, pipeline_buffers]}
     random-walk:
-      task: {cpu_request: medium, io_intensity: high, data_ids: [graph_snapshot, pipeline_buffers]}
+      task: {io_intensity: high}
     embedding-training:
-      task: {cpu_request: high, memory_request: medium}
+      task: {data_ids: [embedding_model, pipeline_buffers]}
     cg-feature-extraction: {}
-    candidate-enumeration: {}
-    calculating-similarity:
-      task: {deadline_class: strict}
+    candidate-enumeration:
+      task: {data_ids: [feature_index, pipeline_buffers]}
+    calculating-similarity: {}
     decision-making:
-      task: {deadline_class: strict}
-    evaluation: {}
+      task: {data_ids: [embedding_model, predicted_matching, pipeline_buffers]}
+    evaluation:
+      task: {data_ids: [datasets, pipeline_intermediate, pipeline_buffers]}
