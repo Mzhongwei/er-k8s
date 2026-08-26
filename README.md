@@ -133,30 +133,7 @@ If the repository was already cloned without submodules:
 git submodule update --init --recursive
 ```
 
-## 2. Create local configuration
-
-Copy the simulator and image repository examples, then edit the copies:
-
-```bash
-cp code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties.example \
-  code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties
-
-cp k8s/images/image-repository.conf.example \
-  k8s/images/image-repository.conf
-
-vim code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties
-vim k8s/images/image-repository.conf
-```
-
-Set `spring.kafka.bootstrap-servers` to the external broker, for example
-`localhost:9092`. Set `image-repository.conf` to the image prefix used by the cluster,
-for example `your-dockerhub-user/erctl`.
-
-`image-repository.conf` is required even when images are reused: both the image tool and
-the manifest compiler read it to produce complete image names. The two generated config
-files are ignored by Git.
-
-## 3. Prepare cluster resources
+## 2. Prepare cluster resources
 
 Create or select the Argo namespace:
 
@@ -172,8 +149,10 @@ kubectl apply -n argo -f k8s/rbac-configmaps.yaml
 
 `pipeline start` generates scheduled manifests and ConfigMaps automatically.
 
-## 4. Configure the static dataset volume
-Copy the simulator and image repository examples, then edit the copies:
+
+
+## 3. Configure the static dataset volume
+Copy the configuration file, then edit it:
 ```bash
 cp k8s/datasets/dataset-volume.yaml.example k8s/datasets/dataset-volume.yaml
 vim k8s/datasets/dataset-volume.yaml
@@ -214,7 +193,19 @@ kubectl wait -n argo --for=jsonpath='{.status.phase}'=Bound \
 Do not run the deletion block for an already-correct static claim or as part of every
 experiment. The static dataset volume is retained across pipeline runs.
 
-## 5. Prepare images
+
+## 4. Prepare images
+Copy the image repository examples, then edit it:
+
+```bash
+cp k8s/images/image-repository.conf.example \
+  k8s/images/image-repository.conf
+
+vim k8s/images/image-repository.conf
+```
+> `image-repository.conf` is required even when images are reused: both the image tool and
+the manifest compiler read it to produce complete image names. The two generated config
+files are ignored by Git.
 
 Build and push the complete image set when the images do not yet exist or their source code/Dockerfiles changed:
 
@@ -227,20 +218,39 @@ When compatible tags already exist in the configured repository, skip this build
 `pipeline start` will reuse/pull those tags. `docker login` is only needed for pushing.
 A private registry additionally requires Kubernetes image-pull credentials on the cluster.
 
-## 6. Check scheduling strategies
+
+## 5. Check pipeline configuration file
+
+Check congiguration (for example, kafka boostrap server) for ER pipeline. See examples under `code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml`, `config-embedding.yaml` file for incremental mode and `config-bert.yaml` file for batch mode :
+
+```bash
+vim code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml
+```
+
+
+## 6. (Optional) Prepare data stream simulator 
+
+For incremental mode, copy the simulator repository examples, then edit the copies:
+
+```bash
+cp code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties.example \
+  code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties
+
+vim code/Energy-Aware-Entity-Resolution/services/dataStreamSimulator/src/main/resources/application.properties
+```
+
+Set `spring.kafka.bootstrap-servers` to the external broker, for example
+`localhost:9092`. Set `image-repository.conf` to the image prefix used by the cluster,
+for example `your-dockerhub-user/erctl`.
+
+
+## 7. Check scheduling strategies
 
 Use `k8s/scheduling/scheduling.yaml` as the only scheduling entry point. Select the
 strategy there, then maintain non-discoverable node properties in `nodes.yaml`, task
 properties in `workloads.yaml`, data placement in `data.yaml`, and optional exact
 task-to-node overrides in `temporary-placement.yaml`. Carbon-region confirmation is kept
 separately in `carbon-intensity.yaml`.
-
-## 7. Check pipeline configuration file
-
-Check congiguration (for example, kafka boostrap server) for ER pipeline:
-```bash
-vim code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml
-```
 
 ## 8. Start and observe the pipeline
 
