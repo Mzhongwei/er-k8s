@@ -21,9 +21,10 @@ INCREMENTAL_JOBS = {
     "kafka-consumer", "kafka-producer", "normalization", "random-walk",
 }
 PLACEMENT_FIELDS = (
-    "phase", "task", "pod", "node", "pod_ip", "status", "started_at", "finished_at",
-    "workflow", "job",
+    "phase", "task", "pod", "pod_uid", "node", "pod_ip", "status", "started_at",
+    "finished_at", "workflow", "job",
 )
+ECOFLOC_METRICS = ("cpu", "gpu", "nic", "ram", "sd")
 
 
 def task_from_pod_name(pod: str, workflow: str) -> str:
@@ -62,6 +63,17 @@ def energy_summary(run_dir: Path) -> None:
     by_node: dict[str, float] = defaultdict(float)
     by_metric: dict[str, float] = defaultdict(float)
     by_task_metric: dict[str, float] = defaultdict(float)
+    by_pod: dict[str, float] = defaultdict(float)
+    by_pod_metric: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    pod_by_uid: dict[str, str] = {}
+    placement_path = run_dir / "placement.tsv"
+    if placement_path.exists():
+        with placement_path.open(encoding="utf-8") as stream:
+            pod_by_uid = {
+                row["pod_uid"]: row["pod"]
+                for row in csv.DictReader(stream, delimiter="\t")
+                if row.get("pod_uid") and row.get("pod")
+            }
     sessions = []
     valid_sessions = 0
     invalid_sessions = 0
@@ -78,14 +90,22 @@ def energy_summary(run_dir: Path) -> None:
                     energy = 0.0
                     numeric = False
                 task = row.get("task") or "unknown"
+                pod_uid = row.get("pod_uid", "")
+                pod = pod_by_uid.get(pod_uid) or pod_uid or "unknown"
+                metric = metric.lower()
                 row["task"] = task
+                row["pod"] = pod
                 sessions.append(row)
+                by_pod.setdefault(pod, 0.0)
+                by_pod_metric.setdefault(pod, defaultdict(float))
                 if numeric and row.get("status") == "ok":
                     valid_sessions += 1
                     by_task[task] += energy
                     by_node[node] += energy
                     by_metric[metric] += energy
                     by_task_metric[f"{task}|{metric}"] += energy
+                    by_pod[pod] += energy
+                    by_pod_metric[pod][metric] += energy
                 else:
                     invalid_sessions += 1
 
@@ -116,13 +136,19 @@ def energy_summary(run_dir: Path) -> None:
         "invalid_session_count": invalid_sessions,
         "agents": agent_status,
         "by_task_j": {key: round(value, 6) for key, value in sorted(by_task.items())},
+        "by_pod_j": {key: round(value, 6) for key, value in sorted(by_pod.items())},
+        "by_pod_metric_j": {
+            pod: {metric: round(value, 6) for metric, value in sorted(metrics.items())}
+            for pod, metrics in sorted(by_pod_metric.items())
+        },
         "by_node_j": {key: round(value, 6) for key, value in sorted(by_node.items())},
         "by_metric_j": {key: round(value, 6) for key, value in sorted(by_metric.items())},
         "by_task_metric_j": {key: round(value, 6) for key, value in sorted(by_task_metric.items())},
         "note": (
             "total_energy_j is the sum over CPU/RAM/SD/NIC/GPU per process; it is an aggregate "
             "across components, correct only if EcoFLOC reports these as non-overlapping figures. "
-            "See by_metric_j for the per-metric breakdown."
+            "See by_pod_metric_j for the per-Pod breakdown; absent metrics were not measured "
+            "successfully and are displayed as n/a."
         ),
         "sessions": sessions,
     }
@@ -201,6 +227,7 @@ def collect_placement(run_dir: Path, namespace: str, phase: str, workflow: str) 
             "phase": phase,
             "task": task,
             "pod": pod_name,
+            "pod_uid": metadata.get("uid", ""),
             "node": pod.get("spec", {}).get("nodeName", ""),
             "pod_ip": status.get("podIP", ""),
             "status": status.get("phase", ""),
@@ -356,8 +383,24 @@ def show(run_dir: Path) -> None:
                 f"Energy ({provider}): {summary.get('measurement_status', 'unknown')}  "
                 f"total={summary.get('total_energy_j', 0):.3f} J"
             )
-        for task, value in summary.get("by_task_j", {}).items():
-            print(f"  {task:<32} {value:.3f} J")
+        if provider == "ecofloc":
+            by_pod_metric = summary.get("by_pod_metric_j", {})
+            by_pod = summary.get("by_pod_j", {})
+            if by_pod_metric:
+                for pod, metrics in by_pod_metric.items():
+                    components = "  ".join(
+                        f"{metric.upper()}="
+                        + (f"{metrics[metric]:.3f}J" if metric in metrics else "n/a")
+                        for metric in ECOFLOC_METRICS
+                    )
+                    total = f"{by_pod.get(pod, 0):.3f}J" if metrics else "n/a"
+                    print(f"  {pod}: {components}  total={total}")
+            else:
+                for task, value in summary.get("by_task_j", {}).items():
+                    print(f"  {task:<32} {value:.3f} J")
+        else:
+            for task, value in summary.get("by_task_j", {}).items():
+                print(f"  {task:<32} {value:.3f} J")
         by_metric = summary.get("by_metric_j", {})
         if by_metric:
             print("By metric: " + "  ".join(f"{metric}={value:.3f}J" for metric, value in by_metric.items()))

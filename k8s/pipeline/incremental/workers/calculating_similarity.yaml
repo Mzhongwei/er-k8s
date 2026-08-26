@@ -36,6 +36,8 @@ spec:
             - name: worker-calculating-similarity
               mountPath: /app/entries/worker/calculating_similarity.py
               subPath: calculating_similarity.py
+            - name: pipeline-embedding-model-cache
+              mountPath: /app/data/embedding
             - name: pipeline-buffer-data
               mountPath: /app/data/buffers
             - name: pipeline-io
@@ -48,6 +50,9 @@ spec:
         - name: worker-calculating-similarity
           configMap:
             name: eaer-worker-calculating-similarity
+        - name: pipeline-embedding-model-cache
+          persistentVolumeClaim:
+            claimName: pipeline-embedding-model-cache-claim
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim

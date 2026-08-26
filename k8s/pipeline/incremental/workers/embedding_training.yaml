@@ -24,11 +24,11 @@ spec:
           env:
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
           volumeMounts:
             - name: pipeline-config
               mountPath: /app/config/examples/config-embedding.yaml

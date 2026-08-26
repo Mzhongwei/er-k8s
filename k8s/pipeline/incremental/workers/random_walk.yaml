@@ -36,6 +36,8 @@ spec:
             - name: worker-random-walk
               mountPath: /app/entries/worker/random_walk.py
               subPath: random_walk.py
+            - name: pipeline-graph-cache
+              mountPath: /app/data/graph
             - name: pipeline-buffer-data
               mountPath: /app/data/buffers
             - name: pipeline-io
@@ -48,6 +50,9 @@ spec:
         - name: worker-random-walk
           configMap:
             name: eaer-worker-random-walk
+        - name: pipeline-graph-cache
+          persistentVolumeClaim:
+            claimName: pipeline-graph-cache-claim
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim

@@ -42,13 +42,14 @@ incremental:
     graph-construction:
       task: {io_intensity: high, data_ids: [graph_snapshot, pipeline_buffers]}
     random-walk:
-      task: {io_intensity: high}
+      task: {io_intensity: high, data_ids: [graph_snapshot, pipeline_buffers]}
     embedding-training:
       task: {data_ids: [embedding_model, pipeline_buffers]}
     cg-feature-extraction: {}
     candidate-enumeration:
       task: {data_ids: [feature_index, pipeline_buffers]}
-    calculating-similarity: {}
+    calculating-similarity:
+      task: {data_ids: [embedding_model, pipeline_buffers]}
     decision-making:
       task: {data_ids: [embedding_model, predicted_matching, pipeline_buffers]}
     evaluation:
