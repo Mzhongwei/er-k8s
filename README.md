@@ -278,6 +278,19 @@ bash k8s/erctl.sh pipeline start -c <config.yaml>
 
 The config file's `mode` selects the embedding or BERT lifecycle.
 
+Run all `.yaml` and `.yml` configurations in one directory sequentially with the same
+start options:
+
+```bash
+bash k8s/erctl.sh pipeline batch \
+  -d code/Energy-Aware-Entity-Resolution/config/examples \
+  --energy-monitor ecofloc \
+  --results-summary
+```
+
+Files run in filename order. Each configuration uses the existing `pipeline start`
+lifecycle and receives its own result directory; the batch stops if a configuration fails.
+
 The helper provides two different cancellation levels:
 
 ```bash
