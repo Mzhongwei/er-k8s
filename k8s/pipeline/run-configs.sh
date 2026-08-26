@@ -8,7 +8,7 @@ START_ARGS=()
 
 usage() {
     cat << 'EOF'
-Usage: erctl pipeline batch -d <config-directory> [start options]
+Usage: erctl pipeline start -d <config-directory> [start options]
 
 Run every *.yaml and *.yml file in the directory sequentially. All remaining options are
 passed to `pipeline start`; execution stops when one configuration fails.
@@ -27,7 +27,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -c|--config|--config=*)
-            echo "pipeline batch uses -d/--directory, not -c/--config." >&2
+            echo "-c/--config and -d/--directory cannot be used together." >&2
             exit 1
             ;;
         -h|--help|-help|help)

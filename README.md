@@ -221,11 +221,7 @@ A private registry additionally requires Kubernetes image-pull credentials on th
 
 ## 5. Check pipeline configuration file
 
-Check congiguration (for example, kafka boostrap server) for ER pipeline. See examples under `code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml`, `config-embedding.yaml` file for incremental mode and `config-bert.yaml` file for batch mode :
-
-```bash
-vim code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml
-```
+Check congiguration (for example, kafka boostrap server) for ER pipeline. See examples under `code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml`, `config-embedding.yaml` file for incremental mode and `config-bert.yaml` file for batch mode
 
 
 ## 6. (Optional) Prepare data stream simulator 
@@ -282,7 +278,7 @@ Run all `.yaml` and `.yml` configurations in one directory sequentially with the
 start options:
 
 ```bash
-bash k8s/erctl.sh pipeline batch \
+bash k8s/erctl.sh pipeline start \
   -d code/Energy-Aware-Entity-Resolution/config/examples \
   --energy-monitor ecofloc \
   --results-summary

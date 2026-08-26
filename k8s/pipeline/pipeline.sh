@@ -16,7 +16,8 @@
 #                 Workflow. These run concurrently and stream until the input exhausts.
 #               - bert-training-evaluation: runs entirely as one Argo Workflow (no
 #                 incremental phase).
-#   batch     Runs every YAML config in one directory sequentially through `start`.
+#             Passing -d/--directory runs every YAML config in that directory sequentially
+#             through the same `start` lifecycle.
 #   stop      Non-destructive cancellation: stops the newest `pipeline-*` Argo Workflow
 #             and deletes incremental worker Jobs, while preserving ConfigMaps, runtime
 #             PVCs, and saved results. Stopped work cannot be resumed in place.
@@ -64,6 +65,7 @@ NAMESPACE="argo"
 # `mode:` field is the sole source of truth for the ConfigMap contents and batch vs
 # incremental dispatch below.
 CONFIG_PATH=""
+CONFIG_DIR=""
 
 # The pipeline intentionally supports exactly these two end-to-end business modes.
 EMBEDDING_PIPELINE_MODE="embedding-training-inference-evaluation"
@@ -119,16 +121,17 @@ PIPELINE_STOPPING=false
 usage() {
     # Print command help without executing any cluster operation.
     cat << 'EOF'
-Usage: erctl pipeline [start|batch|stop|terminate] [options]
+Usage: erctl pipeline [start|stop|terminate] [options]
 Manage the pipeline.
 Actions:
     start                    Start the pipeline (default)
-    batch -d DIRECTORY       Run each YAML config in a directory sequentially
     stop                     Cancel active workloads but preserve PVCs and ConfigMaps
     terminate                Terminate the latest pipeline and clean up resources
-Options (start and batch):
-    -c, --config PATH        Path to the pipeline config YAML (required); its `mode:` field
-                             decides the ConfigMaps and batch vs incremental dispatch
+Options (start):
+    -c, --config PATH        Run one pipeline config YAML; its `mode:` field decides the
+                             ConfigMaps and batch vs incremental dispatch
+    -d, --directory PATH     Run each YAML config in a directory sequentially; mutually
+                             exclusive with -c/--config
     --energy-monitor [TOOL]  Save energy for the whole workload. TOOL is ecofloc (default),
                              alumet, or ecofloc-alumet. Also accepts --energy-monitor=TOOL.
     --results-summary        After the workload finishes, print matching, Pod placement,
@@ -820,10 +823,10 @@ terminate_pipeline() {
 # Default action when no explicit action is passed.
 ACTION="start"
 
-# Parse the optional first positional argument: start, batch, stop, terminate, or help.
+# Parse the optional first positional argument: start, stop, terminate, or help.
 if [ $# -gt 0 ]; then
     case "$1" in
-        start|batch|stop|terminate)
+        start|stop|terminate)
             # Use the requested lifecycle action.
             ACTION="$1"
             # Remove the action from the remaining argument list.
@@ -838,9 +841,8 @@ if [ $# -gt 0 ]; then
 fi
 
 # Start mode: parse start-specific options, validate tools, then run start_pipeline.
-if [ "$ACTION" = "batch" ]; then
-    bash "$SCRIPT_DIR/run-configs.sh" "$@"
-elif [ "$ACTION" = "start" ]; then
+if [ "$ACTION" = "start" ]; then
+    START_ARGUMENTS=("$@")
     # Parse options that follow `start`.
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -858,6 +860,18 @@ elif [ "$ACTION" = "start" ]; then
                 # Support --config=path/to/config.yaml.
                 CONFIG_PATH="${1#*=}"
                 # Consume the single --config=value argument.
+                shift
+                ;;
+            -d|--directory)
+                if [ $# -lt 2 ]; then
+                    echo "Missing value for $1. Expected a directory containing pipeline config YAML files."
+                    exit 1
+                fi
+                CONFIG_DIR="$2"
+                shift 2
+                ;;
+            --directory=*)
+                CONFIG_DIR="${1#*=}"
                 shift
                 ;;
             --energy-monitor)
@@ -909,8 +923,16 @@ elif [ "$ACTION" = "start" ]; then
         esac
     done
 
-    # -c/--config is required: it is now the only way the file/mode is chosen, so there
-    # is nothing sensible to default to.
+    if [ -n "$CONFIG_DIR" ]; then
+        if [ -n "$CONFIG_PATH" ]; then
+            echo "-c/--config and -d/--directory cannot be used together."
+            exit 1
+        fi
+        bash "$SCRIPT_DIR/run-configs.sh" "${START_ARGUMENTS[@]}"
+        exit $?
+    fi
+
+    # A single config file is required when directory mode is not selected.
     if [ -z "$CONFIG_PATH" ]; then
         echo "Missing required -c/--config <path>. Use 'erctl pipeline --help' for usage information."
         exit 1

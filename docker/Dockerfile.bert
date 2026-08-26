@@ -14,15 +14,26 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
     && /opt/venv/bin/pip install --no-cache-dir \
         -r /app/requirements/for_entries/requirements-bert.txt
 
+# Cache the fixed base model during the image build so runtime Pods do not depend on the
+# Hugging Face CDN. Loading it here populates the cache without saving the randomly
+# initialized sequence-classification head.
+ENV HF_HOME=/opt/huggingface
+RUN /opt/venv/bin/python -c \
+        'from transformers import AutoModelForSequenceClassification, AutoTokenizer; \
+AutoModelForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=2); \
+AutoTokenizer.from_pretrained("bert-base-uncased")'
+
 FROM ${IMAGE_REPOSITORY}:base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+ENV HF_HOME=/opt/huggingface
 
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/huggingface /opt/huggingface
 
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_training.py /app/pipeline/bert_training.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_evaluation.py /app/pipeline/bert_evaluation.py
