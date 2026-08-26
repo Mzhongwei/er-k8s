@@ -505,7 +505,14 @@ before workload submission.
 
 Reports are never combined or added together. EcoFLOC writes
 `energy/ecofloc-summary.json`; Alumet writes `energy/alumet-summary.json`. Joint mode
-writes both files and `results show` displays both independently.
+writes both files and the result viewer displays both independently. To display the latest
+saved matching, placement, and energy results:
+
+```bash
+python3 k8s/monitoring/results.py show \
+  --root k8s/results \
+  --run latest
+```
 
 ## EcoFLOC [:link:](https://github.com/hhumbertoAv/ecofloc)
 

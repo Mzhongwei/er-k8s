@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import subprocess
 import sys
 import time
@@ -25,6 +26,102 @@ PLACEMENT_FIELDS = (
     "finished_at", "workflow", "job",
 )
 ECOFLOC_METRICS = ("cpu", "gpu", "nic", "ram", "sd")
+POD_UID_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+ECOFLOC_SESSION_FIELDS = (
+    "node", "pid", "process_start", "pod_uid", "container_id", "metric",
+    "average_power_w", "total_energy_j", "status", "started_at", "ended_at", "task",
+)
+
+
+def parse_ecofloc_log(path: Path) -> tuple[float, float] | None:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+    average = re.findall(rf"Average\s+Power\s*:\s*({number})", text, re.IGNORECASE)
+    total = re.findall(rf"Total.*?Energy\s*:\s*({number})", text, re.IGNORECASE)
+    if not average or not total:
+        return None
+    values = float(average[-1]), float(total[-1])
+    return values if all(math.isfinite(value) for value in values) else None
+
+
+def ecofloc_sessions(energy_dir: Path) -> list[dict[str, str]]:
+    sessions_path = energy_dir / "sessions.tsv"
+    if sessions_path.exists():
+        with sessions_path.open(encoding="utf-8") as stream:
+            sessions = list(csv.DictReader(stream, delimiter="\t"))
+    else:
+        sessions = []
+
+    processes_path = energy_dir / "processes.tsv"
+    processes: dict[tuple[str, str], dict[str, str]] = {}
+    if processes_path.exists():
+        with processes_path.open(encoding="utf-8") as stream:
+            for row in csv.DictReader(stream, delimiter="\t"):
+                processes[(row.get("node", ""), row.get("pid", ""))] = row
+
+    indexed = {
+        (row.get("node", ""), row.get("pid", ""), row.get("metric", "").lower()): row
+        for row in sessions
+    }
+    changed = False
+    pattern = re.compile(r"^.+_(\d+)_(cpu|gpu|nic|ram|sd)\.log$", re.IGNORECASE)
+    for path in sorted((energy_dir / "logs").glob("*/*.log")):
+        match = pattern.match(path.name)
+        if not match:
+            continue
+        node = path.parent.name
+        pid, metric = match.group(1), match.group(2).lower()
+        measured = parse_ecofloc_log(path)
+        if measured is None:
+            continue
+        average, total = measured
+        key = node, pid, metric
+        row = indexed.get(key)
+        if row is None:
+            process = processes.get((node, pid))
+            if process is None:
+                continue
+            sibling = next(
+                (item for item in sessions if item.get("node") == node and item.get("pid") == pid),
+                {},
+            )
+            row = {
+                "node": node,
+                "pid": pid,
+                "process_start": process.get("process_start", ""),
+                "pod_uid": process.get("pod_uid", ""),
+                "container_id": process.get("container_id", ""),
+                "metric": metric,
+                "average_power_w": "",
+                "total_energy_j": "",
+                "status": "",
+                "started_at": sibling.get("started_at", ""),
+                "ended_at": sibling.get("ended_at", ""),
+                "task": process.get("task", "unknown"),
+            }
+            sessions.append(row)
+            indexed[key] = row
+        parsed_average = f"{average:g}"
+        parsed_total = f"{total:g}"
+        if (
+            row.get("average_power_w") != parsed_average
+            or row.get("total_energy_j") != parsed_total
+            or row.get("status") != "ok"
+        ):
+            row["average_power_w"] = parsed_average
+            row["total_energy_j"] = parsed_total
+            row["status"] = "ok"
+            changed = True
+
+    if changed:
+        with sessions_path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=ECOFLOC_SESSION_FIELDS, delimiter="\t")
+            writer.writeheader()
+            writer.writerows({field: row.get(field, "") for field in ECOFLOC_SESSION_FIELDS} for row in sessions)
+    return sessions
 
 
 def task_from_pod_name(pod: str, workflow: str) -> str:
@@ -77,37 +174,34 @@ def energy_summary(run_dir: Path) -> None:
     sessions = []
     valid_sessions = 0
     invalid_sessions = 0
-    sessions_path = energy_dir / "sessions.tsv"
-    if sessions_path.exists():
-        with sessions_path.open(encoding="utf-8") as stream:
-            for row in csv.DictReader(stream, delimiter="\t"):
-                node = row.get("node", "")
-                metric = row.get("metric", "")
-                try:
-                    energy = float(row.get("total_energy_j", ""))
-                    numeric = math.isfinite(energy)
-                except (TypeError, ValueError):
-                    energy = 0.0
-                    numeric = False
-                task = row.get("task") or "unknown"
-                pod_uid = row.get("pod_uid", "")
-                pod = pod_by_uid.get(pod_uid) or pod_uid or "unknown"
-                metric = metric.lower()
-                row["task"] = task
-                row["pod"] = pod
-                sessions.append(row)
-                by_pod.setdefault(pod, 0.0)
-                by_pod_metric.setdefault(pod, defaultdict(float))
-                if numeric and row.get("status") == "ok":
-                    valid_sessions += 1
-                    by_task[task] += energy
-                    by_node[node] += energy
-                    by_metric[metric] += energy
-                    by_task_metric[f"{task}|{metric}"] += energy
-                    by_pod[pod] += energy
-                    by_pod_metric[pod][metric] += energy
-                else:
-                    invalid_sessions += 1
+    for row in ecofloc_sessions(energy_dir):
+        node = row.get("node", "")
+        metric = row.get("metric", "")
+        try:
+            energy = float(row.get("total_energy_j", ""))
+            numeric = math.isfinite(energy)
+        except (TypeError, ValueError):
+            energy = 0.0
+            numeric = False
+        task = row.get("task") or "unknown"
+        pod_uid = row.get("pod_uid", "")
+        pod = pod_by_uid.get(pod_uid) or pod_uid or "unknown"
+        metric = metric.lower()
+        row["task"] = task
+        row["pod"] = pod
+        sessions.append(row)
+        by_pod.setdefault(pod, 0.0)
+        by_pod_metric.setdefault(pod, defaultdict(float))
+        if numeric and row.get("status") == "ok":
+            valid_sessions += 1
+            by_task[task] += energy
+            by_node[node] += energy
+            by_metric[metric] += energy
+            by_task_metric[f"{task}|{metric}"] += energy
+            by_pod[pod] += energy
+            by_pod_metric[pod][metric] += energy
+        else:
+            invalid_sessions += 1
 
     agent_status: dict[str, str] = {}
     agents_path = energy_dir / "agents.tsv"
@@ -386,15 +480,24 @@ def show(run_dir: Path) -> None:
         if provider == "ecofloc":
             by_pod_metric = summary.get("by_pod_metric_j", {})
             by_pod = summary.get("by_pod_j", {})
+            task_by_pod = {
+                row.get("pod", ""): row.get("task", "")
+                for row in summary.get("sessions", [])
+                if row.get("pod") and row.get("task")
+            }
             if by_pod_metric:
                 for pod, metrics in by_pod_metric.items():
+                    label = pod
+                    if POD_UID_PATTERN.fullmatch(pod) and task_by_pod.get(pod):
+                        task = Path(task_by_pod[pod]).stem.lower().replace("_", "-")
+                        label = f"{task}-{pod[:8]}"
                     components = "  ".join(
                         f"{metric.upper()}="
                         + (f"{metrics[metric]:.3f}J" if metric in metrics else "n/a")
                         for metric in ECOFLOC_METRICS
                     )
                     total = f"{by_pod.get(pod, 0):.3f}J" if metrics else "n/a"
-                    print(f"  {pod}: {components}  total={total}")
+                    print(f"  {label}: {components}  total={total}")
             else:
                 for task, value in summary.get("by_task_j", {}).items():
                     print(f"  {task:<32} {value:.3f} J")
