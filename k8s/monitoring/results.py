@@ -13,6 +13,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 
@@ -25,6 +26,13 @@ PLACEMENT_FIELDS = (
     "phase", "task", "pod", "pod_uid", "node", "pod_ip", "status", "started_at",
     "finished_at", "workflow", "job",
 )
+STEP_METRIC_FIELDS = (
+    "phase", "task", "pod", "pod_uid", "node", "status", "attempt",
+    "logical_read_bytes", "logical_write_bytes", "storage_read_bytes",
+    "storage_write_bytes", "elapsed_seconds", "pod_elapsed_seconds",
+    "started_at", "finished_at",
+)
+STEP_METRICS_PREFIX = "[EAER_STEP_METRICS] "
 ECOFLOC_METRICS = ("cpu", "gpu", "nic", "ram", "sd")
 POD_UID_PATTERN = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
@@ -272,7 +280,9 @@ def detect_artifacts(run_dir: Path) -> dict[str, bool]:
         "matching_graph": graph is not None,
         "evaluation_report": report is not None,
         "scheduling_plan": (run_dir / "scheduling-plan.tsv").exists(),
+        "data_locality_plan": (run_dir / "data-locality-plan.tsv").exists(),
         "pod_placement": (run_dir / "placement.tsv").exists(),
+        "step_metrics": (run_dir / "step-metrics.tsv").exists(),
     }
 
 
@@ -347,7 +357,7 @@ def collect_placement(run_dir: Path, namespace: str, phase: str, workflow: str) 
         writer.writerows(new_rows)
 
 
-def collect_matching(run_dir: Path, namespace: str) -> None:
+def collect_matching(run_dir: Path, namespace: str, local_root: str = "", node: str = "") -> None:
     pod = f"eaer-results-{uuid.uuid4().hex[:12]}"
     manifest = {
         "apiVersion": "v1",
@@ -364,12 +374,28 @@ def collect_matching(run_dir: Path, namespace: str) -> None:
                     {"name": "communication", "mountPath": "/data/communication"},
                 ],
             }],
-            "volumes": [
-                {"name": "predicted", "persistentVolumeClaim": {"claimName": "pipeline-decision-evaluation-cache-claim"}},
-                {"name": "communication", "persistentVolumeClaim": {"claimName": "pipeline-communication-claim"}},
-            ],
+            "volumes": [],
         },
     }
+    if local_root:
+        manifest["spec"]["affinity"] = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [{"matchExpressions": [{
+                        "key": "kubernetes.io/hostname", "operator": "In", "values": [node]
+                    }]}]
+                }
+            }
+        }
+        manifest["spec"]["volumes"] = [
+            {"name": "predicted", "hostPath": {"path": f"{local_root}/predicted", "type": "Directory"}},
+            {"name": "communication", "hostPath": {"path": f"{local_root}/communication", "type": "Directory"}},
+        ]
+    else:
+        manifest["spec"]["volumes"] = [
+            {"name": "predicted", "persistentVolumeClaim": {"claimName": "pipeline-decision-evaluation-cache-claim"}},
+            {"name": "communication", "persistentVolumeClaim": {"claimName": "pipeline-communication-claim"}},
+        ]
     subprocess.run(["kubectl", "apply", "-f", "-"], input=json.dumps(manifest), text=True, check=True)
     try:
         subprocess.run([
@@ -382,6 +408,104 @@ def collect_matching(run_dir: Path, namespace: str) -> None:
         subprocess.run(["kubectl", "cp", f"{namespace}/{pod}:/data/communication", str(target / "communication")], check=True)
     finally:
         subprocess.run(["kubectl", "delete", "pod", pod, "-n", namespace, "--ignore-not-found"], check=False)
+
+
+def _elapsed_between(started_at: str, finished_at: str) -> str:
+    if not started_at or not finished_at:
+        return ""
+    try:
+        start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        finish = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
+        return f"{max(0.0, (finish - start).total_seconds()):.6f}"
+    except ValueError:
+        return ""
+
+
+def _metric_from_log(namespace: str, pod: str) -> dict[str, object] | None:
+    result = subprocess.run(
+        ["kubectl", "logs", "-n", namespace, pod, "--tail=-1"],
+        text=True, capture_output=True, check=False,
+    )
+    if result.returncode != 0:
+        return None
+    for line in reversed(result.stdout.splitlines()):
+        marker = line.find(STEP_METRICS_PREFIX)
+        if marker < 0:
+            continue
+        try:
+            value = json.loads(line[marker + len(STEP_METRICS_PREFIX):])
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, dict) else None
+    return None
+
+
+def collect_step_metrics(run_dir: Path, namespace: str) -> None:
+    placement_path = run_dir / "placement.tsv"
+    if not placement_path.exists():
+        raise RuntimeError("placement.tsv is required before collecting step metrics")
+    with placement_path.open(encoding="utf-8") as stream:
+        placement = list(csv.DictReader(stream, delimiter="\t"))
+
+    ordered = sorted(placement, key=lambda row: (
+        row.get("phase", ""), row.get("task", ""), row.get("started_at", ""), row.get("pod", "")
+    ))
+    attempt_by_task: dict[tuple[str, str], int] = defaultdict(int)
+    rows: list[dict[str, object]] = []
+    numeric_fields = (
+        "logical_read_bytes", "logical_write_bytes", "storage_read_bytes",
+        "storage_write_bytes", "elapsed_seconds",
+    )
+    for placement_row in ordered:
+        key = (placement_row.get("phase", ""), placement_row.get("task", ""))
+        attempt_by_task[key] += 1
+        metric = _metric_from_log(namespace, placement_row.get("pod", "")) or {}
+        row: dict[str, object] = {
+            "phase": key[0], "task": key[1], "pod": placement_row.get("pod", ""),
+            "pod_uid": placement_row.get("pod_uid", ""), "node": placement_row.get("node", ""),
+            "status": placement_row.get("status", ""), "attempt": attempt_by_task[key],
+            "pod_elapsed_seconds": _elapsed_between(
+                placement_row.get("started_at", ""), placement_row.get("finished_at", "")
+            ),
+            "started_at": placement_row.get("started_at", ""),
+            "finished_at": placement_row.get("finished_at", ""),
+        }
+        for field in numeric_fields:
+            row[field] = metric.get(field, "")
+        rows.append(row)
+
+    output = run_dir / "step-metrics.tsv"
+    with output.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=STEP_METRIC_FIELDS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    summary: dict[str, dict[str, object]] = {}
+    for row in rows:
+        key = f"{row['phase']}/{row['task']}"
+        item = summary.setdefault(key, {
+            "phase": row["phase"], "task": row["task"], "attempts": 0,
+            "measured_attempts": 0, "logical_read_bytes": 0, "logical_write_bytes": 0,
+            "storage_read_bytes": 0, "storage_write_bytes": 0,
+            "cumulative_elapsed_seconds": 0.0, "cumulative_pod_elapsed_seconds": 0.0,
+        })
+        item["attempts"] = int(item["attempts"]) + 1
+        if row["elapsed_seconds"] != "":
+            item["measured_attempts"] = int(item["measured_attempts"]) + 1
+        for field in ("logical_read_bytes", "logical_write_bytes", "storage_read_bytes", "storage_write_bytes"):
+            if row[field] != "":
+                item[field] = int(item[field]) + int(row[field])
+        if row["elapsed_seconds"] != "":
+            item["cumulative_elapsed_seconds"] = round(
+                float(item["cumulative_elapsed_seconds"]) + float(row["elapsed_seconds"]), 6
+            )
+        if row["pod_elapsed_seconds"] != "":
+            item["cumulative_pod_elapsed_seconds"] = round(
+                float(item["cumulative_pod_elapsed_seconds"]) + float(row["pod_elapsed_seconds"]), 6
+            )
+    (run_dir / "step-metrics-summary.json").write_text(
+        json.dumps({"steps": summary}, indent=2), encoding="utf-8"
+    )
 
 
 def write_manifest(run_dir: Path, args: argparse.Namespace) -> None:
@@ -456,6 +580,27 @@ def show(run_dir: Path) -> None:
         for row in placement:
             task = row["task"] or task_from_pod_name(row["pod"], row.get("workflow", ""))
             print(f"  {row['phase']:<11} {task:<34} -> {row['node'] or '(unscheduled)'}")
+    metrics_summary_path = run_dir / "step-metrics-summary.json"
+    if metrics_summary_path.exists():
+        metrics = json.loads(metrics_summary_path.read_text(encoding="utf-8")).get("steps", {})
+        print(f"Step metrics: {len(metrics)} step(s)  file={metrics_summary_path}")
+        for item in metrics.values():
+            measured = int(item.get("measured_attempts", 0))
+            attempts = int(item.get("attempts", 0))
+            if measured:
+                io_text = (
+                    f"read={item.get('logical_read_bytes', 0)}B "
+                    f"write={item.get('logical_write_bytes', 0)}B "
+                    f"storage-read={item.get('storage_read_bytes', 0)}B "
+                    f"storage-write={item.get('storage_write_bytes', 0)}B "
+                    f"cumulative={item.get('cumulative_elapsed_seconds', 0):.3f}s"
+                )
+            else:
+                io_text = "I/O=n/a cumulative=n/a"
+            print(
+                f"  {item.get('phase', ''):<11} {item.get('task', ''):<34} "
+                f"{io_text} attempts={measured}/{attempts}"
+            )
     for summary in summaries:
         provider = summary.get("provider", "ecofloc")
         if provider == "alumet":
@@ -528,6 +673,11 @@ def main() -> None:
     collect = sub.add_parser("collect")
     collect.add_argument("run_dir", type=Path)
     collect.add_argument("--namespace", default="argo")
+    collect.add_argument("--local-root", default="")
+    collect.add_argument("--node", default="")
+    metrics = sub.add_parser("metrics")
+    metrics.add_argument("run_dir", type=Path)
+    metrics.add_argument("--namespace", default="argo")
     placement = sub.add_parser("placement")
     placement.add_argument("run_dir", type=Path)
     placement.add_argument("--namespace", default="argo")
@@ -551,7 +701,9 @@ def main() -> None:
         except RuntimeError as error:
             raise SystemExit(str(error)) from None
     elif args.command == "collect":
-        collect_matching(args.run_dir, args.namespace)
+        collect_matching(args.run_dir, args.namespace, args.local_root, args.node)
+    elif args.command == "metrics":
+        collect_step_metrics(args.run_dir, args.namespace)
     elif args.command == "placement":
         collect_placement(args.run_dir, args.namespace, args.phase, args.workflow)
     elif args.command == "manifest":

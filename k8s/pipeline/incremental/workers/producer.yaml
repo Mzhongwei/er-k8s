@@ -35,6 +35,9 @@ spec:     # Job 的 spec
             - name: pipeline-data
               mountPath: /data
               readOnly: true
+            - name: pipeline-io
+              mountPath: /app/utils/pipeline_io.py
+              subPath: pipeline_io.py
       volumes:
         - name: pipeline-kafka-producer
           configMap:
@@ -46,3 +49,6 @@ spec:     # Job 的 spec
           persistentVolumeClaim:
             claimName: pipeline-data-claim
             readOnly: true
+        - name: pipeline-io
+          configMap:
+            name: eaer-pipeline-io

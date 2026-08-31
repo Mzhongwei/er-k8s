@@ -78,6 +78,8 @@ ALUMET_SCRIPT="$K8S_DIR/monitoring/alumet/alumet.py"
 RESULTS_SCRIPT="$K8S_DIR/monitoring/results.py"
 SCHEDULING_COMPILER="$K8S_DIR/scheduling/compiler.py"
 SCHEDULING_PLAN_PATH="$K8S_DIR/pipeline/exec/scheduling-plan.tsv"
+DATA_LOCALITY_COMPILER="$K8S_DIR/scheduling/data_locality.py"
+DATA_LOCALITY_PLAN_PATH="$K8S_DIR/pipeline/exec/data-locality-plan.tsv"
 
 # Root under which each run's permanent results are stored, one directory per run:
 #   k8s/results/<mode>-<timestamp>/
@@ -101,6 +103,8 @@ ALUMET_MONITOR_ACTIVE=false
 #   was monitored, the energy summary). Independent of --energy-monitor. Off by default.
 RESULTS_SUMMARY=false
 PLAN_ONLY=false
+DATA_LOCALITY_STRATEGY=""
+DATA_LOCALITY_RUN_TOKEN=""
 
 # --results-archive DEST (or env ERCTL_RESULTS_ARCHIVE): after the run, copy this run's
 # results dir to a durable/remote location -- a local/mounted path, or user@host:/path
@@ -136,6 +140,8 @@ Options (start):
                              alumet, or ecofloc-alumet. Also accepts --energy-monitor=TOOL.
     --results-summary        After the workload finishes, print matching, Pod placement,
                              and energy (when monitored).
+    --data-locality DL1      Apply the fixed DL1-DL8 node/storage experiment strategy.
+                             Also accepts --data-locality=DL1.
     --plan-only              Show and save the scheduling plan without creating workloads
                              or changing PVCs, ConfigMaps, Workflows, or Jobs.
     --results-archive DEST   Copy this run's results dir to a durable/remote location after
@@ -360,8 +366,24 @@ delete_pipeline_storage() {
     fi
 
     if [ "$recreate" = true ]; then
-        kubectl apply -n "$NAMESPACE" -f "$PVC_MANIFESTS"
-        for pvc_ref in "${pipeline_pvcs[@]}"; do
+        local recreated_pvcs=()
+        for pvc_manifest in "$PVC_MANIFESTS"/*.yaml; do
+            pvc_name="$(awk '/^[[:space:]]*name:[[:space:]]*/ { print $2; exit }' "$pvc_manifest")"
+            case "$DATA_LOCALITY_STRATEGY" in
+                DL1)
+                    continue
+                    ;;
+                DL3|DL4|DL5|DL6|DL7|DL8)
+                    case "$pvc_name" in
+                        pipeline-communication-claim|pipeline-buffer-data-claim|pipeline-decision-evaluation-cache-claim) ;;
+                        *) continue ;;
+                    esac
+                    ;;
+            esac
+            kubectl apply -n "$NAMESPACE" -f "$pvc_manifest"
+            recreated_pvcs+=("pvc/$pvc_name")
+        done
+        for pvc_ref in "${recreated_pvcs[@]}"; do
             kubectl wait -n "$NAMESPACE" \
                 --for=jsonpath='{.status.phase}'=Bound \
                 "$pvc_ref" \
@@ -552,6 +574,8 @@ record_placement() {
     [ -n "$workflow" ] && args+=(--workflow "$workflow")
     python3 "$RESULTS_SCRIPT" "${args[@]}" \
         || echo "Warning: $phase Pod placement could not be recorded." >&2
+    python3 "$RESULTS_SCRIPT" metrics "$RUN_DIR" --namespace "$NAMESPACE" \
+        || echo "Warning: $phase per-step metrics could not be recorded." >&2
 }
 
 emit_results_summary() {
@@ -620,6 +644,10 @@ start_pipeline() {
             exit 1
             ;;
     esac
+    if [ -n "$DATA_LOCALITY_STRATEGY" ] && [ "$config_mode" != "$EMBEDDING_PIPELINE_MODE" ]; then
+        echo "--data-locality supports only mode: $EMBEDDING_PIPELINE_MODE" >&2
+        exit 1
+    fi
 
     # Resolve and display the plan before any cluster mutation. The same plan is used to
     # generate manifests and, for a real run, copied into the permanent result directory.
@@ -636,13 +664,23 @@ start_pipeline() {
         return 0
     fi
 
+    if [ -n "$DATA_LOCALITY_STRATEGY" ]; then
+        DATA_LOCALITY_RUN_TOKEN="${DATA_LOCALITY_STRATEGY}-$(date +%Y%m%d-%H%M%S)-$$"
+        python3 "$DATA_LOCALITY_COMPILER" \
+            --strategy "$DATA_LOCALITY_STRATEGY" \
+            --run-token "$DATA_LOCALITY_RUN_TOKEN" \
+            --plan-output "$DATA_LOCALITY_PLAN_PATH"
+    fi
+
     # Wipe pods/Jobs/workflows/PVCs left over from a previous run, then recreate empty
     # PVCs ready for this one. See delete_pipeline_storage() for exactly what this deletes.
     delete_pipeline_storage true
 
     # Create the long-lived dataset PV/PVC if needed. Re-applying is idempotent and does
     # not copy or clear any dataset files.
-    ensure_dataset_volume
+    if [ -z "$DATA_LOCALITY_STRATEGY" ] || [ "$DATA_LOCALITY_STRATEGY" = "DL2" ]; then
+        ensure_dataset_volume
+    fi
 
     # Delete old EAER script ConfigMaps to avoid stale mounted code, and the previous
     # pipeline config ConfigMap.
@@ -658,6 +696,9 @@ start_pipeline() {
     # Every run gets a result directory, even when energy monitoring is disabled.
     start_run "$config_mode"
     cp "$SCHEDULING_PLAN_PATH" "$RUN_DIR/scheduling-plan.tsv"
+    if [ -n "$DATA_LOCALITY_STRATEGY" ]; then
+        cp "$DATA_LOCALITY_PLAN_PATH" "$RUN_DIR/data-locality-plan.tsv"
+    fi
 
     # Start the background energy monitor (no-op unless --energy-monitor) so it covers the
     # whole workload -- both the batch Argo phase and the incremental worker phase.
@@ -737,8 +778,14 @@ start_pipeline() {
 
     # Persist workload artifacts before finalizing optional monitoring.
     if [ -n "$RUN_DIR" ]; then
-        python3 "$RESULTS_SCRIPT" collect "$RUN_DIR" --namespace "$NAMESPACE" 2>/dev/null \
+        local collect_args=(collect "$RUN_DIR" --namespace "$NAMESPACE")
+        if [ "$DATA_LOCALITY_STRATEGY" = "DL1" ]; then
+            collect_args+=(--local-root "/srv/nfs/k8s/eaer-local/$DATA_LOCALITY_RUN_TOKEN" --node "server2-labo")
+        fi
+        python3 "$RESULTS_SCRIPT" "${collect_args[@]}" 2>/dev/null \
             || echo "Warning: matching-result artifacts could not be collected." >&2
+        python3 "$RESULTS_SCRIPT" metrics "$RUN_DIR" --namespace "$NAMESPACE" \
+            || echo "Warning: per-step I/O metrics could not be collected." >&2
     fi
 
     # Energy measurement is auxiliary: each backend stores its own failed/partial status.
@@ -893,6 +940,19 @@ if [ "$ACTION" = "start" ]; then
                 RESULTS_SUMMARY=true
                 shift
                 ;;
+            --data-locality)
+                if [ $# -lt 2 ]; then
+                    echo "Missing value for --data-locality. Expected DL1 through DL8."
+                    exit 1
+                fi
+                DATA_LOCALITY_STRATEGY="${2^^}"
+                shift 2
+                ;;
+            --data-locality=*)
+                DATA_LOCALITY_STRATEGY="${1#*=}"
+                DATA_LOCALITY_STRATEGY="${DATA_LOCALITY_STRATEGY^^}"
+                shift
+                ;;
             --plan-only)
                 PLAN_ONLY=true
                 shift
@@ -930,6 +990,15 @@ if [ "$ACTION" = "start" ]; then
         fi
         bash "$SCRIPT_DIR/run-configs.sh" "${START_ARGUMENTS[@]}"
         exit $?
+    fi
+
+    case "$DATA_LOCALITY_STRATEGY" in
+        ""|DL1|DL2|DL3|DL4|DL5|DL6|DL7|DL8) ;;
+        *) echo "Unknown data-locality strategy: $DATA_LOCALITY_STRATEGY (expected DL1 through DL8)"; exit 1 ;;
+    esac
+    if [ -n "$DATA_LOCALITY_STRATEGY" ] && [ "$PLAN_ONLY" = true ]; then
+        echo "--data-locality cannot currently be combined with --plan-only." >&2
+        exit 1
     fi
 
     # A single config file is required when directory mode is not selected.

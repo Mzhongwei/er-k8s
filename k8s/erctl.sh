@@ -29,6 +29,8 @@ COMMANDS:
                   start --results-summary  print matching, placement, and energy summary
                   start --plan-only        show placement plan without starting workloads
                   start -d DIRECTORY       run YAML configurations sequentially
+                  start --data-locality DL1
+                                             apply one fixed DL1-DL8 locality strategy
     alumet      Manage the cluster-wide Alumet collector.
                   start | stop | status | retention [DURATION]
     schedule    Explain placement or run H1/H2 adaptation

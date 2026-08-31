@@ -11,7 +11,8 @@ usage() {
 Usage: erctl pipeline start -d <config-directory> [start options]
 
 Run every *.yaml and *.yml file in the directory sequentially. All remaining options are
-passed to `pipeline start`; execution stops when one configuration fails.
+passed to `pipeline start` (including --data-locality DL1); execution stops when one
+configuration fails.
 EOF
 }
 

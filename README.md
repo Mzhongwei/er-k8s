@@ -287,6 +287,26 @@ bash k8s/erctl.sh pipeline start \
 Files run in filename order. Each configuration uses the existing `pipeline start`
 lifecycle and receives its own result directory; the batch stops if a configuration fails.
 
+Apply one fixed data-locality strategy with a single argument:
+
+```bash
+bash k8s/erctl.sh pipeline start -c <embedding-config.yaml> --data-locality DL5
+```
+
+`DL1` keeps every embedding Pod and data volume local to `server2-labo`; `DL2` keeps all
+Pods on `server2-labo` and uses NFS. `DL3`-`DL5` move the candidate, graph, or embedding
+task group respectively to `zhongwei-lap`; `DL6`-`DL8` move the same groups to
+`server1-k3s-worker`. In `DL3`-`DL8`, communication, buffers, and decision/evaluation
+transfer data stay on NFS, while dataset, graph, embedding, and feature-index data use
+node-local paths. Each run receives a distinct directory below
+`/srv/nfs/k8s/eaer-local/` on the selected node.
+
+Run a directory of embedding configurations for all eight strategies:
+
+```bash
+test/run_data_locality_strategies.sh <config-directory> --results-summary
+```
+
 The helper provides two different cancellation levels:
 
 ```bash
@@ -668,8 +688,14 @@ All results, including matching, scheduling, actual Pod placement, and measured 
 stored under `k8s/results/<run-id>/`:
 
 - `scheduling-plan.tsv`: pre-run strategies, weights, candidate scores, roles, and reasons;
+- `data-locality-plan.tsv`: selected DL strategy, exact node, storage type, and physical
+  path for every task volume;
 - `placement.tsv`: actual Pod-to-node placement, status, IP, and timestamps observed after
   Kubernetes scheduling;
+- `step-metrics.tsv`: per-Pod-attempt logical and storage I/O byte counters plus process
+  and Pod elapsed times;
+- `step-metrics-summary.json`: per-step totals across all attempts, including cumulative
+  elapsed time;
 - `matching/` and `matching-result.txt`: persisted entity-resolution outputs;
 - `energy/`: provider summaries and raw measurement data when monitoring was selected.
 
