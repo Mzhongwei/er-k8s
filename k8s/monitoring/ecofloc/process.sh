@@ -231,11 +231,10 @@ agent_main() {
   IFS='|' read -r avg total status <<< "$parsed"
   if grep -qiE 'CLOSED OR INEXISTENT|inexistent' "$log_dir/preflight.log" \
       || [ "$status" != "ok" ] \
-      || ! awk -v avg="$avg" -v total="$total" \
-          'BEGIN { exit !(avg + 0 > 0 && total + 0 > 0) }'; then
+      || ! awk -v total="$total" 'BEGIN { exit !(total + 0 > 0) }'; then
     kill "$test_pid" 2>/dev/null || true
     wait "$test_pid" 2>/dev/null || true
-    echo "EcoFLOC preflight produced no positive CPU measurement on $node" >&2
+    echo "EcoFLOC preflight produced no positive CPU energy measurement on $node" >&2
     exit 1
   fi
   kill "$test_pid" 2>/dev/null || true

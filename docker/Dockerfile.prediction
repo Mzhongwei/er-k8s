@@ -20,6 +20,7 @@ WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/calculating_similarity.py /app/pipeline/calculating_similarity.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/decision_making.py /app/pipeline/decision_making.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/evaluation.py /app/pipeline/evaluation.py
 COPY ./code/Energy-Aware-Entity-Resolution/models/similarity_graph.py /app/models/similarity_graph.py
