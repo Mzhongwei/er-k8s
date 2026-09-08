@@ -35,30 +35,23 @@ DATASET_PATH = "/srv/nfs/k8s/data"
 LOCAL_RUN_ROOT = "/srv/nfs/k8s/eaer-local"
 
 CANDIDATE_TASKS = {
-    "embtrai-cg-feature-extraction",
-    "embtrai-feature-index-construction",
+    "windowed-embedding-training",
     "cg-feature-extraction",
     "candidate-enumeration",
 }
 GRAPH_TASKS = {
-    "embtrai-graph-construction",
-    "embtrai-random-walk",
+    "windowed-embedding-training",
     "graph-construction",
     "random-walk",
 }
 EMBEDDING_TASKS = {
-    "embtrai-embedding-training",
+    "windowed-embedding-training",
     "embedding-training",
     "calculating-similarity",
     "decision-making",
 }
 EXPECTED_BATCH_TASKS = {
-    "embtrai-normalization",
-    "embtrai-graph-construction",
-    "embtrai-random-walk",
-    "embtrai-cg-feature-extraction",
-    "embtrai-embedding-training",
-    "embtrai-feature-index-construction",
+    "windowed-embedding-training",
 }
 EXPECTED_INCREMENTAL_TASKS = {
     "calculating-similarity",

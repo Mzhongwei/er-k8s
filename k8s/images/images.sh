@@ -22,6 +22,7 @@ IMAGE_REPOSITORY="${EAER_IMAGE_REPOSITORY:-$(cat "$SCRIPT_DIR/image-repository.c
 # first because every Python component inherits from it; kafka-producer is built last
 # because it inherits from kafka.
 RUNTIME_IMAGE_TAGS=(
+    embedding-training
     normalization
     graph
     cgfeature
@@ -80,6 +81,7 @@ build_images() {
 
     build_image base Dockerfile.base
 
+    build_image embedding-training Dockerfile.embedding-training
     build_image normalization Dockerfile.normalization
     build_image graph Dockerfile.graph
     build_image cgfeature Dockerfile.cgfeature

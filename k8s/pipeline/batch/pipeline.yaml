@@ -22,226 +22,26 @@ spec:
   entrypoint: main
 
   templates:
-    # --- entries/batch: embedding-training-dag (EmbTrai-*) and bert training/evaluation
-    # (BertTrai-*/BertEva-*). Each script is single-purpose (no --mode/--function), reads
-    # its input and writes its output via get_transfer_data_directory using a fixed data
-    # type/filename, so no explicit --processed_data/--output wiring is needed between
-    # tasks -- only --workload, shared as the workflow name so runs don't collide. ---
-    - name: embtrai-normalization
+    - name: windowed-embedding-training
       container:
         name: main
-        image: __IMAGE_REPOSITORY__:normalization
+        image: __IMAGE_REPOSITORY__:embedding-training
         imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-normalization.py]
-        args:
-        - --workload
-        - '{{workflow.name}}'
+        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-training.py]
         volumeMounts:
         - name: pipeline-config
           mountPath: /app/config/examples/config-embedding.yaml
           subPath: config.yaml
-        - name: embtrai-normalization
-          mountPath: /app/entries/batch/EmbTrai-normalization.py
-          subPath: EmbTrai-normalization.py
+        - name: windowed-embedding-training
+          mountPath: /app/entries/batch/EmbTrai-training.py
+          subPath: EmbTrai-training.py
         - name: pipeline-data
           mountPath: /data
           readOnly: true
-        - name: pipeline-communication
-          mountPath: /app/data
-        - name: pipeline-io
-          mountPath: /app/utils/pipeline_io.py
-          subPath: pipeline_io.py
-      volumes:
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: embtrai-normalization
-        configMap:
-          name: eaer-batch-embtrai-normalization
-      - name: pipeline-data
-        persistentVolumeClaim:
-          claimName: pipeline-data-claim
-          readOnly: true
-      - name: pipeline-communication
-        persistentVolumeClaim:
-          claimName: pipeline-communication-claim
-      - name: pipeline-io
-        configMap:
-          name: eaer-pipeline-io
-
-    - name: embtrai-graph-construction
-      container:
-        name: main
-        image: __IMAGE_REPOSITORY__:graph
-        imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-graph_construction.py]
-        args:
-        - --workload
-        - '{{workflow.name}}'
-        volumeMounts:
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
-        - name: embtrai-graph-construction
-          mountPath: /app/entries/batch/EmbTrai-graph_construction.py
-          subPath: EmbTrai-graph_construction.py
         - name: pipeline-graph-cache
           mountPath: /app/data/graph
-        - name: pipeline-communication
-          mountPath: /app/data
-        - name: pipeline-io
-          mountPath: /app/utils/pipeline_io.py
-          subPath: pipeline_io.py
-      volumes:
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: embtrai-graph-construction
-        configMap:
-          name: eaer-batch-embtrai-graph-construction
-      - name: pipeline-graph-cache
-        persistentVolumeClaim:
-          claimName: pipeline-graph-cache-claim
-      - name: pipeline-communication
-        persistentVolumeClaim:
-          claimName: pipeline-communication-claim
-      - name: pipeline-io
-        configMap:
-          name: eaer-pipeline-io
-
-    - name: embtrai-random-walk
-      container:
-        name: main
-        image: __IMAGE_REPOSITORY__:graph
-        imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-random_walk.py]
-        args:
-        - --workload
-        - '{{workflow.name}}'
-        volumeMounts:
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
-        - name: embtrai-random-walk
-          mountPath: /app/entries/batch/EmbTrai-random_walk.py
-          subPath: EmbTrai-random_walk.py
-        - name: pipeline-graph-cache
-          mountPath: /app/data/graph
-        - name: pipeline-communication
-          mountPath: /app/data
-        - name: pipeline-io
-          mountPath: /app/utils/pipeline_io.py
-          subPath: pipeline_io.py
-      volumes:
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: embtrai-random-walk
-        configMap:
-          name: eaer-batch-embtrai-random-walk
-      - name: pipeline-graph-cache
-        persistentVolumeClaim:
-          claimName: pipeline-graph-cache-claim
-      - name: pipeline-communication
-        persistentVolumeClaim:
-          claimName: pipeline-communication-claim
-      - name: pipeline-io
-        configMap:
-          name: eaer-pipeline-io
-
-    - name: embtrai-cg-feature-extraction
-      archiveLocation:
-        archiveLogs: false
-      container:
-        name: main
-        image: __IMAGE_REPOSITORY__:cgfeature
-        imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-cg_feature_extraction.py]
-        args:
-        - --workload
-        - '{{workflow.name}}'
-        volumeMounts:
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
-        - name: embtrai-cg-feature-extraction
-          mountPath: /app/entries/batch/EmbTrai-cg_feature_extraction.py
-          subPath: EmbTrai-cg_feature_extraction.py
-        - name: pipeline-communication
-          mountPath: /app/data
-        - name: pipeline-io
-          mountPath: /app/utils/pipeline_io.py
-          subPath: pipeline_io.py
-      volumes:
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: embtrai-cg-feature-extraction
-        configMap:
-          name: eaer-batch-embtrai-cg-feature-extraction
-      - name: pipeline-communication
-        persistentVolumeClaim:
-          claimName: pipeline-communication-claim
-      - name: pipeline-io
-        configMap:
-          name: eaer-pipeline-io
-
-    - name: embtrai-embedding-training
-      container:
-        name: main
-        image: __IMAGE_REPOSITORY__:embedding
-        imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-embedding_training.py]
-        args:
-        - --workload
-        - '{{workflow.name}}'
-        volumeMounts:
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
-        - name: embtrai-embedding-training
-          mountPath: /app/entries/batch/EmbTrai-embedding_training.py
-          subPath: EmbTrai-embedding_training.py
         - name: pipeline-embedding-model-cache
           mountPath: /app/data/embedding
-        - name: pipeline-communication
-          mountPath: /app/data
-        - name: pipeline-io
-          mountPath: /app/utils/pipeline_io.py
-          subPath: pipeline_io.py
-      volumes:
-      - name: pipeline-config
-        configMap:
-          name: er-pipeline-config
-      - name: embtrai-embedding-training
-        configMap:
-          name: eaer-batch-embtrai-embedding-training
-      - name: pipeline-embedding-model-cache
-        persistentVolumeClaim:
-          claimName: pipeline-embedding-model-cache-claim
-      - name: pipeline-communication
-        persistentVolumeClaim:
-          claimName: pipeline-communication-claim
-      - name: pipeline-io
-        configMap:
-          name: eaer-pipeline-io
-
-    - name: embtrai-feature-index-construction
-      container:
-        name: main
-        image: __IMAGE_REPOSITORY__:featureindex
-        imagePullPolicy: Always
-        command: [/opt/venv/bin/python, /app/entries/batch/EmbTrai-feature_index_construction.py]
-        args:
-        - --workload
-        - '{{workflow.name}}'
-        volumeMounts:
-        - name: pipeline-config
-          mountPath: /app/config/examples/config-embedding.yaml
-          subPath: config.yaml
-        - name: embtrai-feature-index-construction
-          mountPath: /app/entries/batch/EmbTrai-feature_index_construction.py
-          subPath: EmbTrai-feature_index_construction.py
         - name: pipeline-feature-index-cache
           mountPath: /app/data/index
         - name: pipeline-communication
@@ -253,9 +53,19 @@ spec:
       - name: pipeline-config
         configMap:
           name: er-pipeline-config
-      - name: embtrai-feature-index-construction
+      - name: windowed-embedding-training
         configMap:
-          name: eaer-batch-embtrai-feature-index-construction
+          name: eaer-batch-windowed-embedding-training
+      - name: pipeline-data
+        persistentVolumeClaim:
+          claimName: pipeline-data-claim
+          readOnly: true
+      - name: pipeline-graph-cache
+        persistentVolumeClaim:
+          claimName: pipeline-graph-cache-claim
+      - name: pipeline-embedding-model-cache
+        persistentVolumeClaim:
+          claimName: pipeline-embedding-model-cache-claim
       - name: pipeline-feature-index-cache
         persistentVolumeClaim:
           claimName: pipeline-feature-index-cache-claim
@@ -445,28 +255,8 @@ spec:
     - name: embedding-training-dag
       dag:
         tasks:
-        - name: normalization
-          template: embtrai-normalization
-
-        - name: graph-construction
-          template: embtrai-graph-construction
-          depends: normalization.Succeeded
-
-        - name: random-walk
-          template: embtrai-random-walk
-          depends: graph-construction.Succeeded
-
         - name: embedding-training
-          template: embtrai-embedding-training
-          depends: random-walk.Succeeded
-
-        - name: cg-feature-extraction
-          template: embtrai-cg-feature-extraction
-          depends: normalization.Succeeded
-
-        - name: feature-index-construction
-          template: embtrai-feature-index-construction
-          depends: cg-feature-extraction.Succeeded
+          template: windowed-embedding-training
 
     - name: bert-training-evaluation-dag
       dag:

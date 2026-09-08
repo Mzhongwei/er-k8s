@@ -1,5 +1,5 @@
 # Backs state_management.feature_index-dir (/app/data/index). Written once by the batch
-# training DAG (EmbTrai-feature_index_construction.py); read-only for the incremental
+# training entry (EmbTrai-training.py); read-only for the incremental
 # candidate-enumeration worker.
 apiVersion: v1
 kind: PersistentVolumeClaim

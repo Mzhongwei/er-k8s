@@ -1,0 +1,35 @@
+# Must be supplied by k8s/images/images.sh.
+ARG IMAGE_REPOSITORY
+FROM ${IMAGE_REPOSITORY}:base AS builder
+
+COPY code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-base.txt \
+     code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-graph.txt \
+     code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-embedding.txt \
+     code/Energy-Aware-Entity-Resolution/requirements/for_entries/requirements-feature-index.txt \
+     /app/requirements/for_entries/
+
+RUN /opt/venv/bin/pip install --no-cache-dir \
+    -r /app/requirements/for_entries/requirements-graph.txt \
+    -r /app/requirements/for_entries/requirements-embedding.txt \
+    -r /app/requirements/for_entries/requirements-feature-index.txt
+
+FROM ${IMAGE_REPOSITORY}:base
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/normalization.py /app/pipeline/normalization.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/graph_construction.py /app/pipeline/graph_construction.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/sampler.py /app/pipeline/sampler.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/random_walk.py /app/pipeline/random_walk.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/embedding_training.py /app/pipeline/embedding_training.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/cg_feature_extraction.py /app/pipeline/cg_feature_extraction.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/feature_index_construction.py /app/pipeline/feature_index_construction.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/representation_graph.py /app/models/representation_graph.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/embedding_model.py /app/models/embedding_model.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/cg_index.py /app/models/cg_index.py

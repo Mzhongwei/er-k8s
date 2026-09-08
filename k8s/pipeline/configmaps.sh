@@ -40,14 +40,8 @@ WORKER_CALCULATING_SIMILARITY_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resol
 WORKER_DECISION_MAKING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/decision_making.py"
 WORKER_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/evaluation.py"
 
-# --- entries/batch: embedding-training-dag steps (EmbTrai-*) and bert training/evaluation
-# steps (BertTrai-*/BertEva-*). Batch embedding-prediction (EmbPred-*) is out of scope here. ---
-BATCH_EMBTRAI_NORMALIZATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/EmbTrai-normalization.py"
-BATCH_EMBTRAI_GRAPH_CONSTRUCTION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/EmbTrai-graph_construction.py"
-BATCH_EMBTRAI_RANDOM_WALK_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/EmbTrai-random_walk.py"
-BATCH_EMBTRAI_CG_FEATURE_EXTRACTION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/EmbTrai-cg_feature_extraction.py"
-BATCH_EMBTRAI_EMBEDDING_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/EmbTrai-embedding_training.py"
-BATCH_EMBTRAI_FEATURE_INDEX_CONSTRUCTION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/EmbTrai-feature_index_construction.py"
+# --- entries/batch: windowed embedding training and BERT training/evaluation. ---
+WINDOWED_EMBEDDING_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/EmbTrai-training.py"
 BATCH_BERTTRAI_NORMALIZATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/BertTrai-normalization.py"
 BATCH_BERTTRAI_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/BertTrai_training.py"
 BATCH_BERTEVA_NORMALIZATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/BertEva-normalization.py"
@@ -146,12 +140,7 @@ create_or_update_configmap "eaer-worker-decision-making" "decision_making.py" "$
 create_or_update_configmap "eaer-worker-evaluation" "evaluation.py" "$WORKER_EVALUATION_SCRIPT"
 
 # --- entries/batch ---
-create_or_update_configmap "eaer-batch-embtrai-normalization" "EmbTrai-normalization.py" "$BATCH_EMBTRAI_NORMALIZATION_SCRIPT"
-create_or_update_configmap "eaer-batch-embtrai-graph-construction" "EmbTrai-graph_construction.py" "$BATCH_EMBTRAI_GRAPH_CONSTRUCTION_SCRIPT"
-create_or_update_configmap "eaer-batch-embtrai-random-walk" "EmbTrai-random_walk.py" "$BATCH_EMBTRAI_RANDOM_WALK_SCRIPT"
-create_or_update_configmap "eaer-batch-embtrai-cg-feature-extraction" "EmbTrai-cg_feature_extraction.py" "$BATCH_EMBTRAI_CG_FEATURE_EXTRACTION_SCRIPT"
-create_or_update_configmap "eaer-batch-embtrai-embedding-training" "EmbTrai-embedding_training.py" "$BATCH_EMBTRAI_EMBEDDING_TRAINING_SCRIPT"
-create_or_update_configmap "eaer-batch-embtrai-feature-index-construction" "EmbTrai-feature_index_construction.py" "$BATCH_EMBTRAI_FEATURE_INDEX_CONSTRUCTION_SCRIPT"
+create_or_update_configmap "eaer-batch-windowed-embedding-training" "EmbTrai-training.py" "$WINDOWED_EMBEDDING_TRAINING_SCRIPT"
 create_or_update_configmap "eaer-batch-berttrai-normalization" "BertTrai-normalization.py" "$BATCH_BERTTRAI_NORMALIZATION_SCRIPT"
 create_or_update_configmap "eaer-batch-berttrai-training" "BertTrai_training.py" "$BATCH_BERTTRAI_TRAINING_SCRIPT"
 create_or_update_configmap "eaer-batch-berteva-normalization" "BertEva-normalization.py" "$BATCH_BERTEVA_NORMALIZATION_SCRIPT"

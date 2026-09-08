@@ -5,18 +5,8 @@ batch:
       io_intensity: medium
       migratable: false
   templates:
-    normalization:
-      task: {data_ids: [datasets, pipeline_intermediate]}
-    graph-construction:
-      task: {io_intensity: high, data_ids: [pipeline_intermediate, graph_snapshot]}
-    random-walk:
-      task: {io_intensity: high, data_ids: [graph_snapshot, pipeline_intermediate]}
     embedding-training:
-      task: {data_ids: [pipeline_intermediate, embedding_model]}
-    cg-feature-extraction:
-      task: {data_ids: [pipeline_intermediate]}
-    feature-index-construction:
-      task: {io_intensity: high, data_ids: [pipeline_intermediate, feature_index]}
+      task: {io_intensity: high, data_ids: [datasets, graph_snapshot, embedding_model, feature_index]}
     bert-normalization-training:
       task: {data_ids: [datasets, pipeline_intermediate]}
     bert-training:
