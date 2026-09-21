@@ -35,23 +35,22 @@ DATASET_PATH = "/srv/nfs/k8s/data"
 LOCAL_RUN_ROOT = "/srv/nfs/k8s/eaer-local"
 
 CANDIDATE_TASKS = {
-    "windowed-embedding-training",
+    "feature-index-construction",
     "cg-feature-extraction",
     "candidate-enumeration",
 }
 GRAPH_TASKS = {
-    "windowed-embedding-training",
     "graph-construction",
     "random-walk",
 }
 EMBEDDING_TASKS = {
-    "windowed-embedding-training",
     "embedding-training",
     "calculating-similarity",
     "decision-making",
 }
 EXPECTED_BATCH_TASKS = {
-    "windowed-embedding-training",
+    "normalization", "graph-construction", "random-walk",
+    "embedding-training", "cg-feature-extraction", "feature-index-construction",
 }
 EXPECTED_INCREMENTAL_TASKS = {
     "calculating-similarity",

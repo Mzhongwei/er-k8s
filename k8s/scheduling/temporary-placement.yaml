@@ -4,6 +4,11 @@ temporary_placement:
   enabled: false
 
   batch:
+    normalization: null
+    graph-construction: null
+    random-walk: null
+    cg-feature-extraction: null
+    feature-index-construction: null
     embedding-training: null
     bert-normalization-training: null
     bert-training: null

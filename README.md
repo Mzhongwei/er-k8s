@@ -813,3 +813,19 @@ This repository is an experimental deployment and orchestration layer around the
 
 This project builds on an initial implementation developed by
 [Kevin OULAI](https://github.com/kevin-oulai/k8s-python-llm/). The repository contains subsequent modifications, extensions, and maintenance work.
+
+### Distributed initial embedding training
+
+Initial training now runs six persistent Argo Pods: `normalization`,
+`graph-construction`, `random-walk`, `embedding-training`,
+`cg-feature-extraction`, and `feature-index-construction`. Each handles multiple
+mini-batches. Normalized data feeds the graph/walk/embedding branch and the
+feature/index branch. File handoffs and acknowledgments bound in-flight data to
+one window; all Pods must succeed before incremental Jobs start.
+
+The stages reuse the `embedding-training` image and ConfigMap-mounted entry,
+with separate `--stage` arguments and per-task scheduling rules. Regenerate
+ConfigMaps and executable manifests using the normal pipeline start command.
+Existing running workflows are unaffected. Per-stage logs distinguish computation,
+serialization and final model saving; Pod lifetime also includes input waiting.
+See [training lifecycle and failure handling](code/Energy-Aware-Entity-Resolution/README.md#windowed-embedding-training).
