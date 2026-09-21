@@ -692,11 +692,26 @@ stored under `k8s/results/<run-id>/`:
 - `placement.tsv`: actual Pod-to-node placement, status, IP, and timestamps observed after
   Kubernetes scheduling;
 - `step-metrics.tsv`: per-Pod-attempt logical and storage I/O byte counters plus process
-  and Pod elapsed times;
+  and Pod elapsed times, and, for streaming stages, `wait_seconds` (blocked on a peer),
+  `compute_seconds` (everything else, including startup) and the window count;
+- `window-metrics.tsv`: one row per stage window (plus one `setup` and one `eos` row) with
+  its wait and compute seconds and UTC start/end, so a Pod's lifetime can be split into
+  useful work and idle polling;
 - `step-metrics-summary.json`: per-step totals across all attempts, including cumulative
-  elapsed time;
+  elapsed, wait and compute time;
 - `matching/` and `matching-result.txt`: persisted entity-resolution outputs;
-- `energy/`: provider summaries and raw measurement data when monitoring was selected.
+- `energy/`: provider summaries and raw measurement data when monitoring was selected;
+- `energy/compute-normalized.json`: per-Pod energy next to its compute and wait seconds,
+  with energy per compute second and an estimated compute share of the energy. The share
+  assumes equal average power while waiting and computing, so it over-credits waiting; the
+  window timestamps allow an exact split against a power time series. Pods that do not use
+  the stage runner (the BERT stages) are listed without compute figures.
+
+Batch training and the incremental workers share one stage loop, `StreamStage` in
+`utils/pipeline_io.py`. It owns the wait, load, EOS, skip, consume and timing logic; each
+entry script only supplies its handler and a transport (`HandoffIO` for training,
+`BufferIO` for incremental). Embedding prediction and evaluation run only as incremental
+workers, after the training workflow succeeds.
 
 Keeping plan and actual placement separate makes fallback decisions visible without
 changing the `placement.tsv` format consumed by the Alumet attribution code.

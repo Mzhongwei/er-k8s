@@ -30,9 +30,17 @@ STEP_METRIC_FIELDS = (
     "phase", "task", "pod", "pod_uid", "node", "status", "attempt",
     "logical_read_bytes", "logical_write_bytes", "storage_read_bytes",
     "storage_write_bytes", "elapsed_seconds", "pod_elapsed_seconds",
+    "wait_seconds", "compute_seconds", "windows",
     "started_at", "finished_at",
 )
+# One row per processed window (plus one "setup" and one "eos" row) of every stage Pod.
+# wait_seconds = blocked on a peer; compute_seconds = everything else in that window.
+WINDOW_METRIC_FIELDS = (
+    "phase", "task", "pod", "node", "window", "wait_seconds", "compute_seconds",
+    "started_at", "ended_at",
+)
 STEP_METRICS_PREFIX = "[EAER_STEP_METRICS] "
+WINDOW_METRICS_PREFIX = "[EAER_WINDOW_METRICS] "
 ECOFLOC_METRICS = ("cpu", "gpu", "nic", "ram", "sd")
 POD_UID_PATTERN = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
@@ -421,23 +429,33 @@ def _elapsed_between(started_at: str, finished_at: str) -> str:
         return ""
 
 
-def _metric_from_log(namespace: str, pod: str) -> dict[str, object] | None:
+def _pod_log_metrics(namespace: str, pod: str) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    """Return (final step-metrics record, per-window records) parsed from one Pod's log."""
     result = subprocess.run(
         ["kubectl", "logs", "-n", namespace, pod, "--tail=-1"],
         text=True, capture_output=True, check=False,
     )
     if result.returncode != 0:
-        return None
-    for line in reversed(result.stdout.splitlines()):
-        marker = line.find(STEP_METRICS_PREFIX)
-        if marker < 0:
-            continue
-        try:
-            value = json.loads(line[marker + len(STEP_METRICS_PREFIX):])
-        except json.JSONDecodeError:
-            return None
-        return value if isinstance(value, dict) else None
-    return None
+        return None, []
+    step: dict[str, object] | None = None
+    windows: list[dict[str, object]] = []
+    for line in result.stdout.splitlines():
+        for prefix in (STEP_METRICS_PREFIX, WINDOW_METRICS_PREFIX):
+            marker = line.find(prefix)
+            if marker < 0:
+                continue
+            try:
+                value = json.loads(line[marker + len(prefix):])
+            except json.JSONDecodeError:
+                break
+            if not isinstance(value, dict):
+                break
+            if prefix == STEP_METRICS_PREFIX:
+                step = value  # the last record wins
+            else:
+                windows.append(value)
+            break
+    return step, windows
 
 
 def collect_step_metrics(run_dir: Path, namespace: str) -> None:
@@ -454,12 +472,22 @@ def collect_step_metrics(run_dir: Path, namespace: str) -> None:
     rows: list[dict[str, object]] = []
     numeric_fields = (
         "logical_read_bytes", "logical_write_bytes", "storage_read_bytes",
-        "storage_write_bytes", "elapsed_seconds",
+        "storage_write_bytes", "elapsed_seconds", "wait_seconds", "compute_seconds", "windows",
     )
+    window_rows: list[dict[str, object]] = []
     for placement_row in ordered:
         key = (placement_row.get("phase", ""), placement_row.get("task", ""))
         attempt_by_task[key] += 1
-        metric = _metric_from_log(namespace, placement_row.get("pod", "")) or {}
+        step_metric, windows = _pod_log_metrics(namespace, placement_row.get("pod", ""))
+        metric = step_metric or {}
+        for window in windows:
+            window_rows.append({
+                "phase": key[0], "task": key[1], "pod": placement_row.get("pod", ""),
+                "node": placement_row.get("node", ""), "window": window.get("window", ""),
+                "wait_seconds": window.get("wait_seconds", ""),
+                "compute_seconds": window.get("compute_seconds", ""),
+                "started_at": window.get("started_at", ""), "ended_at": window.get("ended_at", ""),
+            })
         row: dict[str, object] = {
             "phase": key[0], "task": key[1], "pod": placement_row.get("pod", ""),
             "pod_uid": placement_row.get("pod_uid", ""), "node": placement_row.get("node", ""),
@@ -480,6 +508,12 @@ def collect_step_metrics(run_dir: Path, namespace: str) -> None:
         writer.writeheader()
         writer.writerows(rows)
 
+    windows_output = run_dir / "window-metrics.tsv"
+    with windows_output.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=WINDOW_METRIC_FIELDS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(window_rows)
+
     summary: dict[str, dict[str, object]] = {}
     for row in rows:
         key = f"{row['phase']}/{row['task']}"
@@ -488,7 +522,16 @@ def collect_step_metrics(run_dir: Path, namespace: str) -> None:
             "measured_attempts": 0, "logical_read_bytes": 0, "logical_write_bytes": 0,
             "storage_read_bytes": 0, "storage_write_bytes": 0,
             "cumulative_elapsed_seconds": 0.0, "cumulative_pod_elapsed_seconds": 0.0,
+            "windows": 0, "cumulative_wait_seconds": 0.0, "cumulative_compute_seconds": 0.0,
         })
+        if row["compute_seconds"] != "":
+            item["windows"] = int(item["windows"]) + int(row["windows"] or 0)
+            item["cumulative_wait_seconds"] = round(
+                float(item["cumulative_wait_seconds"]) + float(row["wait_seconds"] or 0), 6
+            )
+            item["cumulative_compute_seconds"] = round(
+                float(item["cumulative_compute_seconds"]) + float(row["compute_seconds"]), 6
+            )
         item["attempts"] = int(item["attempts"]) + 1
         if row["elapsed_seconds"] != "":
             item["measured_attempts"] = int(item["measured_attempts"]) + 1
@@ -505,6 +548,78 @@ def collect_step_metrics(run_dir: Path, namespace: str) -> None:
             )
     (run_dir / "step-metrics-summary.json").write_text(
         json.dumps({"steps": summary}, indent=2), encoding="utf-8"
+    )
+    write_compute_normalized(run_dir)
+
+
+def _as_float(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def write_compute_normalized(run_dir: Path) -> None:
+    """Relate each Pod's energy to the time it spent computing rather than waiting.
+
+    Needs both step-metrics.tsv (wait/compute seconds) and at least one energy summary. It is
+    called after either is produced, so the order in which they are collected does not matter.
+    compute_energy_j is an estimate: it assumes the Pod drew the same average power while
+    waiting as while computing, which over-credits waiting (an idle poll loop draws less). The
+    exact split needs the power time series intersected with window-metrics.tsv.
+    """
+    steps_path = run_dir / "step-metrics.tsv"
+    summary_paths = energy_summary_paths(run_dir)
+    if not steps_path.exists() or not summary_paths:
+        return
+    with steps_path.open(encoding="utf-8") as stream:
+        steps = {row["pod"]: row for row in csv.DictReader(stream, delimiter="\t") if row.get("pod")}
+    providers: dict[str, object] = {}
+    for path in summary_paths:
+        summary = json.loads(path.read_text(encoding="utf-8"))
+        provider = summary.get("provider", "ecofloc")
+        by_pod = summary.get("by_workload_pod_j" if provider == "alumet" else "by_pod_j", {})
+        pods = []
+        for pod, energy in sorted(by_pod.items()):
+            step = steps.get(pod, {})
+            wait, compute = _as_float(step.get("wait_seconds")), _as_float(step.get("compute_seconds"))
+            energy = float(energy)
+            entry: dict[str, object] = {
+                "pod": pod, "phase": step.get("phase", ""), "task": step.get("task", ""),
+                "energy_j": round(energy, 6),
+                "pod_elapsed_seconds": _as_float(step.get("pod_elapsed_seconds")),
+                "wait_seconds": wait, "compute_seconds": compute,
+                "compute_fraction": None, "compute_energy_j": None, "energy_per_compute_second_j": None,
+            }
+            if wait is not None and compute is not None and wait + compute > 0:
+                entry["compute_fraction"] = round(compute / (wait + compute), 6)
+                entry["compute_energy_j"] = round(energy * compute / (wait + compute), 6)
+                if compute > 0:
+                    entry["energy_per_compute_second_j"] = round(energy / compute, 6)
+            pods.append(entry)
+        measured = [entry for entry in pods if entry["compute_seconds"] is not None]
+        providers[provider] = {
+            "pods": pods,
+            "measured_pods": len(measured),
+            "energy_j": round(sum(float(entry["energy_j"]) for entry in measured), 6),
+            "compute_seconds": round(sum(float(entry["compute_seconds"]) for entry in measured), 6),
+            "wait_seconds": round(sum(float(entry["wait_seconds"]) for entry in measured), 6),
+            "compute_energy_j": round(sum(float(entry["compute_energy_j"] or 0) for entry in measured), 6),
+        }
+    (run_dir / "energy" / "compute-normalized.json").write_text(
+        json.dumps({
+            "providers": providers,
+            "note": (
+                "wait_seconds: blocked on a peer (input buffer, checkpoint ack, downstream ack). "
+                "compute_seconds: all other time, including startup. compute_energy_j estimates "
+                "the compute share of a Pod's energy assuming equal average power while waiting "
+                "and computing; energy_per_compute_second_j = energy_j / compute_seconds. "
+                "Pods without window metrics (for example the BERT stages) are listed with null "
+                "compute fields and are excluded from the provider totals."
+            ),
+        }, indent=2),
+        encoding="utf-8",
     )
 
 
@@ -597,9 +712,16 @@ def show(run_dir: Path) -> None:
                 )
             else:
                 io_text = "I/O=n/a cumulative=n/a"
+            time_text = ""
+            if int(item.get("windows", 0)) or float(item.get("cumulative_compute_seconds", 0)):
+                time_text = (
+                    f" windows={item.get('windows', 0)}"
+                    f" compute={item.get('cumulative_compute_seconds', 0):.3f}s"
+                    f" wait={item.get('cumulative_wait_seconds', 0):.3f}s"
+                )
             print(
                 f"  {item.get('phase', ''):<11} {item.get('task', ''):<34} "
-                f"{io_text} attempts={measured}/{attempts}"
+                f"{io_text}{time_text} attempts={measured}/{attempts}"
             )
     for summary in summaries:
         provider = summary.get("provider", "ecofloc")
@@ -652,6 +774,24 @@ def show(run_dir: Path) -> None:
         by_metric = summary.get("by_metric_j", {})
         if by_metric:
             print("By metric: " + "  ".join(f"{metric}={value:.3f}J" for metric, value in by_metric.items()))
+    normalized_path = run_dir / "energy" / "compute-normalized.json"
+    if normalized_path.exists():
+        normalized = json.loads(normalized_path.read_text(encoding="utf-8")).get("providers", {})
+        for provider, data in normalized.items():
+            print(
+                f"Energy per compute second ({provider}): {data['measured_pods']} pod(s)  "
+                f"compute={data['compute_seconds']:.3f}s wait={data['wait_seconds']:.3f}s  "
+                f"compute-share={data['compute_energy_j']:.3f}J of {data['energy_j']:.3f}J"
+            )
+            for entry in data["pods"]:
+                if entry["compute_seconds"] is None:
+                    continue
+                rate = entry["energy_per_compute_second_j"]
+                print(
+                    f"  {entry['task'] or entry['pod']:<34} energy={entry['energy_j']:.3f}J "
+                    f"compute={entry['compute_seconds']:.3f}s wait={entry['wait_seconds']:.3f}s "
+                    f"J/compute-s={'n/a' if rate is None else f'{rate:.3f}'}"
+                )
 
 
 def resolve_run(root: Path, name: str) -> Path:
@@ -698,6 +838,7 @@ def main() -> None:
     if args.command == "energy":
         try:
             energy_summary(args.run_dir)
+            write_compute_normalized(args.run_dir)
         except RuntimeError as error:
             raise SystemExit(str(error)) from None
     elif args.command == "collect":

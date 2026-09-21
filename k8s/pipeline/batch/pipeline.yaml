@@ -504,19 +504,11 @@ spec:
 
     - name: main
       dag:
-        # TODO(EmbPred): a third branch for batch embedding prediction/evaluation is not
-        # built yet. It should mount entries/batch/EmbPred-*.py (9 scripts: normalization,
-        # graph_construction, random_walk, cg_feature_extraction, embedding_training
-        # (continues the batch-trained model on prediction-side sequences),
-        # candidate_enumeration, calculating_similarity, decision_making, evaluation) the
-        # same way embedding-training-dag/bert-training-evaluation-dag mount their scripts,
-        # then get a task here gated on mode =~ '.*embedding.*' && mode =~ '.*inference.*'
-        # (or '.*evaluation.*', matching config-embedding.yaml's
-        # "embedding-training-inference-evaluation"). Until then, an embedding mode with
-        # "inference" or "evaluation" but without "training" (e.g. "embedding-inference" or
-        # "embedding-evaluation" on their own) matches neither branch below and the workflow
-        # runs zero tasks. This file's own default ("embedding-training") does match the
-        # embedding-training-dag branch.
+        # This workflow only trains (embedding or BERT). Prediction and evaluation for the
+        # embedding mode run as the incremental worker Jobs (k8s/pipeline/incremental/), which
+        # pipeline.sh applies after this workflow succeeds; there is no separate batch
+        # prediction branch. An embedding mode without "training" (e.g. "embedding-inference")
+        # therefore matches neither branch below and this workflow runs zero tasks.
         tasks:
         - name: embedding-training-dag
           when: "'{{workflow.parameters.mode}}' =~ '.*embedding.*' && '{{workflow.parameters.mode}}' =~ '.*training.*'"
