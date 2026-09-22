@@ -1,5 +1,7 @@
 logs/
 reports/
+test/
+prompt/
 .vscode/
 .codex/
 .agents/
