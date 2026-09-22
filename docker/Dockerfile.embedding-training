@@ -31,5 +31,7 @@ COPY ./code/Energy-Aware-Entity-Resolution/pipeline/embedding_training.py /app/p
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/cg_feature_extraction.py /app/pipeline/cg_feature_extraction.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/feature_index_construction.py /app/pipeline/feature_index_construction.py
 COPY ./code/Energy-Aware-Entity-Resolution/models/representation_graph.py /app/models/representation_graph.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/graph_backend.py /app/models/graph_backend.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/compact_adjacency_graph.py /app/models/compact_adjacency_graph.py
 COPY ./code/Energy-Aware-Entity-Resolution/models/embedding_model.py /app/models/embedding_model.py
 COPY ./code/Energy-Aware-Entity-Resolution/models/cg_index.py /app/models/cg_index.py

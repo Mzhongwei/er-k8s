@@ -29,6 +29,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:embedding-training
         imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
         command:
         - /opt/venv/bin/python
         - /app/entries/batch/EmbTrai-training.py
@@ -77,6 +84,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:embedding-training
         imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
         command:
         - /opt/venv/bin/python
         - /app/entries/batch/EmbTrai-training.py
@@ -123,6 +137,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:embedding-training
         imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
         command:
         - /opt/venv/bin/python
         - /app/entries/batch/EmbTrai-training.py
@@ -164,6 +185,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:embedding-training
         imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 2Gi
         command:
         - /opt/venv/bin/python
         - /app/entries/batch/EmbTrai-training.py
@@ -210,6 +238,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:embedding-training
         imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
         command:
         - /opt/venv/bin/python
         - /app/entries/batch/EmbTrai-training.py
@@ -251,6 +286,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:embedding-training
         imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
         command:
         - /opt/venv/bin/python
         - /app/entries/batch/EmbTrai-training.py
@@ -295,6 +337,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:normalization
         imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
         command: [/opt/venv/bin/python, /app/entries/batch/BertTrai-normalization.py]
         args:
         - --workload
@@ -338,7 +387,13 @@ spec:
         image: __IMAGE_REPOSITORY__:bert
         imagePullPolicy: Always
         resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+            nvidia.com/gpu: 1
           limits:
+            cpu: "4"
+            memory: 16Gi
             nvidia.com/gpu: 1
         command: [/opt/venv/bin/python, /app/entries/batch/BertTrai_training.py]
         args:
@@ -386,6 +441,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:normalization
         imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
         command: [/opt/venv/bin/python, /app/entries/batch/BertEva-normalization.py]
         args:
         - --workload
@@ -429,7 +491,13 @@ spec:
         image: __IMAGE_REPOSITORY__:bert
         imagePullPolicy: Always
         resources:
+          requests:
+            cpu: "1"
+            memory: 2Gi
+            nvidia.com/gpu: 1
           limits:
+            cpu: "4"
+            memory: 8Gi
             nvidia.com/gpu: 1
         command: [/opt/venv/bin/python, /app/entries/batch/BertEva-b_evaluation.py]
         args:
