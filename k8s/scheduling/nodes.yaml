@@ -6,6 +6,7 @@ nodes:
     workload_modes: [batch, service]
     storage_access: [nfs, local_path]
   zhongwei-lap:
+    schedulable: false
     io_class: medium
     workload_modes: [batch, service]
     storage_access: [nfs]
@@ -16,5 +17,9 @@ nodes:
   matis-asus-expertbook-b1500ceaey-b1500ceae:
     schedulable: false
     io_class: low
+    workload_modes: [batch, service]
+    storage_access: [nfs]
+  k3s-worker-thinkpad:
+    io_class: medium
     workload_modes: [batch, service]
     storage_access: [nfs]
