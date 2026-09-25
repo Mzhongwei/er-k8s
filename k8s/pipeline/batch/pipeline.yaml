@@ -137,6 +137,13 @@ spec:
         name: main
         image: __IMAGE_REPOSITORY__:embedding-training
         imagePullPolicy: Always
+        env:
+        - name: EAER_CPU_LIMIT_MILLICORES
+          valueFrom:
+            resourceFieldRef:
+              containerName: main
+              resource: limits.cpu
+              divisor: 1m
         resources:
           requests:
             cpu: 500m

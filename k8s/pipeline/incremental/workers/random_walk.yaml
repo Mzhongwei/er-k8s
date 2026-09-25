@@ -22,6 +22,12 @@ spec:
             - --workload
             - ""
           env:
+            - name: EAER_CPU_LIMIT_MILLICORES
+              valueFrom:
+                resourceFieldRef:
+                  containerName: main
+                  resource: limits.cpu
+                  divisor: 1m
           resources:
             requests:
               cpu: 500m
