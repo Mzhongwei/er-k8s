@@ -82,6 +82,7 @@ PROCESS_SCRIPT="$K8S_DIR/monitoring/ecofloc/process.sh"
 ALUMET_SCRIPT="$K8S_DIR/monitoring/alumet/alumet.py"
 RESULTS_SCRIPT="$K8S_DIR/monitoring/results.py"
 SCHEDULING_COMPILER="$K8S_DIR/scheduling/compiler.py"
+SCHEDULING_CONFIG="$K8S_DIR/scheduling/scheduling.yaml"
 SCHEDULING_PLAN_PATH="$K8S_DIR/pipeline/exec/scheduling-plan.tsv"
 DATA_LOCALITY_COMPILER="$K8S_DIR/scheduling/data_locality.py"
 DATA_LOCALITY_PLAN_PATH="$K8S_DIR/pipeline/exec/data-locality-plan.tsv"
@@ -147,6 +148,8 @@ Options (start):
                              and energy (when monitored).
     --data-locality DL1      Apply the fixed DL1-DL8 node/storage experiment strategy.
                              Also accepts --data-locality=DL1.
+    --scheduling-config PATH Use an alternate scheduling entry-point YAML for this run.
+                             Defaults to k8s/scheduling/scheduling.yaml.
     --plan-only              Show and save the scheduling plan without creating workloads
                              or changing PVCs, ConfigMaps, Workflows, or Jobs.
     --results-archive DEST   Copy this run's results dir to a durable/remote location after
@@ -686,6 +689,7 @@ start_pipeline() {
     # Resolve and display the plan before any cluster mutation. The same plan is used to
     # generate manifests and, for a real run, copied into the permanent result directory.
     compiler_args=(
+        --config "$SCHEDULING_CONFIG"
         --mode "$compiler_mode"
         --pipeline-mode "$config_mode"
         --pipeline-config "$CONFIG_PATH"
@@ -989,6 +993,18 @@ if [ "$ACTION" = "start" ]; then
                 DATA_LOCALITY_STRATEGY="${DATA_LOCALITY_STRATEGY^^}"
                 shift
                 ;;
+            --scheduling-config)
+                if [ $# -lt 2 ]; then
+                    echo "Missing value for --scheduling-config. Expected a YAML file path."
+                    exit 1
+                fi
+                SCHEDULING_CONFIG="$2"
+                shift 2
+                ;;
+            --scheduling-config=*)
+                SCHEDULING_CONFIG="${1#*=}"
+                shift
+                ;;
             --plan-only)
                 PLAN_ONLY=true
                 shift
@@ -1048,6 +1064,11 @@ if [ "$ACTION" = "start" ]; then
     fi
     # Resolve to an absolute path for the internal ConfigMap builder.
     CONFIG_PATH="$(cd "$(dirname "$CONFIG_PATH")" && pwd)/$(basename "$CONFIG_PATH")"
+    if [ ! -f "$SCHEDULING_CONFIG" ]; then
+        echo "Scheduling config file not found: $SCHEDULING_CONFIG"
+        exit 1
+    fi
+    SCHEDULING_CONFIG="$(cd "$(dirname "$SCHEDULING_CONFIG")" && pwd)/$(basename "$SCHEDULING_CONFIG")"
 
     # Required for Kubernetes resource operations.
     require_cmd kubectl

@@ -21,6 +21,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml"
+DEFAULT_NODE = "server2-labo"
 RESULTS_ROOT = ROOT / "k8s/results"
 DATASETS = {
     "2-fordors_zagats": {
@@ -43,12 +44,12 @@ DATASETS = {
     },
 }
 RUN_FIELDS = (
-    "dataset", "random_walk_processes", "embedding_device", "status", "run_dir",
+    "dataset", "random_walk_processes", "embedding_device", "execution_node", "status", "run_dir",
     "all_mutual_topk_f1", "left_target_only_f1", "energy_provider", "total_energy_j",
     "started_at", "finished_at", "return_code",
 )
 STAGE_FIELDS = (
-    "dataset", "random_walk_processes", "embedding_device", "run_dir", "phase", "task",
+    "dataset", "random_walk_processes", "embedding_device", "execution_node", "run_dir", "phase", "task",
     "attempts", "windows", "elapsed_seconds", "pod_elapsed_seconds", "wait_seconds",
     "compute_seconds",
 )
@@ -64,7 +65,7 @@ def kubernetes_cpu(value: str) -> float:
     return float(value[:-1]) / 1000.0 if value.endswith("m") else float(value)
 
 
-def cluster_capacity(require_gpu: bool) -> int:
+def cluster_capacity(require_gpu: bool, node_name: str) -> int:
     missing = []
     if shutil.which("kubectl") is None:
         missing.append("kubectl is required")
@@ -77,24 +78,55 @@ def cluster_capacity(require_gpu: bool) -> int:
         missing.append("argo CLI is required")
     if missing:
         raise RuntimeError("; ".join(missing))
-    nodes = json.loads(run(["kubectl", "get", "nodes", "-o", "json"], capture=True).stdout)
-    ready_nodes = []
-    for item in nodes.get("items", []):
-        conditions = item.get("status", {}).get("conditions", [])
-        ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
-        if ready:
-            ready_nodes.append(item)
-    if not ready_nodes:
-        raise RuntimeError("the Kubernetes cluster has no Ready node")
-    if require_gpu and not any(
-        int(float(node.get("status", {}).get("allocatable", {}).get("nvidia.com/gpu", 0))) > 0
-        for node in ready_nodes
-    ):
-        raise RuntimeError("GPU experiments requested, but no Ready node advertises nvidia.com/gpu")
-    return max(
-        max(1, math.floor(kubernetes_cpu(node["status"]["allocatable"]["cpu"])))
-        for node in ready_nodes
+    result = run(["kubectl", "get", "node", node_name, "-o", "json"], check=False, capture=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"benchmark node not found: {node_name}")
+    node = json.loads(result.stdout)
+    conditions = node.get("status", {}).get("conditions", [])
+    ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
+    if not ready:
+        raise RuntimeError(f"benchmark node is not Ready: {node_name}")
+    if node.get("spec", {}).get("unschedulable", False):
+        raise RuntimeError(f"benchmark node is cordoned: {node_name}")
+    allocatable = node.get("status", {}).get("allocatable", {})
+    if require_gpu and int(float(allocatable.get("nvidia.com/gpu", 0))) < 1:
+        raise RuntimeError(
+            f"GPU experiments requested, but {node_name} does not advertise an allocatable GPU"
+        )
+    return max(1, math.floor(kubernetes_cpu(allocatable["cpu"])))
+
+
+def write_fixed_scheduling_config(output: Path, node_name: str) -> Path:
+    """Create a benchmark-local scheduling bundle that pins every task to one node."""
+    scheduling_dir = ROOT / "k8s/scheduling"
+    placement_source = yaml.safe_load(
+        (scheduling_dir / "temporary-placement.yaml").read_text(encoding="utf-8")
     )
+    temporary = placement_source["temporary_placement"]
+    temporary["enabled"] = True
+    for phase in ("batch", "incremental"):
+        temporary[phase] = {task: node_name for task in temporary.get(phase, {})}
+
+    bundle_dir = output / "scheduling"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    safe_node = re.sub(r"[^A-Za-z0-9_.-]+", "-", node_name)
+    placement_path = bundle_dir / f"placement-{safe_node}.yaml"
+    placement_path.write_text(
+        yaml.safe_dump(placement_source, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+
+    entry_source = yaml.safe_load(
+        (scheduling_dir / "scheduling.yaml").read_text(encoding="utf-8")
+    )
+    includes = entry_source["includes"]
+    for key, value in list(includes.items()):
+        includes[key] = str((scheduling_dir / value).resolve())
+    includes["placement"] = str(placement_path.resolve())
+    entry_path = bundle_dir / f"scheduling-{safe_node}.yaml"
+    entry_path.write_text(
+        yaml.safe_dump(entry_source, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    return entry_path
 
 
 def power_counts(maximum: int) -> list[int]:
@@ -173,6 +205,7 @@ def stage_rows(run_row: dict[str, Any], run_dir: Path) -> list[dict[str, Any]]:
             "dataset": run_row["dataset"],
             "random_walk_processes": run_row["random_walk_processes"],
             "embedding_device": run_row["embedding_device"],
+            "execution_node": run_row["execution_node"],
             "run_dir": run_row["run_dir"],
             "phase": step.get("phase", ""),
             "task": step.get("task", ""),
@@ -209,6 +242,7 @@ def main() -> int:
     parser.add_argument("--cpu-counts", default="auto", help="Comma list such as 1,2,4,8, or auto")
     parser.add_argument("--datasets", default=",".join(DATASETS), help="Comma-separated dataset names")
     parser.add_argument("--devices", default="cpu,cuda", help="cpu,cuda (GPU is represented by cuda)")
+    parser.add_argument("--node", default=DEFAULT_NODE, help="Kubernetes node used by every task")
     parser.add_argument("--energy-monitor", choices=("ecofloc", "alumet", "ecofloc-alumet"), default="ecofloc-alumet")
     parser.add_argument("--output", type=Path, default=ROOT / "reports/random-walk-gpu-benchmark")
     parser.add_argument("--dry-run", action="store_true", help="Generate configs without starting workloads")
@@ -227,18 +261,19 @@ def main() -> int:
     if args.dry_run:
         maximum = os.cpu_count() or 1
     else:
-        maximum = cluster_capacity("cuda" in devices)
+        maximum = cluster_capacity("cuda" in devices, args.node)
     counts = parse_counts(args.cpu_counts, maximum)
     base = yaml.safe_load(args.base_config.read_text(encoding="utf-8"))
     if not isinstance(base, dict):
         raise RuntimeError("base config root must be a YAML object")
 
     output = args.output.resolve()
+    scheduling_config = write_fixed_scheduling_config(output, args.node)
     configs_dir = output / "configs"
     runs_path, stages_path = output / "runs.csv", output / "stage-timings.csv"
     rows = load_rows(runs_path)
     completed = {
-        (row["dataset"], int(row["random_walk_processes"]), row["embedding_device"])
+        (row["dataset"], int(row["random_walk_processes"]), row["embedding_device"], row.get("execution_node", ""))
         for row in rows if row.get("status") == "Succeeded"
     }
     stage_data = load_rows(stages_path)
@@ -246,7 +281,7 @@ def main() -> int:
     combinations = [(dataset, count, device) for dataset in datasets for device in devices for count in counts]
     print(f"Experiment matrix: {len(combinations)} runs; CPU counts={counts}; devices={devices}")
     for index, (dataset, count, device) in enumerate(combinations, start=1):
-        key = dataset, count, device
+        key = dataset, count, device, args.node
         config_path = configs_dir / f"{dataset}-p{count}-{device}.yaml"
         write_config(base, config_path, dataset, count, device)
         if not args.no_resume and key in completed:
@@ -260,6 +295,7 @@ def main() -> int:
         started = datetime.now(timezone.utc).isoformat()
         result = run([
             "bash", "k8s/erctl.sh", "pipeline", "start", "-c", str(config_path),
+            "--scheduling-config", str(scheduling_config),
             "--energy-monitor", args.energy_monitor, "--results-summary",
         ], check=False)
         finished = datetime.now(timezone.utc).isoformat()
@@ -272,17 +308,20 @@ def main() -> int:
         provider, energy = extract_energy(run_dir) if run_dir else ("", "")
         row: dict[str, Any] = {
             "dataset": dataset, "random_walk_processes": count, "embedding_device": device,
+            "execution_node": args.node,
             "status": status, "run_dir": str(run_dir.relative_to(ROOT)) if run_dir else "",
             "all_mutual_topk_f1": all_f1, "left_target_only_f1": left_f1,
             "energy_provider": provider, "total_energy_j": energy,
             "started_at": started, "finished_at": finished, "return_code": result.returncode,
         }
         rows = [old for old in rows if (
-            old.get("dataset"), int(old.get("random_walk_processes", 0)), old.get("embedding_device")
+            old.get("dataset"), int(old.get("random_walk_processes", 0)), old.get("embedding_device"),
+            old.get("execution_node", "")
         ) != key]
         rows.append(row)
         stage_data = [old for old in stage_data if (
-            old.get("dataset"), int(old.get("random_walk_processes", 0)), old.get("embedding_device")
+            old.get("dataset"), int(old.get("random_walk_processes", 0)), old.get("embedding_device"),
+            old.get("execution_node", "")
         ) != key]
         if run_dir:
             stage_data.extend(stage_rows(row, run_dir))
