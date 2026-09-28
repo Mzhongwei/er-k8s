@@ -654,6 +654,7 @@ start_pipeline() {
     compiler_args=(
         --mode "$compiler_mode"
         --pipeline-mode "$config_mode"
+        --pipeline-config "$CONFIG_PATH"
         --plan-output "$SCHEDULING_PLAN_PATH"
         --print-plan
     )
@@ -695,6 +696,7 @@ start_pipeline() {
 
     # Every run gets a result directory, even when energy monitoring is disabled.
     start_run "$config_mode"
+    cp "$CONFIG_PATH" "$RUN_DIR/config.yaml"
     cp "$SCHEDULING_PLAN_PATH" "$RUN_DIR/scheduling-plan.tsv"
     if [ -n "$DATA_LOCALITY_STRATEGY" ]; then
         cp "$DATA_LOCALITY_PLAN_PATH" "$RUN_DIR/data-locality-plan.tsv"

@@ -175,6 +175,71 @@ def ensure_gpu_resource(container: dict[str, Any]) -> None:
     limits.setdefault("nvidia.com/gpu", 1)
 
 
+def load_pipeline_runtime(path: Path | None) -> dict[str, Any]:
+    """Read resource-affecting settings from the exact pipeline config being run."""
+    if path is None:
+        return {}
+    document = load_yaml_file(path)
+    if not isinstance(document, dict):
+        raise ValueError(f"{path} root must be a YAML object")
+
+    walk = document.get("random_walk", {})
+    embedding = document.get("embeddings_training", {})
+    processes = int(walk.get("processes", 1)) if isinstance(walk, dict) else 1
+    if processes < 1:
+        raise ValueError("random_walk.processes must be at least 1")
+    device = str(embedding.get("device", "auto") if isinstance(embedding, dict) else "auto").lower()
+    if device not in {"auto", "cpu", "cuda"} and not device.startswith("cuda:"):
+        raise ValueError("embeddings_training.device must be auto, cpu, cuda or cuda:<index>")
+    return {"random_walk_processes": processes, "embedding_device": device}
+
+
+def set_cpu_count(container: dict[str, Any], count: int) -> None:
+    resources = container.setdefault("resources", {})
+    requests = resources.setdefault("requests", {})
+    limits = resources.setdefault("limits", {})
+    requests["cpu"] = str(count)
+    limits["cpu"] = str(count)
+
+
+def apply_runtime_to_argo(workflow: dict[str, Any], runtime: dict[str, Any]) -> None:
+    templates = {
+        slug(str(template.get("name", ""))): template
+        for template in get_argo_templates_container(workflow)
+        if isinstance(template, dict)
+    }
+    random_walk = templates.get("random-walk")
+    if random_walk and isinstance(random_walk.get("container"), dict):
+        set_cpu_count(random_walk["container"], runtime["random_walk_processes"])
+
+    embedding = templates.get("embedding-training")
+    if (
+        embedding
+        and isinstance(embedding.get("container"), dict)
+        and str(runtime.get("embedding_device", "")).startswith("cuda")
+    ):
+        ensure_gpu_toleration(embedding)
+        ensure_gpu_resource(embedding["container"])
+        patch = str(embedding.get("podSpecPatch", "") or "")
+        if "runtimeClassName" not in patch:
+            patch = patch.rstrip() + ("\n" if patch.strip() else "") + "runtimeClassName: nvidia\n"
+        embedding["podSpecPatch"] = LiteralString(patch)
+
+
+def apply_runtime_to_job(document: dict[str, Any], runtime: dict[str, Any]) -> None:
+    name = slug(str(document.get("metadata", {}).get("name", "")))
+    pod_spec = document.get("spec", {}).get("template", {}).get("spec", {})
+    containers = pod_spec.get("containers", []) if isinstance(pod_spec, dict) else []
+    if not containers or not isinstance(containers[0], dict):
+        return
+    if name == "random-walk":
+        set_cpu_count(containers[0], runtime["random_walk_processes"])
+    if name == "embedding-training" and str(runtime.get("embedding_device", "")).startswith("cuda"):
+        ensure_gpu_toleration(pod_spec)
+        pod_spec["runtimeClassName"] = "nvidia"
+        ensure_gpu_resource(containers[0])
+
+
 def apply_rule_to_argo_template(
     template: dict[str, Any],
     rule: dict[str, list[str]],
@@ -427,6 +492,7 @@ def apply_batch_rules(
     output_path: Path,
     rules: dict[str, dict[str, list[str]]],
     image_repository: str,
+    runtime: dict[str, Any] | None = None,
 ) -> list[str]:
     workflow = load_yaml_file(batch_pipeline_path)
 
@@ -434,6 +500,9 @@ def apply_batch_rules(
         raise ValueError(f"{batch_pipeline_path} root must be a YAML object")
 
     rewrite_image_repository(workflow, image_repository)
+
+    if runtime:
+        apply_runtime_to_argo(workflow, runtime)
 
     templates = get_argo_templates_container(workflow)
 
@@ -511,6 +580,7 @@ def apply_incremental_rules(
     output_dir: Path,
     rules: dict[str, dict[str, list[str]]],
     image_repository: str,
+    runtime: dict[str, Any] | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     applied_rules: set[str] = set()
@@ -531,6 +601,9 @@ def apply_incremental_rules(
             continue
 
         rewrite_image_repository(document, image_repository)
+
+        if runtime and document.get("kind") == "Job":
+            apply_runtime_to_job(document, runtime)
 
         if document.get("kind") != "Job":
             # Still write the parsed (and possibly image-rewritten) document rather than
@@ -627,6 +700,14 @@ def main() -> int:
     )
 
     parser.add_argument(
+        "--pipeline-config",
+        help=(
+            "Exact pipeline config being executed. Its random_walk.processes controls the "
+            "random-walk Pod CPU allocation and a CUDA embeddings_training.device requests a GPU."
+        ),
+    )
+
+    parser.add_argument(
         "--print-rules",
         action="store_true",
         help="Print parsed scheduling rules",
@@ -654,6 +735,9 @@ def main() -> int:
     try:
         config, plan = load_scheduling_bundle(
             Path(args.config).resolve(), k8s_dir / "results"
+        )
+        runtime = load_pipeline_runtime(
+            Path(args.pipeline_config).resolve() if args.pipeline_config else None
         )
         if args.mode != "all":
             plan = [row for row in plan if row["phase"] == args.mode]
@@ -698,6 +782,7 @@ def main() -> int:
                     output_dir / "batch" / "pipeline.yaml",
                     batch_rules,
                     image_repository,
+                    runtime,
                 )
             else:
                 warnings.append("No 'batch' section found in scheduling configuration")
@@ -709,6 +794,7 @@ def main() -> int:
                     output_dir / "incremental",
                     incremental_rules,
                     image_repository,
+                    runtime,
                 )
             else:
                 warnings.append("No 'incremental' section found in scheduling configuration")
