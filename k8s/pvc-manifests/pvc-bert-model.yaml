@@ -11,7 +11,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: nfs-client
+  storageClassName: nfs-client-delete
   resources:
     requests:
       storage: 2Gi

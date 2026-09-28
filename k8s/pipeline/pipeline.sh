@@ -48,6 +48,11 @@ PIPELINE_INCREMENTAL_WORKERS_DIR="$PIPELINE_INCREMENTAL_DIR/workers"
 # Directory containing PVC manifests that must exist before jobs/workflows run.
 PVC_MANIFESTS="$K8S_DIR/pvc-manifests"
 
+# Cluster-scoped StorageClass used only by disposable pipeline PVCs. The existing NFS
+# provisioner handles deletion; this object does not create another Pod. Keeping it outside
+# PVC_MANIFESTS prevents terminate/start cleanup from deleting the StorageClass itself.
+RUNTIME_STORAGE_CLASS_MANIFEST="$K8S_DIR/storage-classes/nfs-client-delete.yaml"
+
 # Long-lived read-only dataset volume. It is outside PVC_MANIFESTS so pipeline cleanup
 # never deletes it.
 DATASET_VOLUME_MANIFEST="$K8S_DIR/datasets/dataset-volume.yaml"
@@ -297,9 +302,11 @@ delete_pipeline_storage() {
     # contain long-lived claims owned by other services. Trying to delete such a claim can
     # wait forever on pvc-protection and risks deleting state that this pipeline does not
     # own. Deleting the owned PVCs below is enough:
-    # dynamically-provisioned PVs follow the storage class's reclaim policy (nfs-client
-    # defaults to Delete), so they get cleaned up as a consequence of their PVC going away,
-    # scoped correctly to just this namespace's claims.
+    # dynamically-provisioned PVs follow the storage class's reclaim policy. Runtime claims
+    # use nfs-client-delete (Delete plus archiveOnDelete=false), so the existing NFS
+    # provisioner removes their backing directories as a consequence of each PVC deletion,
+    # scoped correctly to just this namespace's claims. Legacy nfs-client claims may create
+    # one final archived directory during migration.
     #
     # recreate=true also re-applies the PVC manifests afterward, leaving empty PVCs ready
     # for immediate reuse (start_pipeline's own cleanup pass wants this); recreate=false
@@ -309,10 +316,20 @@ delete_pipeline_storage() {
     local pvc_name
     local pvc_ref
     local pipeline_pvcs=()
+    local pipeline_pvs=()
+    local pv_name
     local workflow_name
     local workflow_state
     local pipeline_workflows=()
     local pipeline_workflow_refs=()
+
+    if [ "$recreate" = true ]; then
+        if [ ! -f "$RUNTIME_STORAGE_CLASS_MANIFEST" ]; then
+            echo "Runtime StorageClass manifest not found: $RUNTIME_STORAGE_CLASS_MANIFEST" >&2
+            return 1
+        fi
+        kubectl apply -f "$RUNTIME_STORAGE_CLASS_MANIFEST"
+    fi
 
     # Use the manifest directory as the single source of truth for owned claim names.
     while IFS= read -r pvc_manifest; do
@@ -324,6 +341,11 @@ delete_pipeline_storage() {
             return 1
         fi
         pipeline_pvcs+=("pvc/$pvc_name")
+        pv_name="$(
+            kubectl get pvc -n "$NAMESPACE" "$pvc_name" \
+                -o jsonpath='{.spec.volumeName}' 2>/dev/null || true
+        )"
+        [ -n "$pv_name" ] && pipeline_pvs+=("pv/$pv_name")
     done < <(find "$PVC_MANIFESTS" -maxdepth 1 -type f -name '*.yaml' -print | sort)
 
     # Pod cleanup is best-effort. Workflow deletion excludes objects already terminating
@@ -364,6 +386,18 @@ delete_pipeline_storage() {
             --wait=true \
             --timeout=5m
     fi
+
+    # A deleted PVC can disappear before its dynamic PV and NFS backing directory have
+    # finished deleting. Wait for each old PV so the next run cannot overlap the previous
+    # run's storage cleanup. A PV that already disappeared before `wait` is also complete.
+    for pvc_ref in "${pipeline_pvs[@]}"; do
+        if ! kubectl wait --for=delete "$pvc_ref" --timeout=5m 2>/dev/null; then
+            if kubectl get "$pvc_ref" >/dev/null 2>&1; then
+                echo "Timed out waiting for old runtime $pvc_ref to be deleted." >&2
+                return 1
+            fi
+        fi
+    done
 
     if [ "$recreate" = true ]; then
         local recreated_pvcs=()

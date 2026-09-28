@@ -209,7 +209,7 @@ def main() -> int:
     parser.add_argument("--cpu-counts", default="auto", help="Comma list such as 1,2,4,8, or auto")
     parser.add_argument("--datasets", default=",".join(DATASETS), help="Comma-separated dataset names")
     parser.add_argument("--devices", default="cpu,cuda", help="cpu,cuda (GPU is represented by cuda)")
-    parser.add_argument("--energy-monitor", choices=("ecofloc", "alumet", "ecofloc-alumet"), default="ecofloc")
+    parser.add_argument("--energy-monitor", choices=("ecofloc", "alumet", "ecofloc-alumet"), default="ecofloc-alumet")
     parser.add_argument("--output", type=Path, default=ROOT / "reports/random-walk-gpu-benchmark")
     parser.add_argument("--dry-run", action="store_true", help="Generate configs without starting workloads")
     parser.add_argument("--keep-going", action="store_true", help="Continue after a failed experiment")

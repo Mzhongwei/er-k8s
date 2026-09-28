@@ -193,6 +193,48 @@ kubectl wait -n argo --for=jsonpath='{.status.phase}'=Bound \
 Do not run the deletion block for an already-correct static claim or as part of every
 experiment. The static dataset volume is retained across pipeline runs.
 
+### Disposable runtime storage
+
+Runtime pipeline volumes use
+`k8s/storage-classes/nfs-client-delete.yaml`, a cluster-scoped StorageClass backed by the
+existing `nfs-subdir-external-provisioner`. It is only a deletion policy and does not
+deploy another Pod. Its `archiveOnDelete: "false"` setting makes the provisioner remove a
+runtime PV's NFS directory after the owning PVC is deleted instead of renaming it to
+`archived-*`.
+
+Install or update the StorageClass once (the pipeline also applies it idempotently before
+creating runtime PVCs):
+
+```bash
+kubectl apply -f k8s/storage-classes/nfs-client-delete.yaml
+kubectl get storageclass nfs-client-delete -o yaml
+```
+
+Every manifest under `k8s/pvc-manifests/` uses `nfs-client-delete`. Before `pipeline start`
+or the destructive `pipeline terminate`, `erctl` deletes only those named runtime PVCs,
+waits for their dynamically provisioned PVs and NFS backing directories to be deleted,
+then creates empty replacement claims. It deliberately does not delete:
+
+- the static dataset PV/PVC in `k8s/datasets/dataset-volume.yaml`;
+- the Alumet/InfluxDB PVC, whose history is managed by bucket retention;
+- completed run artifacts under `k8s/results/<run-id>/`.
+
+PVC storage classes are immutable. On the first run after upgrading an existing cluster,
+the old `nfs-client` claims are deleted and replacements use `nfs-client-delete`. Because
+the old class archives on deletion, that one transition can leave a final set of
+`archived-*` directories; remove those once after confirming no old pipeline is running.
+Subsequent runs delete their NFS directories directly.
+
+Verify the active claims and check that new archive directories no longer accumulate:
+
+```bash
+kubectl get pvc -n argo \
+  -o custom-columns='NAME:.metadata.name,CLASS:.spec.storageClassName,STATUS:.status.phase'
+
+sudo find /srv/nfs/k8s -mindepth 1 -maxdepth 1 \
+  -type d -name 'archived-*' -print
+```
+
 
 ## 4. Check pipeline configuration file
 

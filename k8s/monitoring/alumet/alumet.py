@@ -201,12 +201,16 @@ def run_influx(*args: str) -> str:
 
 
 def set_retention(duration: str) -> None:
+    shard_group_duration = "1h"
     buckets = json.loads(run_influx("bucket", "list", "--org", ORG, "--json"))
     bucket = next((item for item in buckets if item.get("name") == BUCKET), None)
     if not bucket:
         raise RuntimeError(f"InfluxDB bucket not found: {BUCKET}")
     run_influx(
-        "bucket", "update", "--id", bucket["id"], "--retention", duration,
+        "bucket", "update",
+        "--id", bucket["id"],
+        "--retention", duration,
+        "--shard-group-duration", shard_group_duration,
     )
     print(f"InfluxDB bucket {BUCKET}: retention={duration}")
 
