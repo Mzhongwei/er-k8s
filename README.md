@@ -761,13 +761,13 @@ changing the `placement.tsv` format consumed by the Alumet attribution code.
 Add `--results-archive <path-or-user@host:path>` when the run directory must also be copied
 off the control node. Archive failure is reported separately and does not change workload status.
 
-## Random-walk CPU/GPU benchmark
+## Random-walk CPU benchmark
 
-The random-walk parallelism and embedding-device benchmark pins every batch and incremental
-task to `server2-labo` by default. It writes a benchmark-local scheduling bundle under the
-report directory, so it does not modify `k8s/scheduling/temporary-placement.yaml` or affect
-ordinary pipeline runs. The target must be Ready, uncordoned, and advertise an allocatable
-NVIDIA GPU when the `cuda` cases are selected.
+The random-walk parallelism benchmark uses CPU-only Gensim embeddings and pins every batch
+and incremental task to `server2-labo` by default. It writes a benchmark-local scheduling
+bundle under the report directory, so it does not modify
+`k8s/scheduling/temporary-placement.yaml` or affect ordinary pipeline runs. The target must
+be Ready and uncordoned. The legacy script filename is retained for command compatibility.
 
 Run the complete matrix with powers of two up to the target node's allocatable CPU count:
 
@@ -775,7 +775,7 @@ Run the complete matrix with powers of two up to the target node's allocatable C
 python3 exp/run_random_walk_gpu_benchmark.py \
   --node server2-labo \
   --cpu-counts auto \
-  --devices cpu,cuda \
+  --devices cpu \
   --energy-monitor ecofloc-alumet \
   --keep-going
 ```
@@ -786,14 +786,15 @@ Use an explicit CPU list when the largest allocatable count should not be tested
 python3 exp/run_random_walk_gpu_benchmark.py \
   --node server2-labo \
   --cpu-counts 1,2,4,8 \
-  --devices cpu,cuda \
+  --devices cpu \
   --energy-monitor ecofloc-alumet \
   --keep-going
 ```
 
-`reports/random-walk-gpu-benchmark/runs.csv` stores F1, total energy, status, and the fixed
-execution node. `stage-timings.csv` stores the per-stage timings and node. Existing successful
-rows produced without an execution-node value are not reused by the fixed-node benchmark.
+`reports/random-walk-gpu-benchmark/runs.csv` stores F1, total energy, status, the fixed
+execution node, and a compatibility `embedding_device=cpu` column. `stage-timings.csv` stores
+the per-stage timings and node. Existing successful rows produced without an execution-node
+value are not reused by the fixed-node benchmark.
 
 
 # Useful commands

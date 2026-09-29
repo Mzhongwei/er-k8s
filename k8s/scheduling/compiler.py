@@ -186,12 +186,14 @@ def load_pipeline_runtime(path: Path | None) -> dict[str, Any]:
     walk = document.get("random_walk", {})
     embedding = document.get("embeddings_training", {})
     processes = int(walk.get("processes", 1)) if isinstance(walk, dict) else 1
+    workers = int(embedding.get("workers", 1)) if isinstance(embedding, dict) else 1
     if processes < 1:
         raise ValueError("random_walk.processes must be at least 1")
-    device = str(embedding.get("device", "auto") if isinstance(embedding, dict) else "auto").lower()
-    if device not in {"auto", "cpu", "cuda"} and not device.startswith("cuda:"):
-        raise ValueError("embeddings_training.device must be auto, cpu, cuda or cuda:<index>")
-    return {"random_walk_processes": processes, "embedding_device": device}
+    if workers < 1:
+        raise ValueError("embeddings_training.workers must be at least 1")
+    if isinstance(embedding, dict) and "device" in embedding:
+        raise ValueError("embeddings_training.device is not supported by the Gensim implementation")
+    return {"random_walk_processes": processes, "embedding_workers": workers}
 
 
 def set_cpu_count(container: dict[str, Any], count: int) -> None:
@@ -213,17 +215,8 @@ def apply_runtime_to_argo(workflow: dict[str, Any], runtime: dict[str, Any]) -> 
         set_cpu_count(random_walk["container"], runtime["random_walk_processes"])
 
     embedding = templates.get("embedding-training")
-    if (
-        embedding
-        and isinstance(embedding.get("container"), dict)
-        and str(runtime.get("embedding_device", "")).startswith("cuda")
-    ):
-        ensure_gpu_toleration(embedding)
-        ensure_gpu_resource(embedding["container"])
-        patch = str(embedding.get("podSpecPatch", "") or "")
-        if "runtimeClassName" not in patch:
-            patch = patch.rstrip() + ("\n" if patch.strip() else "") + "runtimeClassName: nvidia\n"
-        embedding["podSpecPatch"] = LiteralString(patch)
+    if embedding and isinstance(embedding.get("container"), dict):
+        set_cpu_count(embedding["container"], runtime["embedding_workers"])
 
 
 def apply_runtime_to_job(document: dict[str, Any], runtime: dict[str, Any]) -> None:
@@ -234,10 +227,8 @@ def apply_runtime_to_job(document: dict[str, Any], runtime: dict[str, Any]) -> N
         return
     if name == "random-walk":
         set_cpu_count(containers[0], runtime["random_walk_processes"])
-    if name == "embedding-training" and str(runtime.get("embedding_device", "")).startswith("cuda"):
-        ensure_gpu_toleration(pod_spec)
-        pod_spec["runtimeClassName"] = "nvidia"
-        ensure_gpu_resource(containers[0])
+    if name == "embedding-training":
+        set_cpu_count(containers[0], runtime["embedding_workers"])
 
 
 def apply_rule_to_argo_template(
@@ -703,7 +694,8 @@ def main() -> int:
         "--pipeline-config",
         help=(
             "Exact pipeline config being executed. Its random_walk.processes controls the "
-            "random-walk Pod CPU allocation and a CUDA embeddings_training.device requests a GPU."
+            "random-walk Pod CPU allocation and embeddings_training.workers controls the "
+            "Gensim Pod CPU allocation."
         ),
     )
 

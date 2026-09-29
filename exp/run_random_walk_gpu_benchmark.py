@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the CPU-parallelism x embedding-device EAER benchmark and aggregate results."""
+"""Run the random-walk parallelism benchmark with CPU-only Gensim embeddings."""
 from __future__ import annotations
 
 import argparse
@@ -154,7 +154,9 @@ def write_config(base: dict[str, Any], destination: Path, dataset: str, processe
     config.update({key: value for key, value in dataset_config.items() if key != "top_k"})
     config["version_name"] = f"bench-{dataset}-p{processes}-{device}"
     config["random_walk"] = dict(base.get("random_walk", {}), processes=processes, seed=1729)
-    config["embeddings_training"] = dict(base.get("embeddings_training", {}), device=device, seed=1729)
+    # Keep the historical device column/config suffix so existing benchmark CSVs remain
+    # readable. Gensim is CPU-only; workers comes from the base config.
+    config["embeddings_training"] = dict(base.get("embeddings_training", {}), seed=1729)
     config["decision_making"] = dict(
         base.get("decision_making", {}), top_k=int(dataset_config["top_k"])
     )
@@ -241,7 +243,10 @@ def main() -> int:
     parser.add_argument("--base-config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--cpu-counts", default="auto", help="Comma list such as 1,2,4,8, or auto")
     parser.add_argument("--datasets", default=",".join(DATASETS), help="Comma-separated dataset names")
-    parser.add_argument("--devices", default="cpu,cuda", help="cpu,cuda (GPU is represented by cuda)")
+    parser.add_argument(
+        "--devices", default="cpu",
+        help="Compatibility option; the Gensim embedding implementation accepts only cpu",
+    )
     parser.add_argument("--node", default=DEFAULT_NODE, help="Kubernetes node used by every task")
     parser.add_argument("--energy-monitor", choices=("ecofloc", "alumet", "ecofloc-alumet"), default="ecofloc-alumet")
     parser.add_argument("--output", type=Path, default=ROOT / "reports/random-walk-gpu-benchmark")
@@ -255,13 +260,13 @@ def main() -> int:
     if unknown:
         parser.error(f"unknown datasets: {', '.join(unknown)}")
     devices = [value.strip().lower() for value in args.devices.split(",") if value.strip()]
-    if not devices or set(devices) - {"cpu", "cuda"}:
-        parser.error("--devices accepts only cpu and cuda")
+    if devices != ["cpu"]:
+        parser.error("Gensim embeddings are CPU-only; --devices must be cpu")
 
     if args.dry_run:
         maximum = os.cpu_count() or 1
     else:
-        maximum = cluster_capacity("cuda" in devices, args.node)
+        maximum = cluster_capacity(False, args.node)
     counts = parse_counts(args.cpu_counts, maximum)
     base = yaml.safe_load(args.base_config.read_text(encoding="utf-8"))
     if not isinstance(base, dict):
