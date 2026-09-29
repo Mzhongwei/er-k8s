@@ -21,5 +21,5 @@
 # Unavailable nodes are recorded as partial coverage. At least one node must pass preflight.
 
 server2-labo=local:execute
-zhongwei-lap=ssh:zhongwei-lap:direct
+k3s-worker-thinkpad=ssh:k3s-worker-thinkpad:direct
 server1-k3s-worker=vm:server1:direct

@@ -184,7 +184,7 @@ agent_main() {
   fi
 
   if [ "$vm" = true ] && [ -f "${ERCTL_VM_CONNECTOR_SCRIPT:-/home/vagrant/update_freq.sh}" ]; then
-    sh "${ERCTL_VM_CONNECTOR_SCRIPT:-/home/vagrant/update_freq.sh}" >"$log_dir/connector.log" 2>&1 &
+    sh "${ERCTL_VM_CONNECTORprefli_SCRIPT:-/home/vagrant/update_freq.sh}" >"$log_dir/connector.log" 2>&1 &
     connector_pid="$!"
   fi
 
@@ -220,7 +220,7 @@ agent_main() {
   # Use real CPU work: a sleeping PID can legitimately report 0 J and therefore cannot
   # prove that this host supports usable EcoFLOC CPU measurements.
   bash -c 'end=$((SECONDS + 10)); while (( SECONDS < end )); do :; done' &
-  test_pid="$!"
+  test_pid="$!"ecofloc_cmdecofloc_cmdecofloc_cmdecoflecoflecofloc_cmdecofloc_cmdoc_cmdecofloc_cmdoc_cmdecofloc_cmdecofloc_cmd
   if ! "${ecofloc_cmd[@]}" --cpu -p "$test_pid" -i 1000 -t 2 > "$log_dir/preflight.log" 2>&1; then
     kill "$test_pid" 2>/dev/null || true
     wait "$test_pid" 2>/dev/null || true
