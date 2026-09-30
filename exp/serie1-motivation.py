@@ -30,18 +30,18 @@ DATASETS = {
         "ground_truth": "/data/exp_datasets/2-fordors_zagats/matches.txt",
         "top_k": 1,
     },
-    "8-movie": {
-        "data_source_A": "/data/exp_datasets/8-movie/tableA.csv",
-        "data_source_B": "/data/exp_datasets/8-movie/tableB.csv",
-        "ground_truth": "/data/exp_datasets/8-movie/matches.txt",
-        "top_k": 1,
-    },
-    "large1-pdc": {
-        "data_source_A": "/data/large_datasets/large1-pdc/tableA.jsonl",
-        "data_source_B": "/data/large_datasets/large1-pdc/tableB.jsonl",
-        "ground_truth": "/data/large_datasets/large1-pdc/matches.txt",
-        "top_k": 5,
-    },
+    # "8-movie": {
+    #     "data_source_A": "/data/exp_datasets/8-movie/tableA.csv",
+    #     "data_source_B": "/data/exp_datasets/8-movie/tableB.csv",
+    #     "ground_truth": "/data/exp_datasets/8-movie/matches.txt",
+    #     "top_k": 1,
+    # },
+    # "large1-pdc": {
+    #     "data_source_A": "/data/large_datasets/large1-pdc/tableA.jsonl",
+    #     "data_source_B": "/data/large_datasets/large1-pdc/tableB.jsonl",
+    #     "ground_truth": "/data/large_datasets/large1-pdc/matches.txt",
+    #     "top_k": 5,
+    # },
 }
 RUN_FIELDS = (
     "dataset", "random_walk_processes", "embedding_device", "execution_node", "status", "run_dir",
