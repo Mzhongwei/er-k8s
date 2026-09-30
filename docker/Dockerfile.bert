@@ -39,3 +39,10 @@ COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_training.py /app/pipeli
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_evaluation.py /app/pipeline/bert_evaluation.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_utils.py /app/pipeline/bert_utils.py
 COPY ./code/Energy-Aware-Entity-Resolution/models/bert_model.py /app/models/bert_model.py
+# Incremental bert-matching worker: batched inference, record store and similarity graph output.
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_inference.py /app/pipeline/bert_inference.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/bert_matching.py /app/pipeline/bert_matching.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/record_store.py /app/pipeline/record_store.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/calculating_similarity.py /app/pipeline/calculating_similarity.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/decision_making.py /app/pipeline/decision_making.py
+COPY ./code/Energy-Aware-Entity-Resolution/models/similarity_graph.py /app/models/similarity_graph.py

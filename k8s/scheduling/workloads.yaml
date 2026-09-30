@@ -52,5 +52,8 @@ incremental:
       task: {data_ids: [embedding_model, pipeline_buffers]}
     decision-making:
       task: {data_ids: [embedding_model, predicted_matching, pipeline_buffers]}
+    # Only generated when bert_matching.enabled; set gpu_required: false to run on CPU.
+    bert-matching:
+      task: {gpu_required: true, data_ids: [bert_model, predicted_matching, pipeline_buffers]}
     evaluation:
       task: {data_ids: [datasets, pipeline_intermediate, pipeline_buffers]}

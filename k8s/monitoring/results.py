@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 INCREMENTAL_JOBS = {
-    "calculating-similarity", "candidate-enumeration", "cg-feature-extraction",
+    "bert-matching", "calculating-similarity", "candidate-enumeration", "cg-feature-extraction",
     "decision-making", "embedding-training", "evaluation", "graph-construction",
     "kafka-consumer", "kafka-producer", "normalization", "random-walk",
 }

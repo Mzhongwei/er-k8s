@@ -219,6 +219,10 @@ def transform_batch(
 def transform_incremental(
     directory: Path, strategy: str, run_token: str, plan: list[dict[str, str]]
 ) -> set[str]:
+    if (directory / "bert_matching.yaml").exists():
+        # The DL matrix has no local placement for the BERT model PVC, which bert-matching,
+        # BERT training and normalization's record store all need.
+        raise ValueError("Data-locality strategies do not support bert_matching.enabled: true")
     found: set[str] = set()
     for path in sorted(directory.glob("*.yaml")):
         document = load_yaml(path)

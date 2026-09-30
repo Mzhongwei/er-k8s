@@ -24,6 +24,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/normalization.py /app/pipeline/normalization.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/record_store.py /app/pipeline/record_store.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/graph_construction.py /app/pipeline/graph_construction.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/sampler.py /app/pipeline/sampler.py
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/random_walk.py /app/pipeline/random_walk.py

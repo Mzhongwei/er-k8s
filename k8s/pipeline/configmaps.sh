@@ -39,6 +39,7 @@ WORKER_CANDIDATE_ENUMERATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolu
 WORKER_CALCULATING_SIMILARITY_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/calculating_similarity.py"
 WORKER_DECISION_MAKING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/decision_making.py"
 WORKER_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/evaluation.py"
+WORKER_BERT_MATCHING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/bert_matching.py"
 
 # --- entries/batch: windowed embedding training and BERT training/evaluation. ---
 WINDOWED_EMBEDDING_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/batch/EmbTrai-training.py"
@@ -138,6 +139,7 @@ create_or_update_configmap "eaer-worker-candidate-enumeration" "candidate_enumer
 create_or_update_configmap "eaer-worker-calculating-similarity" "calculating_similarity.py" "$WORKER_CALCULATING_SIMILARITY_SCRIPT"
 create_or_update_configmap "eaer-worker-decision-making" "decision_making.py" "$WORKER_DECISION_MAKING_SCRIPT"
 create_or_update_configmap "eaer-worker-evaluation" "evaluation.py" "$WORKER_EVALUATION_SCRIPT"
+create_or_update_configmap "eaer-worker-bert-matching" "bert_matching.py" "$WORKER_BERT_MATCHING_SCRIPT"
 
 # --- entries/batch ---
 create_or_update_configmap "eaer-batch-windowed-embedding-training" "EmbTrai-training.py" "$WINDOWED_EMBEDDING_TRAINING_SCRIPT"

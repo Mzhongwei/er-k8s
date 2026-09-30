@@ -558,6 +558,13 @@ spec:
           template: cg-feature-extraction
         - name: feature-index-construction
           template: feature-index-construction
+        # BERT matcher prerequisite, independent of the embedding stages. compiler.py keeps
+        # these two tasks only when the pipeline config sets bert_matching.enabled: true.
+        - name: bert-normalization-training
+          template: berttrai-normalization
+        - name: bert-training
+          depends: bert-normalization-training.Succeeded
+          template: berttrai-training
 
     - name: bert-training-evaluation-dag
       dag:

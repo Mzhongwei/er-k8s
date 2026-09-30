@@ -10,3 +10,4 @@ ENV PYTHONPATH=/app
 WORKDIR /app
 
 COPY ./code/Energy-Aware-Entity-Resolution/pipeline/normalization.py /app/pipeline/normalization.py
+COPY ./code/Energy-Aware-Entity-Resolution/pipeline/record_store.py /app/pipeline/record_store.py

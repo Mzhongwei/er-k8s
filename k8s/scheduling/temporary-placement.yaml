@@ -26,4 +26,5 @@ temporary_placement:
     candidate-enumeration: null
     calculating-similarity: null
     decision-making: null
+    bert-matching: null
     evaluation: null

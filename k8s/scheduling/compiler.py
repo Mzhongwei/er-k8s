@@ -31,6 +31,18 @@ GPU_TOLERATION = {
 }
 
 
+# bert_matching.enabled adds BERT training to the embedding batch DAG and a bert-matching
+# incremental Job; normalization then also writes record texts onto the BERT model PVC.
+BERT_MATCHING_BATCH_TASKS = {"bert-normalization-training", "bert-training"}
+BERT_MATCHING_JOB = "bert-matching"
+BERT_MATCHING_JOB_FILE = "bert_matching.yaml"
+BERT_MODEL_VOLUME = {
+    "name": "pipeline-bert-model",
+    "persistentVolumeClaim": {"claimName": "pipeline-bert-model-claim"},
+}
+BERT_MODEL_MOUNT = {"name": "pipeline-bert-model", "mountPath": "/app/data/bert"}
+
+
 class LiteralString(str):
     pass
 
@@ -193,7 +205,51 @@ def load_pipeline_runtime(path: Path | None) -> dict[str, Any]:
         raise ValueError("embeddings_training.workers must be at least 1")
     if isinstance(embedding, dict) and "device" in embedding:
         raise ValueError("embeddings_training.device is not supported by the Gensim implementation")
-    return {"random_walk_processes": processes, "embedding_workers": workers}
+    bert_matching = document.get("bert_matching", {})
+    return {
+        "random_walk_processes": processes,
+        "embedding_workers": workers,
+        "bert_matching": isinstance(bert_matching, dict) and bert_matching.get("enabled") is True,
+    }
+
+
+def bert_matching_enabled(runtime: dict[str, Any] | None) -> bool:
+    return bool((runtime or {}).get("bert_matching"))
+
+
+def add_bert_model_volume(pod_spec_or_template: dict[str, Any], container: dict[str, Any]) -> None:
+    volumes = pod_spec_or_template.setdefault("volumes", [])
+    if not any(volume.get("name") == BERT_MODEL_VOLUME["name"] for volume in volumes):
+        volumes.append(copy.deepcopy(BERT_MODEL_VOLUME))
+    mounts = container.setdefault("volumeMounts", [])
+    if not any(mount.get("name") == BERT_MODEL_MOUNT["name"] for mount in mounts):
+        mounts.append(copy.deepcopy(BERT_MODEL_MOUNT))
+
+
+def apply_bert_matching_to_argo(workflow: dict[str, Any], enabled: bool) -> None:
+    for template in get_argo_templates_container(workflow):
+        if not isinstance(template, dict):
+            continue
+        name = slug(str(template.get("name", "")))
+        if name == "embedding-training-dag" and not enabled:
+            dag = template.get("dag", {})
+            dag["tasks"] = [
+                task for task in dag.get("tasks", [])
+                if slug(str(task.get("name", ""))) not in BERT_MATCHING_BATCH_TASKS
+            ]
+        if name == "normalization" and enabled and isinstance(template.get("container"), dict):
+            add_bert_model_volume(template, template["container"])
+
+
+def keep_plan_row(row: dict[str, Any], pipeline_mode: str | None, bert_matching: bool) -> bool:
+    task = row["task"]
+    if pipeline_mode == "embedding-training-inference-evaluation":
+        if row["phase"] == "incremental":
+            return task != BERT_MATCHING_JOB or bert_matching
+        return not task.startswith("bert-") or (bert_matching and task in BERT_MATCHING_BATCH_TASKS)
+    if pipeline_mode == "bert-training-evaluation":
+        return row["phase"] == "batch" and task.startswith("bert-")
+    return True
 
 
 def set_cpu_count(container: dict[str, Any], count: int) -> None:
@@ -494,6 +550,7 @@ def apply_batch_rules(
 
     if runtime:
         apply_runtime_to_argo(workflow, runtime)
+    apply_bert_matching_to_argo(workflow, bert_matching_enabled(runtime))
 
     templates = get_argo_templates_container(workflow)
 
@@ -575,6 +632,7 @@ def apply_incremental_rules(
 ) -> list[str]:
     warnings: list[str] = []
     applied_rules: set[str] = set()
+    bert_matching = bert_matching_enabled(runtime)
 
     # exec/incremental is generated output. Recreate it so manifests removed or moved in
     # the source tree cannot survive as stale Jobs and be applied accidentally.
@@ -583,6 +641,8 @@ def apply_incremental_rules(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for source_path in sorted(input_dir.rglob("*.yaml")):
+        if source_path.name == BERT_MATCHING_JOB_FILE and not bert_matching:
+            continue
         relative_path = source_path.relative_to(input_dir)
         destination_path = output_dir / relative_path
         document = load_yaml_file(source_path)
@@ -595,6 +655,9 @@ def apply_incremental_rules(
 
         if runtime and document.get("kind") == "Job":
             apply_runtime_to_job(document, runtime)
+        if bert_matching and slug(str(document.get("metadata", {}).get("name", ""))) == "normalization":
+            pod_spec = document["spec"]["template"]["spec"]
+            add_bert_model_volume(pod_spec, pod_spec["containers"][0])
 
         if document.get("kind") != "Job":
             # Still write the parsed (and possibly image-rewritten) document rather than
@@ -615,6 +678,8 @@ def apply_incremental_rules(
         write_yaml_file(destination_path, document)
 
     for rule_name in sorted(rules):
+        if rule_name == BERT_MATCHING_JOB and not bert_matching:
+            continue
         if rule_name not in applied_rules:
             warnings.append(
                 f"No matching Kubernetes Job manifest found for scheduling key "
@@ -694,8 +759,9 @@ def main() -> int:
         "--pipeline-config",
         help=(
             "Exact pipeline config being executed. Its random_walk.processes controls the "
-            "random-walk Pod CPU allocation and embeddings_training.workers controls the "
-            "Gensim Pod CPU allocation."
+            "random-walk Pod CPU allocation, embeddings_training.workers controls the "
+            "Gensim Pod CPU allocation and bert_matching.enabled adds BERT training and "
+            "the bert-matching worker."
         ),
     )
 
@@ -733,16 +799,10 @@ def main() -> int:
         )
         if args.mode != "all":
             plan = [row for row in plan if row["phase"] == args.mode]
-        if args.pipeline_mode == "embedding-training-inference-evaluation":
-            plan = [
-                row for row in plan
-                if row["phase"] == "incremental" or not row["task"].startswith("bert-")
-            ]
-        elif args.pipeline_mode == "bert-training-evaluation":
-            plan = [
-                row for row in plan
-                if row["phase"] == "batch" and row["task"].startswith("bert-")
-            ]
+        plan = [
+            row for row in plan
+            if keep_plan_row(row, args.pipeline_mode, bert_matching_enabled(runtime))
+        ]
 
         warnings: list[str] = []
 

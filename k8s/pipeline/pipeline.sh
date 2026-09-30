@@ -225,6 +225,10 @@ wait_for_incremental_jobs() {
         normalization
         random-walk
     )
+    # Generated only when the pipeline config sets bert_matching.enabled: true.
+    if [ -f "$PIPELINE_INCREMENTAL_WORKERS_DIR/bert_matching.yaml" ]; then
+        job_names+=(bert-matching)
+    fi
 
     while true; do
         all_complete=true
