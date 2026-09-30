@@ -670,6 +670,36 @@ kubectl get pods -n alumet -o wide
 python3 k8s/monitoring/alumet/alumet.py preflight
 ```
 
+To collect NVIDIA GPU energy without restricting the RAPL collector to GPU nodes, install a
+second, NVML-only relay client. Label only nodes where `nvidia-smi` works and the Kubernetes
+NVIDIA device plugin exposes `nvidia.com/gpu`:
+
+```bash
+kubectl label node <gpu-node> eaer.alumet/gpu-enabled=true --overwrite
+cp k8s/monitoring/alumet/values-gpu.yaml.example \
+   k8s/monitoring/alumet/values-gpu.yaml
+helm upgrade --install eaer-alumet-gpu alumet/alumet \
+  --namespace alumet \
+  -f k8s/monitoring/alumet/values-gpu.yaml
+```
+
+The GPU release reuses `eaer-alumet-alumet-relay-server` and the existing InfluxDB; it does
+not deploy another server or database. Its release name must contain `alumet-gpu` (or set
+`ERCTL_ALUMET_GPU_CLIENT_FRAGMENT`) so `erctl alumet start` keeps its DaemonSet restricted to
+`eaer.alumet/gpu-enabled=true` nodes. The official chart assigns `nvidia.com/gpu: 1` to the
+NVML collector. On a single-GPU node, use NVIDIA device-plugin time slicing or reserve another
+GPU for the workload; otherwise the collector can prevent the EAER GPU Pod from scheduling.
+
+Alumet summaries retain the non-overlapping hardware measurement separately from attribution
+and add these views:
+
+- `hardware_by_device_j` and `hardware_by_node_device_j`: measured CPU/DRAM/GPU energy;
+- `by_workload_pod_hardware_j`: attributed energy per Pod and hardware family;
+- `by_stage_hardware_j` and `by_stage_j`: retries/Pods aggregated by pipeline phase and task.
+
+Hardware measurements and attributed views describe the same underlying energy and must not
+be added together.
+
 Control continuous collection without deleting InfluxDB or its PVC:
 
 ```bash

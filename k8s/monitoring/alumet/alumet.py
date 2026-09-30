@@ -25,6 +25,8 @@ TOKEN_KEY = os.environ.get("ERCTL_ALUMET_TOKEN_KEY", "admin-token")
 DRAIN_SECONDS = float(os.environ.get("ERCTL_ALUMET_DRAIN_SECONDS", "3"))
 RETENTION = os.environ.get("ERCTL_ALUMET_RETENTION", "7d")
 ENABLE_LABEL = "eaer.alumet/enabled"
+GPU_ENABLE_LABEL = os.environ.get("ERCTL_ALUMET_GPU_LABEL", "eaer.alumet/gpu-enabled")
+GPU_CLIENT_FRAGMENT = os.environ.get("ERCTL_ALUMET_GPU_CLIENT_FRAGMENT", "alumet-gpu")
 
 
 def kubectl(*args: str, input_text: str | None = None) -> str:
@@ -50,6 +52,18 @@ def resource_name(kind: str, fragment: str) -> str:
     if not matches:
         raise RuntimeError(f"no {kind} containing {fragment!r} found in namespace {NAMESPACE}")
     return matches[0]
+
+
+def resource_names(kind: str, fragment: str) -> list[str]:
+    """Return every matching resource name in stable order."""
+    names = [
+        item.get("metadata", {}).get("name", "")
+        for item in cluster_objects(kind)
+        if fragment in item.get("metadata", {}).get("name", "")
+    ]
+    if not names:
+        raise RuntimeError(f"no {kind} containing {fragment!r} found in namespace {NAMESPACE}")
+    return sorted(names)
 
 
 def influx_pod() -> str:
@@ -231,11 +245,15 @@ def eligible_nodes() -> list[str]:
 
 
 def enable_collection() -> None:
-    daemonset = resource_name("daemonsets", "alumet-relay-client")
+    daemonsets = resource_names("daemonsets", "alumet-relay-client")
     server = resource_name("deployments", "alumet-relay-server")
     influx = resource_name("statefulsets", "influxdb")
-    selector = json.dumps({"spec": {"template": {"spec": {"nodeSelector": {ENABLE_LABEL: "true"}}}}})
-    kubectl("patch", "daemonset", daemonset, "-n", NAMESPACE, "--type=merge", "-p", selector)
+    for daemonset in daemonsets:
+        node_selector = {ENABLE_LABEL: "true"}
+        if GPU_CLIENT_FRAGMENT in daemonset:
+            node_selector[GPU_ENABLE_LABEL] = "true"
+        selector = json.dumps({"spec": {"template": {"spec": {"nodeSelector": node_selector}}}})
+        kubectl("patch", "daemonset", daemonset, "-n", NAMESPACE, "--type=merge", "-p", selector)
     kubectl("scale", "statefulset", influx, "-n", NAMESPACE, "--replicas=1")
     kubectl("rollout", "status", f"statefulset/{influx}", "-n", NAMESPACE, "--timeout=5m")
     kubectl("scale", "deployment", server, "-n", NAMESPACE, "--replicas=1")
@@ -245,16 +263,18 @@ def enable_collection() -> None:
         raise RuntimeError("no schedulable Alumet node is enabled")
     for node in nodes:
         kubectl("label", "node", node, f"{ENABLE_LABEL}=true", "--overwrite")
-    kubectl("rollout", "status", f"daemonset/{daemonset}", "-n", NAMESPACE, "--timeout=5m")
+    for daemonset in daemonsets:
+        kubectl("rollout", "status", f"daemonset/{daemonset}", "-n", NAMESPACE, "--timeout=5m")
     set_retention(RETENTION)
-    print(f"Alumet collection started on {len(nodes)} node(s)")
+    print(f"Alumet collection started on {len(nodes)} node(s) with {len(daemonsets)} collector(s)")
 
 
 def disable_collection() -> None:
-    daemonset = resource_name("daemonsets", "alumet-relay-client")
+    daemonsets = resource_names("daemonsets", "alumet-relay-client")
     server = resource_name("deployments", "alumet-relay-server")
     selector = json.dumps({"spec": {"template": {"spec": {"nodeSelector": {ENABLE_LABEL: "true"}}}}})
-    kubectl("patch", "daemonset", daemonset, "-n", NAMESPACE, "--type=merge", "-p", selector)
+    for daemonset in daemonsets:
+        kubectl("patch", "daemonset", daemonset, "-n", NAMESPACE, "--type=merge", "-p", selector)
     nodes = json.loads(kubectl("get", "nodes", "-o", "json")).get("items", [])
     for node in nodes:
         if ENABLE_LABEL in node.get("metadata", {}).get("labels", {}):
@@ -335,22 +355,71 @@ def joule_factor(metric: str) -> float:
 
 def rapl_total(domains: dict[str, float]) -> float:
     """Choose non-overlapping RAPL domains instead of summing every sub-domain."""
+    return sum(rapl_components(domains).values())
+
+
+def rapl_components(domains: dict[str, float]) -> dict[str, float]:
+    """Return a non-overlapping, hardware-labelled view of one node's RAPL domains."""
     platform = domains.get("platform_total", domains.get("platform", 0.0))
     if platform:
-        return platform
+        return {"platform": platform}
     package = domains.get("package_total", domains.get("package", 0.0))
     dram = domains.get("dram_total", domains.get("dram", 0.0))
     if package or dram:
-        return package + dram
-    return sum(domains.values())
+        result = {}
+        if package:
+            result["cpu"] = package
+        if dram:
+            result["dram"] = dram
+        return result
+    return {f"rapl_{domain}": value for domain, value in domains.items()}
+
+
+def energy_hardware(metric: str, row: dict[str, str]) -> str:
+    """Map measured and attributed energy metrics to a stable hardware family."""
+    name = metric.lower()
+    resource_kind = (row.get("resource_kind") or "").lower()
+    domain = (row.get("domain") or "").lower()
+    if "nvml" in name or "gpu" in name or resource_kind in {"gpu", "gpu_partition"}:
+        return "gpu"
+    if "dram" in name or "dram" in domain:
+        return "dram"
+    if "rapl" in name or "tdp" in name or "cpu" in name:
+        return "cpu"
+    if "nic" in name or "network" in name:
+        return "nic"
+    return "other"
+
+
+def workload_pod_metadata(run_dir: Path) -> dict[str, dict[str, str]]:
+    path = run_dir / "placement.tsv"
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8") as stream:
+        return {
+            row["pod"]: row
+            for row in csv.DictReader(stream, delimiter="\t")
+            if row.get("pod")
+        }
 
 
 def workload_pods(run_dir: Path) -> set[str]:
-    path = run_dir / "placement.tsv"
-    if not path.exists():
-        return set()
-    with path.open(encoding="utf-8") as stream:
-        return {row.get("pod", "") for row in csv.DictReader(stream, delimiter="\t") if row.get("pod")}
+    return set(workload_pod_metadata(run_dir))
+
+
+def stage_name(metadata: dict[str, str], fallback: str) -> str:
+    task = metadata.get("task", "")
+    phase = metadata.get("phase", "")
+    if task and phase:
+        return f"{phase}/{task}"
+    return task or fallback
+
+
+def rounded_nested(values: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+    return {
+        outer: {inner: round(value, 6) for inner, value in sorted(items.items())}
+        for outer, items in sorted(values.items())
+    }
 
 
 def summarize(run_dir: Path, raw: str) -> bool:
@@ -358,9 +427,15 @@ def summarize(run_dir: Path, raw: str) -> bool:
     by_node: dict[str, float] = defaultdict(float)
     by_consumer: dict[str, float] = defaultdict(float)
     by_workload_pod: dict[str, float] = defaultdict(float)
+    by_workload_pod_hardware: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    by_stage_hardware: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    attributed_by_hardware: dict[str, float] = defaultdict(float)
     by_system_consumer: dict[str, float] = defaultdict(float)
     rapl_by_node: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    eaer_pods = workload_pods(run_dir)
+    hardware_by_node_device: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    hardware_by_device: dict[str, float] = defaultdict(float)
+    pod_metadata = workload_pod_metadata(run_dir)
+    eaer_pods = set(pod_metadata)
     hardware_total = 0.0
     attributed_total = 0.0
     workload_total = 0.0
@@ -385,15 +460,19 @@ def summarize(run_dir: Path, raw: str) -> bool:
             continue
         points += 1
         by_metric[metric] += value
+        hardware = energy_hardware(metric, row)
         consumer_kind = row.get("resource_consumer_kind") or row.get("consumer_kind", "")
         attributed = "attributed" in metric.lower() or consumer_kind not in {"", "local_machine"}
         if attributed:
             attributed_total += value
+            attributed_by_hardware[hardware] += value
             task = next((row.get(key, "") for key in ("name", "pod", "pod_name", "k8s_pod_name") if row.get(key)), "unknown")
             by_consumer[task] += value
             if task in eaer_pods:
                 workload_total += value
                 by_workload_pod[task] += value
+                by_workload_pod_hardware[task][hardware] += value
+                by_stage_hardware[stage_name(pod_metadata[task], task)][hardware] += value
             elif task == "unknown":
                 unknown_total += value
             else:
@@ -406,11 +485,17 @@ def summarize(run_dir: Path, raw: str) -> bool:
             else:
                 hardware_total += value
                 by_node[node] += value
+                hardware_by_node_device[node][hardware] += value
+                hardware_by_device[hardware] += value
 
     for node, domains in rapl_by_node.items():
-        value = rapl_total(domains)
+        components = rapl_components(domains)
+        value = sum(components.values())
         hardware_total += value
         by_node[node] += value
+        for hardware, component_value in components.items():
+            hardware_by_node_device[node][hardware] += component_value
+            hardware_by_device[hardware] += component_value
 
     summary = {
         "provider": "alumet",
@@ -430,11 +515,24 @@ def summarize(run_dir: Path, raw: str) -> bool:
         "energy_point_count": points,
         "by_task_j": {key: round(value, 6) for key, value in sorted(by_workload_pod.items())},
         "by_workload_pod_j": {key: round(value, 6) for key, value in sorted(by_workload_pod.items())},
+        "by_workload_pod_hardware_j": rounded_nested(by_workload_pod_hardware),
+        "by_stage_hardware_j": rounded_nested(by_stage_hardware),
+        "by_stage_j": {
+            stage: round(sum(devices.values()), 6)
+            for stage, devices in sorted(by_stage_hardware.items())
+        },
+        "attributed_by_hardware_j": {
+            key: round(value, 6) for key, value in sorted(attributed_by_hardware.items())
+        },
         "by_system_consumer_j": {
             key: round(value, 6) for key, value in sorted(by_system_consumer.items())
         },
         "by_consumer_j": {key: round(value, 6) for key, value in sorted(by_consumer.items())},
         "by_node_j": {key: round(value, 6) for key, value in sorted(by_node.items())},
+        "hardware_by_device_j": {
+            key: round(value, 6) for key, value in sorted(hardware_by_device.items())
+        },
+        "hardware_by_node_device_j": rounded_nested(hardware_by_node_device),
         "by_metric_j": {key: round(value, 6) for key, value in sorted(by_metric.items())},
         "rapl_domains_j": {
             node: {domain: round(value, 6) for domain, value in sorted(domains.items())}
@@ -444,7 +542,8 @@ def summarize(run_dir: Path, raw: str) -> bool:
             "Hardware and attributed energy are reported separately. RAPL total prefers "
             "platform, otherwise package+dram, to avoid adding overlapping sub-domains. "
             "Workload consumers are matched exactly against placement.tsv; unmatched named "
-            "consumers are system, and consumers without a Pod name are unknown."
+            "consumers are system, and consumers without a Pod name are unknown. Hardware "
+            "measurements and attributed views must not be added together."
         ),
     }
     path = run_dir / "energy" / "alumet-summary.json"

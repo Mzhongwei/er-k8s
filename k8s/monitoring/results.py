@@ -769,8 +769,17 @@ def show(run_dir: Path) -> None:
                 for task, value in summary.get("by_task_j", {}).items():
                     print(f"  {task:<32} {value:.3f} J")
         else:
-            for task, value in summary.get("by_task_j", {}).items():
-                print(f"  {task:<32} {value:.3f} J")
+            by_stage_hardware = summary.get("by_stage_hardware_j", {})
+            if by_stage_hardware:
+                for stage, devices in by_stage_hardware.items():
+                    components = "  ".join(
+                        f"{device.upper()}={value:.3f}J"
+                        for device, value in devices.items()
+                    )
+                    print(f"  {stage}: {components}  total={sum(devices.values()):.3f}J")
+            else:
+                for task, value in summary.get("by_task_j", {}).items():
+                    print(f"  {task:<32} {value:.3f} J")
         by_metric = summary.get("by_metric_j", {})
         if by_metric:
             print("By metric: " + "  ".join(f"{metric}={value:.3f}J" for metric, value in by_metric.items()))

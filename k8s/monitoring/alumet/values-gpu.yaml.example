@@ -1,0 +1,37 @@
+# Second Alumet release: NVML-only collector for explicitly labelled GPU nodes.
+# The primary `eaer-alumet` release continues to collect RAPL on every enabled node.
+alumet-relay-server:
+  enabled: false
+
+influxdb2:
+  enabled: false
+
+alumet-relay-client:
+  enabled: true
+  hostPID: true
+  securityContext:
+    privileged: true
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+      nvidia.com/gpu: 1
+  plugins:
+    k8s:
+      enable: true
+      poll_interval: 1s
+    procfs:
+      enable: false
+    rapl:
+      enable: false
+    nvml:
+      enable: true
+      poll_interval: 1s
+      flush_interval: 5s
+      mode: full
+    energyAttribution:
+      enable: true
+    relay_client:
+      enable: true
+      relay_server: eaer-alumet-alumet-relay-server
+      buffer_timeout: 2s
