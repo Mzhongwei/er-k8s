@@ -193,6 +193,27 @@ kubectl wait -n argo --for=jsonpath='{.status.phase}'=Bound \
 Do not run the deletion block for an already-correct static claim or as part of every
 experiment. The static dataset volume is retained across pipeline runs.
 
+### Trained-state seeds (train once, run incremental many times)
+
+In embedding mode, `pipeline start --phase batch --seed-store NAME` runs only the Argo
+training workflow and then copies the trained state (graph, embedding, index and BERT PVCs,
+including BERT record texts) into the seed volume as `NAME`. `pipeline start --phase
+incremental --seed-store NAME` recreates empty runtime PVCs, restores `NAME` into them
+before the run directory and energy monitor start, and runs only the incremental Jobs, so
+a trial's measurements cover just its incremental workload. Keep `version_name` identical
+between the training run and the incremental runs: model paths include it. A loaded
+embedding model trains with the incremental config's `embeddings_training.workers`.
+
+Create the seed volume once (it is outside `k8s/pvc-manifests/`, so runs never delete it):
+
+```bash
+sudo mkdir -p /srv/nfs/k8s/eaer-seeds        # on the NFS server
+cp k8s/datasets/seed-volume.yaml.example k8s/datasets/seed-volume.yaml
+vim k8s/datasets/seed-volume.yaml             # set the NFS server
+```
+
+`exp/serie1-motivation.py` uses this to run the offline preparation once per dataset.
+
 ### Disposable runtime storage
 
 Runtime pipeline volumes use
@@ -216,6 +237,7 @@ waits for their dynamically provisioned PVs and NFS backing directories to be de
 then creates empty replacement claims. It deliberately does not delete:
 
 - the static dataset PV/PVC in `k8s/datasets/dataset-volume.yaml`;
+- the static seed PV/PVC in `k8s/datasets/seed-volume.yaml` (see below);
 - the Alumet/InfluxDB PVC, whose history is managed by bucket retention;
 - completed run artifacts under `k8s/results/<run-id>/`.
 
@@ -806,40 +828,53 @@ changing the `placement.tsv` format consumed by the Alumet attribution code.
 Add `--results-archive <path-or-user@host:path>` when the run directory must also be copied
 off the control node. Archive failure is reported separately and does not change workload status.
 
-## Random-walk CPU benchmark
+## Incremental CPU/GPU motivation benchmark
 
-The random-walk parallelism benchmark uses CPU-only Gensim embeddings and pins every batch
-and incremental task to `server2-labo` by default. It writes a benchmark-local scheduling
-bundle under the report directory, so it does not modify
-`k8s/scheduling/temporary-placement.yaml` or affect ordinary pipeline runs. The target must
-be Ready and uncordoned. The legacy script filename is retained for command compatibility.
+The benchmark performs one-factor-at-a-time sweeps of `random_walk.processes`, Gensim
+Word2Vec `embeddings_training.workers`, and the BERT matching device. Gensim remains
+CPU-only. Each swept stage is pinned independently to `server2-labo` or
+`k3s-worker-thinkpad`; unswept stages remain on `--base-node`. BERT training has its own
+fixed `--bert-training-device`, while BERT matching uses the device in each matrix point.
+The benchmark-local scheduling bundle does not modify
+`k8s/scheduling/temporary-placement.yaml` or affect ordinary pipeline runs.
 
-Run the complete matrix with powers of two up to the target node's allocatable CPU count:
+Run the complete built-in matrix on both nodes:
 
 ```bash
-python3 exp/run_random_walk_gpu_benchmark.py \
-  --node server2-labo \
-  --cpu-counts auto \
-  --devices cpu \
+python3 exp/serie1-motivation.py \
+  --nodes server2-labo,k3s-worker-thinkpad \
+  --sweeps random-walk,embedding,bert \
+  --repetitions 3 \
   --energy-monitor ecofloc-alumet \
   --keep-going
 ```
 
-Use an explicit CPU list when the largest allocatable count should not be tested:
+Run only the incremental BERT CPU/CUDA comparison on the GPU server:
 
 ```bash
-python3 exp/run_random_walk_gpu_benchmark.py \
-  --node server2-labo \
-  --cpu-counts 1,2,4,8 \
-  --devices cpu \
+python3 exp/serie1-motivation.py \
+  --nodes server2-labo \
+  --sweeps bert \
+  --baseline-bert-device cpu \
+  --bert-training-device cuda \
   --energy-monitor ecofloc-alumet \
   --keep-going
 ```
 
-`reports/random-walk-gpu-benchmark/runs.csv` stores F1, total energy, status, the fixed
-execution node, and a compatibility `embedding_device=cpu` column. `stage-timings.csv` stores
-the per-stage timings and node. Existing successful rows produced without an execution-node
-value are not reused by the fixed-node benchmark.
+The CPU process/thread values are defined by `MATRIX` in `exp/serie1-motivation.py` and are
+validated against each selected node before execution. `reports/serie1-motivation/runs.csv`
+stores F1, total energy, status, each stage's node/configuration, and repetition.
+`stage-timings.csv` stores the same experiment dimensions with per-stage timings. Selecting
+CUDA checks that its node advertises a GPU; selecting CPU removes the BERT GPU resource
+request and disables CUDA inside Transformers.
+
+`incremental-stage-energy.csv` is the detailed energy result used for incremental-flow
+analysis. It joins each provider's per-Pod measurements with `placement.tsv` and writes one
+row per experiment, provider, incremental task, and execution node. CPU, GPU, RAM, storage,
+network, other, and row-total joules are separate columns; an empty component means that the
+provider did not measure it, rather than zero consumption. Batch-stage Pods are deliberately
+excluded from this table. Existing completed runs are backfilled on resume while their result
+directories remain available.
 
 
 # Useful commands

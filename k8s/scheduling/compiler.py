@@ -41,6 +41,7 @@ BERT_MODEL_VOLUME = {
     "persistentVolumeClaim": {"claimName": "pipeline-bert-model-claim"},
 }
 BERT_MODEL_MOUNT = {"name": "pipeline-bert-model", "mountPath": "/app/data/bert"}
+BERT_TRAINING_TEMPLATE = "berttrai-training"
 
 
 class LiteralString(str):
@@ -62,9 +63,10 @@ NoAliasSafeDumper.add_representer(LiteralString, literal_str_representer)
 
 
 def load_scheduling_bundle(
-    path: Path, results_dir: Path
+    path: Path, results_dir: Path, runtime: dict[str, Any] | None = None,
 ) -> tuple[dict[str, dict[str, dict[str, list[str]]]], list[dict[str, Any]]]:
     data = load_policy_config(path)
+    apply_runtime_to_workloads(data, runtime or {})
     data = prepare_policy_config(data, path, results_dir)
     return compile_policy_config_with_plan(data)
 
@@ -187,6 +189,43 @@ def ensure_gpu_resource(container: dict[str, Any]) -> None:
     limits.setdefault("nvidia.com/gpu", 1)
 
 
+def remove_gpu_resource(container: dict[str, Any]) -> None:
+    resources = container.get("resources", {})
+    if not isinstance(resources, dict):
+        return
+    for resource_type in ("requests", "limits"):
+        values = resources.get(resource_type)
+        if isinstance(values, dict):
+            values.pop("nvidia.com/gpu", None)
+
+
+def _bert_device(section: Any, default: str = "auto") -> str:
+    device = str(section.get("device", default) if isinstance(section, dict) else default).strip().lower()
+    if device not in {"auto", "cpu", "cuda"}:
+        raise ValueError("BERT device must be one of: auto, cpu, cuda")
+    return device
+
+
+def _device_requires_gpu(device: str) -> bool:
+    # Preserve historical GPU scheduling for auto. Explicit cpu is the only mode that
+    # must remove GPU resources and remain eligible for CPU-only nodes.
+    return device != "cpu"
+
+
+def apply_runtime_to_workloads(document: dict[str, Any], runtime: dict[str, Any]) -> None:
+    task_devices = {
+        ("batch", "bert-training"): runtime.get("bert_training_device", "auto"),
+        ("incremental", BERT_MATCHING_JOB): runtime.get("bert_matching_device", "auto"),
+    }
+    for (phase, task_name), device in task_devices.items():
+        templates = document.get(phase, {}).get("templates", {})
+        task = templates.get(task_name) if isinstance(templates, dict) else None
+        if not isinstance(task, dict):
+            continue
+        settings = task.setdefault("task", {})
+        settings["gpu_required"] = _device_requires_gpu(str(device))
+
+
 def load_pipeline_runtime(path: Path | None) -> dict[str, Any]:
     """Read resource-affecting settings from the exact pipeline config being run."""
     if path is None:
@@ -206,10 +245,15 @@ def load_pipeline_runtime(path: Path | None) -> dict[str, Any]:
     if isinstance(embedding, dict) and "device" in embedding:
         raise ValueError("embeddings_training.device is not supported by the Gensim implementation")
     bert_matching = document.get("bert_matching", {})
+    bert_training = document.get("bert_training", {})
+    matching_device = _bert_device(bert_matching)
+    training_device = _bert_device(bert_training, matching_device)
     return {
         "random_walk_processes": processes,
         "embedding_workers": workers,
         "bert_matching": isinstance(bert_matching, dict) and bert_matching.get("enabled") is True,
+        "bert_matching_device": matching_device,
+        "bert_training_device": training_device,
     }
 
 
@@ -273,6 +317,11 @@ def apply_runtime_to_argo(workflow: dict[str, Any], runtime: dict[str, Any]) -> 
     embedding = templates.get("embedding-training")
     if embedding and isinstance(embedding.get("container"), dict):
         set_cpu_count(embedding["container"], runtime["embedding_workers"])
+
+    bert_training = templates.get(BERT_TRAINING_TEMPLATE)
+    if bert_training and isinstance(bert_training.get("container"), dict):
+        if not _device_requires_gpu(runtime.get("bert_training_device", "auto")):
+            remove_gpu_resource(bert_training["container"])
 
 
 def apply_runtime_to_job(document: dict[str, Any], runtime: dict[str, Any]) -> None:
@@ -791,11 +840,11 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        config, plan = load_scheduling_bundle(
-            Path(args.config).resolve(), k8s_dir / "results"
-        )
         runtime = load_pipeline_runtime(
             Path(args.pipeline_config).resolve() if args.pipeline_config else None
+        )
+        config, plan = load_scheduling_bundle(
+            Path(args.config).resolve(), k8s_dir / "results", runtime
         )
         if args.mode != "all":
             plan = [row for row in plan if row["phase"] == args.mode]

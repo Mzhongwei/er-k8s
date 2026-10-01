@@ -111,6 +111,14 @@ RESULTS_SUMMARY=false
 PLAN_ONLY=false
 DATA_LOCALITY_STRATEGY=""
 DATA_LOCALITY_RUN_TOKEN=""
+# --phase / --seed-store (embedding mode only). `batch` runs only the Argo training workflow
+# and saves the trained state (graph, embedding, index, BERT PVCs) as seed NAME; `incremental`
+# skips training and restores seed NAME into the fresh PVCs before the incremental Jobs.
+# The seed store is a static NFS volume outside PVC_MANIFESTS, so start never wipes it.
+PIPELINE_PHASE="all"
+SEED_STORE=""
+SEED_VOLUME_MANIFEST="$K8S_DIR/datasets/seed-volume.yaml"
+SEED_JOB_IMAGE="busybox:1.36"
 
 # --results-archive DEST (or env ERCTL_RESULTS_ARCHIVE): after the run, copy this run's
 # results dir to a durable/remote location -- a local/mounted path, or user@host:/path
@@ -150,6 +158,11 @@ Options (start):
                              Also accepts --data-locality=DL1.
     --scheduling-config PATH Use an alternate scheduling entry-point YAML for this run.
                              Defaults to k8s/scheduling/scheduling.yaml.
+    --phase PHASE            Embedding mode only: all (default), batch (train, then save the
+                             trained state as --seed-store), or incremental (restore
+                             --seed-store, then run only the incremental Jobs).
+    --seed-store NAME        Seed name under the seed volume (k8s/datasets/seed-volume.yaml);
+                             required with --phase batch|incremental.
     --plan-only              Show and save the scheduling plan without creating workloads
                              or changing PVCs, ConfigMaps, Workflows, or Jobs.
     --results-archive DEST   Copy this run's results dir to a durable/remote location after
@@ -654,11 +667,92 @@ interrupt_pipeline() {
 }
 
 ensure_dataset_volume() {
-    kubectl apply -f "$DATASET_VOLUME_MANIFEST"
+    kubectl get pv eaer-datasets-pv >/dev/null
     kubectl wait -n "$NAMESPACE" \
         --for=jsonpath='{.status.phase}'=Bound \
         pvc/pipeline-data-claim \
         --timeout=5m
+}
+
+ensure_seed_volume() {
+    if [ ! -f "$SEED_VOLUME_MANIFEST" ]; then
+        echo "Seed volume manifest not found: $SEED_VOLUME_MANIFEST" >&2
+        echo "Copy k8s/datasets/seed-volume.yaml.example and set the NFS server." >&2
+        return 1
+    fi
+    kubectl get pv eaer-seeds-pv >/dev/null
+    kubectl wait -n "$NAMESPACE" \
+        --for=jsonpath='{.status.phase}'=Bound \
+        pvc/pipeline-seed-claim \
+        --timeout=5m
+}
+
+run_seed_job() {
+    # save:    copy the trained-state PVCs into <seed volume>/<SEED_STORE> (atomic rename).
+    # restore: copy <seed volume>/<SEED_STORE> into the freshly recreated, empty PVCs.
+    local action="$1" job="seed-$1" script counts succeeded failed
+    case "$action" in
+        save)
+            script='set -eu; d="/seeds/$SEED"; rm -rf "$d.tmp"; for v in graph embedding index bert; do mkdir -p "$d.tmp/$v"; cp -a "/pvc/$v/." "$d.tmp/$v/"; done; rm -rf "$d"; mv "$d.tmp" "$d"; du -sh "$d"'
+            ;;
+        restore)
+            script='set -eu; d="/seeds/$SEED"; [ -d "$d" ] || { echo "seed not found: $d" >&2; exit 1; }; for v in graph embedding index bert; do cp -a "$d/$v/." "/pvc/$v/"; done; du -sh /pvc/*'
+            ;;
+        *) echo "Unknown seed action: $action" >&2; return 1 ;;
+    esac
+    echo "Seed $action: $SEED_STORE"
+    kubectl delete job -n "$NAMESPACE" "$job" --ignore-not-found=true --wait=true >/dev/null
+    kubectl apply -n "$NAMESPACE" -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: $job
+  labels:
+    app: $job
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: $job
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: main
+          image: $SEED_JOB_IMAGE
+          command: ["sh", "-c", $(printf '%s' "$script" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read()))')]
+          env:
+            - name: SEED
+              value: "$SEED_STORE"
+          volumeMounts:
+            - {name: graph, mountPath: /pvc/graph}
+            - {name: embedding, mountPath: /pvc/embedding}
+            - {name: index, mountPath: /pvc/index}
+            - {name: bert, mountPath: /pvc/bert}
+            - {name: seeds, mountPath: /seeds}
+      volumes:
+        - {name: graph, persistentVolumeClaim: {claimName: pipeline-graph-cache-claim}}
+        - {name: embedding, persistentVolumeClaim: {claimName: pipeline-embedding-model-cache-claim}}
+        - {name: index, persistentVolumeClaim: {claimName: pipeline-feature-index-cache-claim}}
+        - {name: bert, persistentVolumeClaim: {claimName: pipeline-bert-model-claim}}
+        - {name: seeds, persistentVolumeClaim: {claimName: pipeline-seed-claim}}
+EOF
+    while true; do
+        counts="$(kubectl get job -n "$NAMESPACE" "$job" -o jsonpath='{.status.succeeded}/{.status.failed}' 2>/dev/null || true)"
+        succeeded="${counts%%/*}"
+        failed="${counts#*/}"
+        if [ "${succeeded:-0}" -ge 1 ]; then
+            kubectl logs -n "$NAMESPACE" "job/$job" --tail=20 || true
+            return 0
+        fi
+        if [ "${failed:-0}" -ge 1 ]; then
+            echo "Seed $action job failed." >&2
+            kubectl logs -n "$NAMESPACE" "job/$job" --tail=50 >&2 || true
+            return 1
+        fi
+        sleep 3
+    done
 }
 
 start_pipeline() {
@@ -688,6 +782,21 @@ start_pipeline() {
     if [ -n "$DATA_LOCALITY_STRATEGY" ] && [ "$config_mode" != "$EMBEDDING_PIPELINE_MODE" ]; then
         echo "--data-locality supports only mode: $EMBEDDING_PIPELINE_MODE" >&2
         exit 1
+    fi
+    if [ "$PIPELINE_PHASE" != "all" ]; then
+        if [ "$config_mode" != "$EMBEDDING_PIPELINE_MODE" ]; then
+            echo "--phase supports only mode: $EMBEDDING_PIPELINE_MODE" >&2
+            exit 1
+        fi
+        if [ -z "$SEED_STORE" ]; then
+            echo "--phase $PIPELINE_PHASE requires --seed-store NAME" >&2
+            exit 1
+        fi
+        if [ -n "$DATA_LOCALITY_STRATEGY" ]; then
+            echo "--phase cannot be combined with --data-locality" >&2
+            exit 1
+        fi
+        compiler_mode="$PIPELINE_PHASE"
     fi
 
     # Resolve and display the plan before any cluster mutation. The same plan is used to
@@ -719,10 +828,19 @@ start_pipeline() {
     # PVCs ready for this one. See delete_pipeline_storage() for exactly what this deletes.
     delete_pipeline_storage true
 
-    # Create the long-lived dataset PV/PVC if needed. Re-applying is idempotent and does
-    # not copy or clear any dataset files.
+    # Dataset and seed PV/PVC resources are provisioned once outside experiment runs.
+    # Only verify that the existing claims are Bound; never re-apply their manifests here.
     if [ -z "$DATA_LOCALITY_STRATEGY" ] || [ "$DATA_LOCALITY_STRATEGY" = "DL2" ]; then
         ensure_dataset_volume
+    fi
+
+    if [ "$PIPELINE_PHASE" != "all" ]; then
+        ensure_seed_volume
+    fi
+    # Restore before the run directory and energy monitor start, so a trial's measurements
+    # cover only its incremental workload.
+    if [ "$PIPELINE_PHASE" = "incremental" ]; then
+        run_seed_job restore
     fi
 
     # Delete old EAER script ConfigMaps to avoid stale mounted code, and the previous
@@ -739,6 +857,7 @@ start_pipeline() {
     # Every run gets a result directory, even when energy monitoring is disabled.
     start_run "$config_mode"
     cp "$CONFIG_PATH" "$RUN_DIR/config.yaml"
+    printf '{"phase": "%s", "seed_store": "%s"}\n' "$PIPELINE_PHASE" "$SEED_STORE" > "$RUN_DIR/pipeline-phase.json"
     cp "$SCHEDULING_PLAN_PATH" "$RUN_DIR/scheduling-plan.tsv"
     if [ -n "$DATA_LOCALITY_STRATEGY" ]; then
         cp "$DATA_LOCALITY_PLAN_PATH" "$RUN_DIR/data-locality-plan.tsv"
@@ -753,45 +872,53 @@ start_pipeline() {
             # Build the graph, embedding model and feature index in Argo. Submit and
             # waiting are split so the workflow name is known and external deletion can
             # terminate this local process instead of leaving it waiting indefinitely.
-            ACTIVE_WORKFLOW="$(argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" -o name)"
-            if ! workflow_status="$(wait_for_workflow_completion "$ACTIVE_WORKFLOW")"; then
+            # --phase incremental skips this: the restored seed already holds its outputs.
+            if [ "$PIPELINE_PHASE" != "incremental" ]; then
+                ACTIVE_WORKFLOW="$(argo submit -n "$NAMESPACE" "$PIPELINE_BATCH_PATH" -p mode="$config_mode" -o name)"
+                if ! workflow_status="$(wait_for_workflow_completion "$ACTIVE_WORKFLOW")"; then
+                    record_placement batch "$ACTIVE_WORKFLOW"
+                    exit 1
+                fi
                 record_placement batch "$ACTIVE_WORKFLOW"
-                exit 1
+                if [ "$workflow_status" != "Succeeded" ]; then
+                    echo "Batch training workflow $ACTIVE_WORKFLOW finished with status: $workflow_status (expected Succeeded)."
+                    echo "Not starting incremental workers -- their inputs would be incomplete."
+                    exit 1
+                fi
+                ACTIVE_WORKFLOW=""
             fi
-            record_placement batch "$ACTIVE_WORKFLOW"
-            if [ "$workflow_status" != "Succeeded" ]; then
-                echo "Batch training workflow $ACTIVE_WORKFLOW finished with status: $workflow_status (expected Succeeded)."
-                echo "Not starting incremental workers -- their inputs would be incomplete."
-                exit 1
-            fi
-            ACTIVE_WORKFLOW=""
 
-            # Start producer, consumer and all processing workers together, including
-            # evaluation. decision_making.py writes a per-window predicted-matching
-            # snapshot and references it in its buffer event, so evaluation.py -- running
-            # concurrently -- evaluates the exact graph produced for that window instead of
-            # whatever a shared path happens to hold, matching the business design (evaluate
-            # after every decision, report overwritten so only the latest is kept). It exits
-            # on its own once it sees decision-making's EOS.
-            for worker_manifest in "$PIPELINE_INCREMENTAL_WORKERS_DIR"/*.yaml; do
-                kubectl apply -n "$NAMESPACE" -f "$worker_manifest"
-            done
+            if [ "$PIPELINE_PHASE" = "batch" ]; then
+                # Offline preparation only: keep the trained state for later incremental runs.
+                run_seed_job save || exit 1
+            else
+                # Start producer, consumer and all processing workers together, including
+                # evaluation. decision_making.py writes a per-window predicted-matching
+                # snapshot and references it in its buffer event, so evaluation.py -- running
+                # concurrently -- evaluates the exact graph produced for that window instead of
+                # whatever a shared path happens to hold, matching the business design (evaluate
+                # after every decision, report overwritten so only the latest is kept). It exits
+                # on its own once it sees decision-making's EOS.
+                for worker_manifest in "$PIPELINE_INCREMENTAL_WORKERS_DIR"/*.yaml; do
+                    kubectl apply -n "$NAMESPACE" -f "$worker_manifest"
+                done
 
-            echo "Waiting for incremental worker jobs to complete..."
-            if ! wait_for_incremental_jobs; then
+                echo "Waiting for incremental worker jobs to complete..."
+                if ! wait_for_incremental_jobs; then
+                    record_placement incremental
+                    exit 1
+                fi
                 record_placement incremental
-                exit 1
-            fi
-            record_placement incremental
 
-            # Capture the matching result. `|| true` guards the whole substitution: under
-            # `set -o pipefail`, a grep that finds no [Result] line would otherwise abort
-            # an otherwise-successful run.
-            record_matching_result "$(
-                kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 2>/dev/null \
-                    | grep -F '[Result]' | tail -n 1 || true
-            )"
-            [ -n "$MATCHING_RESULT" ] && echo "$MATCHING_RESULT"
+                # Capture the matching result. `|| true` guards the whole substitution: under
+                # `set -o pipefail`, a grep that finds no [Result] line would otherwise abort
+                # an otherwise-successful run.
+                record_matching_result "$(
+                    kubectl logs -n "$NAMESPACE" -l app=evaluation --tail=-1 2>/dev/null \
+                        | grep -F '[Result]' | tail -n 1 || true
+                )"
+                [ -n "$MATCHING_RESULT" ] && echo "$MATCHING_RESULT"
+            fi
 
             ;;
 
@@ -1013,6 +1140,22 @@ if [ "$ACTION" = "start" ]; then
                 PLAN_ONLY=true
                 shift
                 ;;
+            --phase|--seed-store)
+                if [ $# -lt 2 ]; then
+                    echo "Missing value for $1."
+                    exit 1
+                fi
+                if [ "$1" = "--phase" ]; then PIPELINE_PHASE="$2"; else SEED_STORE="$2"; fi
+                shift 2
+                ;;
+            --phase=*)
+                PIPELINE_PHASE="${1#*=}"
+                shift
+                ;;
+            --seed-store=*)
+                SEED_STORE="${1#*=}"
+                shift
+                ;;
             --results-archive)
                 if [ $# -lt 2 ]; then
                     echo "Missing value for --results-archive. Expected a path or user@host:/path."
@@ -1046,6 +1189,15 @@ if [ "$ACTION" = "start" ]; then
         fi
         bash "$SCRIPT_DIR/run-configs.sh" "${START_ARGUMENTS[@]}"
         exit $?
+    fi
+
+    case "$PIPELINE_PHASE" in
+        all|batch|incremental) ;;
+        *) echo "Unknown --phase: $PIPELINE_PHASE (expected all, batch or incremental)"; exit 1 ;;
+    esac
+    if [ -n "$SEED_STORE" ] && ! [[ "$SEED_STORE" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "--seed-store must contain only letters, digits, '.', '_' or '-'" >&2
+        exit 1
     fi
 
     case "$DATA_LOCALITY_STRATEGY" in

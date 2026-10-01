@@ -1,0 +1,32 @@
+# Long-lived NFS volume for trained pipeline seeds (`erctl pipeline start --phase batch|incremental
+# --seed-store NAME`). Like the dataset volume it is outside k8s/pvc-manifests, so pipeline
+# start/terminate never deletes it. Copy to seed-volume.yaml, set the NFS server, and create
+# the directory once on that server: sudo mkdir -p /srv/nfs/k8s/eaer-seeds
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: eaer-seeds-pv
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  nfs:
+    server: <ip>
+    path: /srv/nfs/k8s/eaer-seeds
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pipeline-seed-claim
+  namespace: argo
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: eaer-seeds-pv
+  resources:
+    requests:
+      storage: 100Gi
