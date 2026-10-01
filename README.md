@@ -686,9 +686,24 @@ helm upgrade --install eaer-alumet-gpu alumet/alumet \
 The GPU release reuses `eaer-alumet-alumet-relay-server` and the existing InfluxDB; it does
 not deploy another server or database. Its release name must contain `alumet-gpu` (or set
 `ERCTL_ALUMET_GPU_CLIENT_FRAGMENT`) so `erctl alumet start` keeps its DaemonSet restricted to
-`eaer.alumet/gpu-enabled=true` nodes. The official chart assigns `nvidia.com/gpu: 1` to the
-NVML collector. On a single-GPU node, use NVIDIA device-plugin time slicing or reserve another
-GPU for the workload; otherwise the collector can prevent the EAER GPU Pod from scheduling.
+`eaer.alumet/gpu-enabled=true` nodes.
+
+The collector does not reserve a GPU. With NVML enabled the official chart would add
+`nvidia.com/gpu: 1` to it, which on a single-GPU node keeps BERT training/matching Pods from
+scheduling; `values-gpu.yaml` sets that limit to `0` and instead exposes the GPUs through
+`NVIDIA_VISIBLE_DEVICES=all` (honoured for the privileged collector) and tolerates the
+`nvidia.com/gpu` taint. If `nvidia` is not the default containerd runtime on the GPU nodes,
+uncomment `runtimeClassName: nvidia`. After `erctl alumet start`, check that NVML works and
+that the GPU stays allocatable:
+
+```bash
+kubectl get pods -n alumet -o wide -l app.kubernetes.io/instance=eaer-alumet-gpu
+kubectl logs -n alumet -l app.kubernetes.io/instance=eaer-alumet-gpu --tail=50 | grep -i nvml
+kubectl describe node <gpu-node> | grep -A8 "Allocated resources" | grep nvidia.com/gpu
+```
+
+The collector should be Running with NVML logging found devices and no errors, and
+`nvidia.com/gpu` should show `0` allocated while no EAER GPU Pod is running.
 
 Alumet summaries retain the non-overlapping hardware measurement separately from attribution
 and add these views:

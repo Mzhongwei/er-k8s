@@ -30,8 +30,15 @@ LOGS = {
         window("graph_construction", 1, 6.0, 2.0, "2026-01-01T00:00:02+00:00"),
         window("graph_construction", 2, 3.0, 1.0, "2026-01-01T00:00:10+00:00"),
         window("graph_construction", "eos", 1.0, 0.0, "2026-01-01T00:00:14+00:00"),
+        # A 2 s snapshot write straddling three 1 s power samples (half, full, half).
+        "[EAER_TRANSFER_METRICS] " + json.dumps({
+            "stage": "graph_construction", "direction": "write", "kind": "graph_snapshot",
+            "bytes": 4096, "seconds": 2.0,
+            "started_at": "2026-01-01T00:00:02.500000+00:00", "ended_at": "2026-01-01T00:00:04.500000+00:00",
+        }),
         '[EAER_STEP_METRICS] {"logical_read_bytes":1,"logical_write_bytes":2,"storage_read_bytes":3,'
-        '"storage_write_bytes":4,"elapsed_seconds":15.0,"wait_seconds":10.0,"compute_seconds":5.0,"windows":2}',
+        '"storage_write_bytes":4,"elapsed_seconds":15.0,"wait_seconds":10.0,"compute_seconds":5.0,"windows":2,'
+        '"transfer_seconds":2.0,"transfer_read_bytes":0,"transfer_write_bytes":4096,"transfers":1}',
     ]),
     # A one-shot Pod that never used the stage runner: no wait/compute split available.
     "berttrai-training-xyz": '[EAER_STEP_METRICS] {"logical_read_bytes":9,"logical_write_bytes":9,'
@@ -106,6 +113,51 @@ class ResultsMetricsTests(unittest.TestCase):
             self.assertEqual(data["ecofloc"]["measured_pods"], 1)
             self.assertAlmostEqual(data["ecofloc"]["energy_j"], 30.0)
             self.assertAlmostEqual(data["alumet"]["pods"][0]["energy_per_compute_second_j"], 9.0)
+
+    def test_transfers_are_collected_and_priced_from_alumet_series(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.make_run(Path(tmp))
+            self.collect(run)
+            transfers = list(csv.DictReader(io.StringIO((run / "transfer-metrics.tsv").read_text()), delimiter="\t"))
+            self.assertEqual(len(transfers), 1)
+            self.assertEqual((transfers[0]["node"], transfers[0]["kind"], transfers[0]["bytes"]),
+                             ("n1", "graph_snapshot", "4096"))
+            item = json.loads((run / "step-metrics-summary.json").read_text())["steps"]["incremental/graph-construction"]
+            self.assertEqual((item["transfers"], item["transfer_write_bytes"]), (1, 4096))
+            self.assertFalse((run / "energy/transfer-energy.json").exists())  # no Alumet export yet
+
+            header = ",result,table,_time,_value,_field,_measurement,domain,node,resource_consumer_kind,name,interface,direction"
+            lines = [header]
+            for second in range(1, 11):
+                t = f"2026-01-01T00:00:{second:02d}.000000000Z"
+                lines += [
+                    f",,0,{t},10,value,rapl_consumed_energy_J,package_total,n1,local_machine,,,",
+                    f",,0,{t},2,value,rapl_consumed_energy_J,dram_total,n1,local_machine,,,",
+                    f",,0,{t},9,value,rapl_consumed_energy_J,pp0,n1,local_machine,,,",  # overlaps package
+                    f",,0,{t},3,value,rapl_consumed_energy_J,package_total,n2,local_machine,,,",
+                    f",,0,{t},4,value,attributed_rapl_energy,,,cgroup,graph-construction-abc,,",
+                    f",,0,{t},1000,value,network_bytes,,n1,local_machine,,eth0,tx",
+                    f",,0,{t},500,value,network_bytes,,n1,local_machine,,lo,rx",
+                ]
+            (run / "energy/alumet-raw.csv").write_text("\n".join(lines))
+            (run / "energy/idle-power.json").write_text(json.dumps({"n1": 5.0}))
+            with mock.patch.dict(results.os.environ, {"ERCTL_NFS_SERVER_NODE": "n2"}):
+                results.write_transfer_energy(run)
+
+            data = json.loads((run / "energy/transfer-energy.json").read_text())
+            edge = data["by_edge"]["incremental/graph-construction write graph_snapshot"]
+            # 2 s at 12 W (package+dram, pp0 ignored) = 24 J; 8 J attributed to the Pod; idle 5 W.
+            self.assertAlmostEqual(edge["node_energy_j"], 24.0)
+            self.assertAlmostEqual(edge["pod_attributed_energy_j"], 8.0)
+            self.assertAlmostEqual(edge["node_excess_energy_j"], 14.0)
+            self.assertAlmostEqual(edge["nfs_server_energy_j"], 6.0)
+            self.assertEqual(edge["network_bytes"], 2000)  # loopback excluded
+            self.assertEqual((data["totals"]["transfers"], data["totals"]["bytes"]), (1, 4096))
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                results.show(run)
+            self.assertIn("transfer=2.000s (0B in, 4096B out)", buffer.getvalue())
+            self.assertIn("node=24.000J pod-attributed=8.000J excess=14.000J nfs-server=6.000J", buffer.getvalue())
 
     def test_show_prints_wait_compute_and_energy_rate(self):
         with tempfile.TemporaryDirectory() as tmp:

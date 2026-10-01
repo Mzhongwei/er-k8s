@@ -11,11 +11,29 @@ alumet-relay-client:
   hostPID: true
   securityContext:
     privileged: true
+  # The collector only reads NVML counters and must not reserve a GPU: with nvml enabled the
+  # chart adds `nvidia.com/gpu: 1` unless this key is present, which would take the only GPU
+  # of a node away from bert-training / bert-matching. 0 keeps the key without allocating.
   resources:
     limits:
       cpu: 100m
       memory: 128Mi
-      nvidia.com/gpu: 1
+      nvidia.com/gpu: 0
+  # Without a device-plugin allocation, the NVIDIA container runtime exposes the GPUs through
+  # these variables (honoured for this privileged container). `utility` is enough for NVML.
+  env:
+    NVIDIA_VISIBLE_DEVICES: all
+    NVIDIA_DRIVER_CAPABILITIES: utility
+  # Uncomment when nvidia is not the default containerd runtime on the GPU nodes
+  # (`kubectl get runtimeclass`; k3s registers one named "nvidia").
+  # runtimeClassName: nvidia
+  # GPU nodes are commonly tainted nvidia.com/gpu; the collector no longer requests a GPU, so
+  # it must tolerate the taint itself. `erctl alumet start` restricts it to nodes labelled
+  # eaer.alumet/enabled=true and eaer.alumet/gpu-enabled=true.
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
   plugins:
     k8s:
       enable: true

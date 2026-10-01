@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
+import importlib.util
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -31,16 +34,25 @@ STEP_METRIC_FIELDS = (
     "logical_read_bytes", "logical_write_bytes", "storage_read_bytes",
     "storage_write_bytes", "elapsed_seconds", "pod_elapsed_seconds",
     "wait_seconds", "compute_seconds", "windows",
+    "transfer_seconds", "transfer_read_bytes", "transfer_write_bytes", "transfers",
     "started_at", "finished_at",
 )
 # One row per processed window (plus one "setup" and one "eos" row) of every stage Pod.
-# wait_seconds = blocked on a peer; compute_seconds = everything else in that window.
+# wait_seconds = blocked on a peer; compute_seconds = everything else in that window;
+# transfer_seconds = the part of compute_seconds spent moving inter-stage data (NFS I/O).
 WINDOW_METRIC_FIELDS = (
     "phase", "task", "pod", "node", "window", "wait_seconds", "compute_seconds",
+    "transfer_seconds", "transfer_read_bytes", "transfer_write_bytes",
+    "started_at", "ended_at",
+)
+# One row per inter-stage read or write; its wall-clock bounds key the energy lookup.
+TRANSFER_METRIC_FIELDS = (
+    "phase", "task", "pod", "node", "direction", "kind", "bytes", "seconds",
     "started_at", "ended_at",
 )
 STEP_METRICS_PREFIX = "[EAER_STEP_METRICS] "
 WINDOW_METRICS_PREFIX = "[EAER_WINDOW_METRICS] "
+TRANSFER_METRICS_PREFIX = "[EAER_TRANSFER_METRICS] "
 ECOFLOC_METRICS = ("cpu", "gpu", "nic", "ram", "sd")
 POD_UID_PATTERN = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
@@ -429,18 +441,21 @@ def _elapsed_between(started_at: str, finished_at: str) -> str:
         return ""
 
 
-def _pod_log_metrics(namespace: str, pod: str) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
-    """Return (final step-metrics record, per-window records) parsed from one Pod's log."""
+def _pod_log_metrics(
+    namespace: str, pod: str,
+) -> tuple[dict[str, object] | None, list[dict[str, object]], list[dict[str, object]]]:
+    """Return (final step-metrics record, per-window records, per-transfer records) of one Pod."""
     result = subprocess.run(
         ["kubectl", "logs", "-n", namespace, pod, "--tail=-1"],
         text=True, capture_output=True, check=False,
     )
     if result.returncode != 0:
-        return None, []
+        return None, [], []
     step: dict[str, object] | None = None
     windows: list[dict[str, object]] = []
+    transfers: list[dict[str, object]] = []
     for line in result.stdout.splitlines():
-        for prefix in (STEP_METRICS_PREFIX, WINDOW_METRICS_PREFIX):
+        for prefix in (STEP_METRICS_PREFIX, WINDOW_METRICS_PREFIX, TRANSFER_METRICS_PREFIX):
             marker = line.find(prefix)
             if marker < 0:
                 continue
@@ -452,10 +467,12 @@ def _pod_log_metrics(namespace: str, pod: str) -> tuple[dict[str, object] | None
                 break
             if prefix == STEP_METRICS_PREFIX:
                 step = value  # the last record wins
-            else:
+            elif prefix == WINDOW_METRICS_PREFIX:
                 windows.append(value)
+            else:
+                transfers.append(value)
             break
-    return step, windows
+    return step, windows, transfers
 
 
 def collect_step_metrics(run_dir: Path, namespace: str) -> None:
@@ -473,20 +490,32 @@ def collect_step_metrics(run_dir: Path, namespace: str) -> None:
     numeric_fields = (
         "logical_read_bytes", "logical_write_bytes", "storage_read_bytes",
         "storage_write_bytes", "elapsed_seconds", "wait_seconds", "compute_seconds", "windows",
+        "transfer_seconds", "transfer_read_bytes", "transfer_write_bytes", "transfers",
     )
     window_rows: list[dict[str, object]] = []
+    transfer_rows: list[dict[str, object]] = []
     for placement_row in ordered:
         key = (placement_row.get("phase", ""), placement_row.get("task", ""))
         attempt_by_task[key] += 1
-        step_metric, windows = _pod_log_metrics(namespace, placement_row.get("pod", ""))
+        step_metric, windows, transfers = _pod_log_metrics(namespace, placement_row.get("pod", ""))
         metric = step_metric or {}
+        pod_fields = {
+            "phase": key[0], "task": key[1], "pod": placement_row.get("pod", ""),
+            "node": placement_row.get("node", ""),
+        }
         for window in windows:
             window_rows.append({
-                "phase": key[0], "task": key[1], "pod": placement_row.get("pod", ""),
-                "node": placement_row.get("node", ""), "window": window.get("window", ""),
+                **pod_fields, "window": window.get("window", ""),
                 "wait_seconds": window.get("wait_seconds", ""),
                 "compute_seconds": window.get("compute_seconds", ""),
+                "transfer_seconds": window.get("transfer_seconds", ""),
+                "transfer_read_bytes": window.get("transfer_read_bytes", ""),
+                "transfer_write_bytes": window.get("transfer_write_bytes", ""),
                 "started_at": window.get("started_at", ""), "ended_at": window.get("ended_at", ""),
+            })
+        for transfer in transfers:
+            transfer_rows.append({
+                **pod_fields, **{field: transfer.get(field, "") for field in TRANSFER_METRIC_FIELDS[4:]},
             })
         row: dict[str, object] = {
             "phase": key[0], "task": key[1], "pod": placement_row.get("pod", ""),
@@ -514,6 +543,12 @@ def collect_step_metrics(run_dir: Path, namespace: str) -> None:
         writer.writeheader()
         writer.writerows(window_rows)
 
+    transfers_output = run_dir / "transfer-metrics.tsv"
+    with transfers_output.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=TRANSFER_METRIC_FIELDS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(transfer_rows)
+
     summary: dict[str, dict[str, object]] = {}
     for row in rows:
         key = f"{row['phase']}/{row['task']}"
@@ -523,7 +558,16 @@ def collect_step_metrics(run_dir: Path, namespace: str) -> None:
             "storage_read_bytes": 0, "storage_write_bytes": 0,
             "cumulative_elapsed_seconds": 0.0, "cumulative_pod_elapsed_seconds": 0.0,
             "windows": 0, "cumulative_wait_seconds": 0.0, "cumulative_compute_seconds": 0.0,
+            "transfers": 0, "cumulative_transfer_seconds": 0.0,
+            "transfer_read_bytes": 0, "transfer_write_bytes": 0,
         })
+        if row["transfer_seconds"] != "":
+            item["transfers"] = int(item["transfers"]) + int(row["transfers"] or 0)
+            item["cumulative_transfer_seconds"] = round(
+                float(item["cumulative_transfer_seconds"]) + float(row["transfer_seconds"]), 6
+            )
+            for field in ("transfer_read_bytes", "transfer_write_bytes"):
+                item[field] = int(item[field]) + int(row[field] or 0)
         if row["compute_seconds"] != "":
             item["windows"] = int(item["windows"]) + int(row["windows"] or 0)
             item["cumulative_wait_seconds"] = round(
@@ -550,6 +594,7 @@ def collect_step_metrics(run_dir: Path, namespace: str) -> None:
         json.dumps({"steps": summary}, indent=2), encoding="utf-8"
     )
     write_compute_normalized(run_dir)
+    write_transfer_energy(run_dir)
 
 
 def _as_float(value: object) -> float | None:
@@ -621,6 +666,223 @@ def write_compute_normalized(run_dir: Path) -> None:
         }, indent=2),
         encoding="utf-8",
     )
+
+
+ALUMET_MODULE = Path(__file__).resolve().parent / "alumet" / "alumet.py"
+TRANSFER_ENERGY_FIELDS = TRANSFER_METRIC_FIELDS + (
+    "node_energy_j", "node_excess_energy_j", "pod_attributed_energy_j",
+    "network_bytes", "nfs_server_node", "nfs_server_energy_j",
+)
+
+
+def _alumet_module():
+    spec = importlib.util.spec_from_file_location("eaer_alumet", ALUMET_MODULE)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _epoch(value: str) -> float | None:
+    """Parse an RFC 3339 time (InfluxDB writes nanoseconds; datetime keeps microseconds)."""
+    if not value:
+        return None
+    text = re.sub(r"(\.\d{6})\d+", r"\1", value.strip().replace("Z", "+00:00"))
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+class _Series:
+    """Per-interval samples (energy in J, or byte deltas): sample i covers (t[i-1], t[i]]."""
+
+    def __init__(self, points: list[tuple[float, float]]):
+        points.sort()
+        self.times = [t for t, _ in points]
+        self.values = [v for _, v in points]
+        gaps = sorted(b - a for a, b in zip(self.times, self.times[1:]) if b > a)
+        # The first sample has no predecessor; assume the typical poll interval.
+        self.first_width = gaps[len(gaps) // 2] if gaps else 1.0
+        self.max_width = max(gaps[-1] if gaps else 0.0, self.first_width)
+
+    def between(self, start: float, end: float) -> float:
+        """Share of the samples overlapping [start, end], assuming uniform rate per sample."""
+        total = 0.0
+        first = bisect.bisect_right(self.times, start)
+        last = bisect.bisect_right(self.times, end + self.max_width)
+        for index in range(first, last):
+            right = self.times[index]
+            left = self.times[index - 1] if index else right - self.first_width
+            width = right - left
+            if width <= 0:
+                continue
+            overlap = min(end, right) - max(start, left)
+            if overlap > 0:
+                total += self.values[index] * overlap / width
+        return total
+
+
+def _rapl_domains(domains: set[str]) -> set[str]:
+    """Same non-overlapping choice as alumet.rapl_components: platform, else package+dram."""
+    for name in ("platform_total", "platform"):
+        if name in domains:
+            return {name}
+    chosen = {
+        next((name for name in names if name in domains), "")
+        for names in (("package_total", "package"), ("dram_total", "dram"))
+    } - {""}
+    return chosen or domains
+
+
+def _alumet_series(raw: str) -> dict[str, dict]:
+    """Group Alumet's raw export into node RAPL, pod-attributed energy and NIC byte series."""
+    alumet = _alumet_module()
+    rapl: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    attributed: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    network: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    for row in alumet.influx_rows(raw):
+        metric = row.get("_measurement", "")
+        if row.get("_field", "") not in {"", "value"}:
+            continue
+        moment = _epoch(row.get("_time", ""))
+        try:
+            value = float(row.get("_value", ""))
+        except ValueError:
+            continue
+        if moment is None or not math.isfinite(value):
+            continue
+        name = metric.lower()
+        node = row.get("node") or row.get("node_name") or "unknown"
+        consumer_kind = row.get("resource_consumer_kind") or row.get("consumer_kind", "")
+        if name.startswith("network_bytes"):
+            label = f"{row.get('interface', 'unknown')}/{row.get('direction', 'unknown')}"
+            network[node][label].append((moment, value))
+        elif "energy" not in name:
+            continue
+        elif "attributed" in name or consumer_kind not in {"", "local_machine"}:
+            pod = next((row.get(key, "") for key in ("name", "pod", "pod_name", "k8s_pod_name") if row.get(key)), "")
+            if pod:
+                attributed[pod][metric].append((moment, value * alumet.joule_factor(metric)))
+        elif name.startswith("rapl_"):
+            rapl[node][row.get("domain", "unknown").lower()].append((moment, value * alumet.joule_factor(metric)))
+    return {
+        "rapl": {
+            node: [_Series(domains[domain]) for domain in _rapl_domains(set(domains))]
+            for node, domains in rapl.items()
+        },
+        "attributed": {
+            pod: [_Series(points) for points in metrics.values()] for pod, metrics in attributed.items()
+        },
+        "network": {
+            node: {label: _Series(points) for label, points in labels.items()}
+            for node, labels in network.items()
+        },
+    }
+
+
+def write_transfer_energy(run_dir: Path) -> None:
+    """Estimate the energy of every inter-stage transfer from Alumet's power time series.
+
+    Needs transfer-metrics.tsv and energy/alumet-raw.csv; like write_compute_normalized it is
+    called after either is produced. Alumet has no NFS-specific probe, so each transfer gets
+    bounds rather than one exact figure:
+      node_energy_j            RAPL energy of the Pod's node during the transfer (upper bound:
+                               includes everything else running on that node);
+      pod_attributed_energy_j  Alumet's per-Pod attributed energy (lower bound: the NFS client
+                               RPC work runs in kernel threads outside the Pod's cgroup);
+      node_excess_energy_j     node energy above the node's idle power, when
+                               energy/idle-power.json ({"node": watts}) exists;
+      nfs_server_energy_j      RAPL energy of ERCTL_NFS_SERVER_NODE during a remote transfer.
+    network_bytes is the node's non-loopback NIC traffic during the transfer (procfs plugin).
+    Samples are spread uniformly over their poll interval, so sub-interval transfers get the
+    interval's mean power. Concurrent transfers on one node share, and double count, it.
+    """
+    transfers_path = run_dir / "transfer-metrics.tsv"
+    raw_path = run_dir / "energy" / "alumet-raw.csv"
+    if not transfers_path.exists() or not raw_path.exists():
+        return
+    with transfers_path.open(encoding="utf-8") as stream:
+        transfers = list(csv.DictReader(stream, delimiter="\t"))
+    series = _alumet_series(raw_path.read_text(encoding="utf-8"))
+    idle_path = run_dir / "energy" / "idle-power.json"
+    idle_power = json.loads(idle_path.read_text(encoding="utf-8")) if idle_path.exists() else {}
+    server = os.environ.get("ERCTL_NFS_SERVER_NODE", "")
+
+    rows: list[dict[str, object]] = []
+    edges: dict[str, dict[str, object]] = {}
+    totals: dict[str, float] = defaultdict(float)
+    for transfer in transfers:
+        start, end = _epoch(transfer.get("started_at", "")), _epoch(transfer.get("ended_at", ""))
+        if start is None or end is None:
+            continue
+        seconds = max(0.0, end - start)
+        node = transfer.get("node", "")
+        node_energy = sum(item.between(start, end) for item in series["rapl"].get(node, []))
+        excess = None
+        if node in idle_power:
+            excess = max(0.0, node_energy - float(idle_power[node]) * seconds)
+        pod_energy = sum(item.between(start, end) for item in series["attributed"].get(transfer.get("pod", ""), []))
+        network = sum(
+            item.between(start, end)
+            for label, item in series["network"].get(node, {}).items()
+            if not label.startswith("lo/")
+        )
+        server_energy = None
+        if server and server != node:
+            server_energy = sum(item.between(start, end) for item in series["rapl"].get(server, []))
+        row = {field: transfer.get(field, "") for field in TRANSFER_METRIC_FIELDS}
+        row.update({
+            "node_energy_j": round(node_energy, 6),
+            "node_excess_energy_j": "" if excess is None else round(excess, 6),
+            "pod_attributed_energy_j": round(pod_energy, 6),
+            "network_bytes": int(round(network)),
+            "nfs_server_node": server if server_energy is not None else "",
+            "nfs_server_energy_j": "" if server_energy is None else round(server_energy, 6),
+        })
+        rows.append(row)
+
+        key = f"{transfer.get('phase', '')}/{transfer.get('task', '')} {transfer.get('direction', '')} {transfer.get('kind', '')}"
+        edge = edges.setdefault(key, {
+            "phase": transfer.get("phase", ""), "task": transfer.get("task", ""),
+            "direction": transfer.get("direction", ""), "kind": transfer.get("kind", ""),
+            "nodes": [], "transfers": 0, "bytes": 0, "seconds": 0.0, "node_energy_j": 0.0,
+            "node_excess_energy_j": None, "pod_attributed_energy_j": 0.0, "network_bytes": 0,
+            "nfs_server_energy_j": None,
+        })
+        if node and node not in edge["nodes"]:
+            edge["nodes"].append(node)
+        edge["transfers"] = int(edge["transfers"]) + 1
+        edge["bytes"] = int(edge["bytes"]) + int(float(transfer.get("bytes") or 0))
+        edge["network_bytes"] = int(edge["network_bytes"]) + int(row["network_bytes"])
+        for field, value in (
+            ("seconds", seconds), ("node_energy_j", node_energy), ("pod_attributed_energy_j", pod_energy),
+            ("node_excess_energy_j", excess), ("nfs_server_energy_j", server_energy),
+        ):
+            if value is None:
+                continue
+            edge[field] = round(float(edge[field] or 0.0) + value, 6)
+            totals[field] += value
+        totals["transfers"] += 1
+        totals["bytes"] += float(transfer.get("bytes") or 0)
+        totals["network_bytes"] += float(row["network_bytes"])
+
+    (run_dir / "energy").mkdir(parents=True, exist_ok=True)
+    with (run_dir / "energy" / "transfer-energy.tsv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=TRANSFER_ENERGY_FIELDS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+    (run_dir / "energy" / "transfer-energy.json").write_text(json.dumps({
+        "provider": "alumet",
+        "nfs_server_node": server or None,
+        "idle_power_w": idle_power,
+        "totals": {
+            key: int(value) if key in {"transfers", "bytes", "network_bytes"} else round(value, 6)
+            for key, value in sorted(totals.items())
+        },
+        "by_edge": dict(sorted(edges.items())),
+        "note": write_transfer_energy.__doc__.strip(),
+    }, indent=2), encoding="utf-8")
 
 
 def write_manifest(run_dir: Path, args: argparse.Namespace) -> None:
@@ -719,6 +981,11 @@ def show(run_dir: Path) -> None:
                     f" compute={item.get('cumulative_compute_seconds', 0):.3f}s"
                     f" wait={item.get('cumulative_wait_seconds', 0):.3f}s"
                 )
+            if int(item.get("transfers", 0)):
+                time_text += (
+                    f" transfer={item.get('cumulative_transfer_seconds', 0):.3f}s"
+                    f" ({item.get('transfer_read_bytes', 0)}B in, {item.get('transfer_write_bytes', 0)}B out)"
+                )
             print(
                 f"  {item.get('phase', ''):<11} {item.get('task', ''):<34} "
                 f"{io_text}{time_text} attempts={measured}/{attempts}"
@@ -801,6 +1068,28 @@ def show(run_dir: Path) -> None:
                     f"compute={entry['compute_seconds']:.3f}s wait={entry['wait_seconds']:.3f}s "
                     f"J/compute-s={'n/a' if rate is None else f'{rate:.3f}'}"
                 )
+    _show_transfer_energy(run_dir)
+
+
+def _show_transfer_energy(run_dir: Path) -> None:
+    path = run_dir / "energy" / "transfer-energy.json"
+    if not path.exists():
+        return
+    data = json.loads(path.read_text(encoding="utf-8"))
+    totals = data.get("totals", {})
+    print(
+        f"Transfer energy (alumet): {totals.get('transfers', 0)} transfer(s)  "
+        f"{totals.get('bytes', 0)}B in {totals.get('seconds', 0):.3f}s  "
+        f"node={totals.get('node_energy_j', 0):.3f}J pod-attributed={totals.get('pod_attributed_energy_j', 0):.3f}J"
+        + (f" excess={totals['node_excess_energy_j']:.3f}J" if "node_excess_energy_j" in totals else "")
+        + (f" nfs-server={totals['nfs_server_energy_j']:.3f}J" if "nfs_server_energy_j" in totals else "")
+    )
+    for key, edge in data.get("by_edge", {}).items():
+        print(
+            f"  {key:<52} n={edge['transfers']} {edge['bytes']}B {edge['seconds']:.3f}s "
+            f"node={edge['node_energy_j']:.3f}J pod={edge['pod_attributed_energy_j']:.3f}J "
+            f"nic={edge['network_bytes']}B on {','.join(edge['nodes']) or '-'}"
+        )
 
 
 def resolve_run(root: Path, name: str) -> Path:
@@ -848,6 +1137,7 @@ def main() -> None:
         try:
             energy_summary(args.run_dir)
             write_compute_normalized(args.run_dir)
+            write_transfer_energy(args.run_dir)
         except RuntimeError as error:
             raise SystemExit(str(error)) from None
     elif args.command == "collect":
