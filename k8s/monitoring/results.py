@@ -914,6 +914,12 @@ def energy_summary_paths(run_dir: Path) -> list[Path]:
 def show(run_dir: Path) -> None:
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    phase_path = run_dir / "pipeline-phase.json"
+    phase = json.loads(phase_path.read_text(encoding="utf-8")) if phase_path.exists() else {}
+    offline_prep = (
+        phase.get("phase") == "batch"
+        and manifest.get("mode") == "embedding-training-inference-evaluation"
+    )
     summary_paths = energy_summary_paths(run_dir)
     summaries = [json.loads(path.read_text(encoding="utf-8")) for path in summary_paths]
     matching = run_dir / "matching"
@@ -926,12 +932,14 @@ def show(run_dir: Path) -> None:
         print(f"Archive: {manifest['archive_status']}")
     if graph:
         print(f"Matching: {edge_count(graph)} edges  file={graph}")
+    elif offline_prep:
+        print("Matching: not applicable (offline batch preparation; no evaluation)")
     else:
         print("Matching: (not collected)")
     if report:
         print(f"Evaluation: {report.read_text(encoding='utf-8').strip()}")
     # A Succeeded run with missing matching artifacts is an honest caveat, not a lie.
-    if status == "Succeeded" and not (graph and report):
+    if status == "Succeeded" and not offline_prep and not (graph and report):
         print("Note: workload Succeeded but some matching artifacts were not saved (see manifest.artifacts).")
     plan_path = run_dir / "scheduling-plan.tsv"
     if plan_path.exists():

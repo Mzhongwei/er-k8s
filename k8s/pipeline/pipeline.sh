@@ -378,6 +378,10 @@ delete_pipeline_storage() {
     # workload Pods Pending with "persistentvolumeclaim ... not found".
     timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs -r kubectl delete -n "$NAMESPACE" || true
     kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
+    # Seed helpers also mount runtime claims. Remove their Pods before deleting PVCs;
+    # their one-hour TTL is too long for the next experiment's cleanup.
+    kubectl delete job -n "$NAMESPACE" seed-save seed-restore \
+        --ignore-not-found=true --cascade=foreground --wait=true --timeout=5m
     while IFS= read -r workflow_name; do
         [ -n "$workflow_name" ] || continue
         pipeline_workflows+=("$workflow_name")
@@ -949,12 +953,14 @@ start_pipeline() {
 
     # Persist workload artifacts before finalizing optional monitoring.
     if [ -n "$RUN_DIR" ]; then
-        local collect_args=(collect "$RUN_DIR" --namespace "$NAMESPACE")
-        if [ "$DATA_LOCALITY_STRATEGY" = "DL1" ]; then
-            collect_args+=(--local-root "/srv/nfs/k8s/eaer-local/$DATA_LOCALITY_RUN_TOKEN" --node "server2-labo")
+        if [ "$config_mode" != "$EMBEDDING_PIPELINE_MODE" ] || [ "$PIPELINE_PHASE" != "batch" ]; then
+            local collect_args=(collect "$RUN_DIR" --namespace "$NAMESPACE")
+            if [ "$DATA_LOCALITY_STRATEGY" = "DL1" ]; then
+                collect_args+=(--local-root "/srv/nfs/k8s/eaer-local/$DATA_LOCALITY_RUN_TOKEN" --node "server2-labo")
+            fi
+            python3 "$RESULTS_SCRIPT" "${collect_args[@]}" \
+                || echo "Warning: matching-result artifacts could not be collected." >&2
         fi
-        python3 "$RESULTS_SCRIPT" "${collect_args[@]}" 2>/dev/null \
-            || echo "Warning: matching-result artifacts could not be collected." >&2
         python3 "$RESULTS_SCRIPT" metrics "$RUN_DIR" --namespace "$NAMESPACE" \
             || echo "Warning: per-step I/O metrics could not be collected." >&2
     fi
