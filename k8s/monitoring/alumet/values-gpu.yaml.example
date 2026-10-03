@@ -29,9 +29,10 @@ alumet-relay-client:
   env:
     NVIDIA_VISIBLE_DEVICES: all
     NVIDIA_DRIVER_CAPABILITIES: utility
-  # Uncomment when nvidia is not the default containerd runtime on the GPU nodes
-  # (`kubectl get runtimeclass`; k3s registers one named "nvidia").
-  # runtimeClassName: nvidia
+  # Required unless nvidia is the default containerd runtime on the GPU nodes (k3s registers a
+  # RuntimeClass named "nvidia" but keeps runc as default). Without it NVML fails to start with
+  # "libnvidia-ml.so.1: cannot open shared object file". Check with `kubectl get runtimeclass`.
+  runtimeClassName: nvidia
   # GPU nodes are commonly tainted nvidia.com/gpu; the collector no longer requests a GPU, so
   # it must tolerate the taint itself. `erctl alumet start` restricts it to nodes labelled
   # eaer.alumet/enabled=true and eaer.alumet/gpu-enabled=true.
