@@ -5,6 +5,12 @@ alumet-relay-client:
     eaer.alumet/enabled: "true"
   securityContext:
     privileged: true
+  # The chart default (128Mi) is OOM-killed when many workload Pods are tracked.
+  resources:
+    requests:
+      memory: 128Mi
+    limits:
+      memory: 512Mi
   plugins:
     k8s: {enable: true, poll_interval: 1s}
     procfs: {enable: true}

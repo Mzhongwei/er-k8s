@@ -753,7 +753,7 @@ def _alumet_series(raw: str) -> dict[str, dict]:
         if moment is None or not math.isfinite(value):
             continue
         name = metric.lower()
-        node = row.get("node") or row.get("node_name") or "unknown"
+        node = alumet.row_node(row)
         consumer_kind = row.get("resource_consumer_kind") or row.get("consumer_kind", "")
         if name.startswith("network_bytes"):
             label = f"{row.get('interface', 'unknown')}/{row.get('direction', 'unknown')}"
@@ -1116,6 +1116,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     energy = sub.add_parser("energy")
     energy.add_argument("run_dir", type=Path)
+    derived = sub.add_parser("derived")
+    derived.add_argument("run_dir", type=Path)
     collect = sub.add_parser("collect")
     collect.add_argument("run_dir", type=Path)
     collect.add_argument("--namespace", default="argo")
@@ -1144,10 +1146,13 @@ def main() -> None:
     if args.command == "energy":
         try:
             energy_summary(args.run_dir)
-            write_compute_normalized(args.run_dir)
-            write_transfer_energy(args.run_dir)
         except RuntimeError as error:
             raise SystemExit(str(error)) from None
+    elif args.command == "derived":
+        # Run after every provider has written its summary: `metrics` runs earlier in the
+        # pipeline, before any energy file exists.
+        write_compute_normalized(args.run_dir)
+        write_transfer_energy(args.run_dir)
     elif args.command == "collect":
         collect_matching(args.run_dir, args.namespace, args.local_root, args.node)
     elif args.command == "metrics":

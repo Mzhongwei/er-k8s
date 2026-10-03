@@ -1,6 +1,7 @@
 logs/
 reports/
 test/
+tests/
 prompt/
 .vscode/
 .codex/
@@ -13,6 +14,7 @@ k8s/images/image-repository.conf
 k8s/monitoring/ecofloc/energy-nodes.conf
 k8s/monitoring/alumet/values.yaml
 k8s/monitoring/alumet/values-gpu.yaml
+k8s/monitoring/alumet/test_alumet.py
 k8s/datasets/dataset-volume.yaml
 k8s/datasets/seed-volume.yaml
 k8s/scheduling/carbon-intensity.yaml

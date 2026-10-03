@@ -653,6 +653,8 @@ INEXISTENT` and `0.00 Joules` is an invalid measurement; the preflight now rejec
 ## Alumet [:link:](https://github.com/alumet-dev)
 
 Alumet is a persistent cluster service rather than a per-run child process. `erctl` checks that its node clients and InfluxDB are ready, records the pipeline's UTC time window, exports that window to `energy/alumet-raw.csv`, and writes `energy/alumet-summary.json`. Hardware and attributed energy are kept separate because adding them would double-count energy.
+
+Before each run, `erctl` recreates the relay-client Pods on Ready nodes and waits until they report new energy, all outside the measured window (`energy/alumet-restart.json` records it). This clears per-Pod state that otherwise grows across runs until the client is OOM-killed. Clients on NotReady nodes are skipped. Set `ERCTL_ALUMET_RESTART_EACH_RUN=0` to only restart when the energy stream is stale; `ERCTL_ALUMET_RESTART_TIMEOUT` (default 180 s) bounds the wait. The window export is limited to energy and `network_bytes` series and to `ERCTL_ALUMET_QUERY_TIMEOUT` (default 300 s).
 Attributed energy is split into EAER Pods found in `placement.tsv`, named system consumers, and consumers that Alumet could not map to a Pod (`unknown`). The raw InfluxDB export and the complete per-consumer breakdown remain available for auditing.
 
 
@@ -668,6 +670,23 @@ export ERCTL_ALUMET_BUCKET=default
 export ERCTL_ALUMET_TOKEN_SECRET=eaer-alumet-influxdb2-auth
 export ERCTL_ALUMET_INFLUX_POD=<influxdb-pod-name>
 ```
+
+### Which Alumet values file to use, and when
+
+Alumet is installed as one or two Helm releases. Each local values file is a gitignored copy
+of a tracked `.example` template:
+
+| Local file (copy of) | Helm release | Installs | Needed when |
+|---|---|---|---|
+| `values.yaml` (`values.yaml.example`) | `eaer-alumet` | RAPL relay client on every enabled node, relay server, InfluxDB | Always, before selecting `alumet` or `ecofloc-alumet` |
+| `values-gpu.yaml` (`values-gpu.yaml.example`) | `eaer-alumet-gpu` | NVML-only relay client on nodes labelled `eaer.alumet/gpu-enabled=true` | Only to measure NVIDIA GPU energy, e.g. BERT on `cuda` (the serie1 `bert` sweep on `server2-labo`). Without it, Alumet reports no GPU energy |
+
+The values files are applied only by `helm upgrade --install`. Neither `erctl` nor
+`bootstrap-serie1.sh` reads them: `erctl alumet start` (called by `bootstrap-serie1.sh run`)
+only scales and labels the already-installed releases. After editing a values file, rerun the
+matching `helm upgrade --install` command below; otherwise the cluster keeps the old values.
+`erctl alumet start` labels only Ready, schedulable nodes and removes the label from NotReady
+ones, so a powered-off node cannot block the collector rollout.
 
 Create the local Helm values file and adjust its monitoring node and storage class:
 

@@ -594,6 +594,10 @@ start_energy_monitor() {
 
 stop_energy_monitor() {
     # Close and summarize each requested backend independently.
+    local stopped=false
+    if [ "$ALUMET_MONITOR_ACTIVE" = true ] || [ "$ECOFLOC_MONITOR_ACTIVE" = true ]; then
+        stopped=true
+    fi
     if [ "$ALUMET_MONITOR_ACTIVE" = true ]; then
         ALUMET_MONITOR_ACTIVE=false
         if python3 "$ALUMET_SCRIPT" stop "$RUN_DIR"; then
@@ -614,6 +618,13 @@ stop_energy_monitor() {
                 echo "Warning: EcoFLOC returned no usable energy data; workload results remain valid." >&2
             fi
         fi
+    fi
+
+    # Per-Pod compute share and transfer energy need both the step metrics and the energy
+    # summaries, which only exist from this point on, whichever backends were selected.
+    if [ "$stopped" = true ]; then
+        python3 "$RESULTS_SCRIPT" derived "$RUN_DIR" \
+            || echo "Warning: derived energy metrics could not be computed." >&2
     fi
 }
 
@@ -869,7 +880,7 @@ start_pipeline() {
 
     # Start the background energy monitor (no-op unless --energy-monitor) so it covers the
     # whole workload -- both the batch Argo phase and the incremental worker phase.
-    start_energy_monitor "$config_mode"
+    start_energy_monitor
 
     case "$config_mode" in
         "$EMBEDDING_PIPELINE_MODE")

@@ -23,17 +23,22 @@ INFLUX_POD = os.environ.get("ERCTL_ALUMET_INFLUX_POD", "")
 TOKEN_SECRET = os.environ.get("ERCTL_ALUMET_TOKEN_SECRET", "")
 TOKEN_KEY = os.environ.get("ERCTL_ALUMET_TOKEN_KEY", "admin-token")
 DRAIN_SECONDS = float(os.environ.get("ERCTL_ALUMET_DRAIN_SECONDS", "3"))
+RESTART_TIMEOUT = float(os.environ.get("ERCTL_ALUMET_RESTART_TIMEOUT", "180"))
+QUERY_TIMEOUT = float(os.environ.get("ERCTL_ALUMET_QUERY_TIMEOUT", "300"))
 RETENTION = os.environ.get("ERCTL_ALUMET_RETENTION", "7d")
 ENABLE_LABEL = "eaer.alumet/enabled"
 GPU_ENABLE_LABEL = os.environ.get("ERCTL_ALUMET_GPU_LABEL", "eaer.alumet/gpu-enabled")
 GPU_CLIENT_FRAGMENT = os.environ.get("ERCTL_ALUMET_GPU_CLIENT_FRAGMENT", "alumet-gpu")
 
 
-def kubectl(*args: str, input_text: str | None = None) -> str:
-    result = subprocess.run(
-        ["kubectl", *args], input=input_text, text=True,
-        capture_output=True, check=True,
-    )
+def kubectl(*args: str, input_text: str | None = None, timeout: float | None = None) -> str:
+    try:
+        result = subprocess.run(
+            ["kubectl", *args], input=input_text, text=True,
+            capture_output=True, check=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"kubectl {args[0]} did not finish within {timeout:.0f}s") from None
     return result.stdout
 
 
@@ -135,7 +140,12 @@ def client_coverage() -> tuple[list[dict], list[dict]]:
     return ready, uncovered
 
 
-def preflight() -> tuple[str, str, list[dict], list[dict]]:
+class NoRecentEnergy(RuntimeError):
+    """Infrastructure responds, but the energy stream is stale."""
+
+
+def preflight(since: str | None = None) -> tuple[str, str, list[dict], list[dict]]:
+    """Check the deployment and require energy newer than `since` (default: last 2 minutes)."""
     servers = [
         item for item in cluster_objects("deployments")
         if "alumet-relay-server" in item.get("metadata", {}).get("name", "")
@@ -153,19 +163,130 @@ def preflight() -> tuple[str, str, list[dict], list[dict]]:
     pod = influx_pod()
     secret, _ = token_secret()
     kubectl("exec", "-n", NAMESPACE, pod, "--", "influx", "ping")
+    start = f"time(v: {json.dumps(since)})" if since else "-2m"
     recent = run_query(
-        f"from(bucket: {json.dumps(BUCKET)}) |> range(start: -2m) "
+        f"from(bucket: {json.dumps(BUCKET)}) |> range(start: {start}) "
         '|> filter(fn: (r) => r._field == "value" and r._measurement =~ /energy/) '
         "|> limit(n: 1)",
         pod,
     )
     if not any(True for _ in influx_rows(recent)):
-        raise RuntimeError("InfluxDB has no Alumet energy measurement from the last 2 minutes")
+        detail = f"since {since}" if since else "from the last 2 minutes"
+        raise NoRecentEnergy(f"InfluxDB has no Alumet energy measurement {detail}")
     return pod, secret, ready, uncovered
 
 
+def ready_nodes() -> set[str]:
+    nodes = json.loads(kubectl("get", "nodes", "-o", "json")).get("items", [])
+    return {
+        node["metadata"]["name"] for node in nodes
+        if any(
+            c.get("type") == "Ready" and c.get("status") == "True"
+            for c in node.get("status", {}).get("conditions", [])
+        )
+    }
+
+
+def collector_key(pod: dict) -> tuple[str, str]:
+    """(DaemonSet, node): one collector per release and node, e.g. RAPL and GPU clients."""
+    owners = pod.get("metadata", {}).get("ownerReferences", [])
+    return (owners[0].get("name", "") if owners else "", pod.get("spec", {}).get("nodeName", ""))
+
+
+def restart_collectors(run_dir: Path, reason: str):
+    """Recreate the relay clients on Ready nodes and wait for energy newer than the restart.
+
+    Pods are deleted directly instead of `rollout restart`: a client stuck on a NotReady node
+    would hold the DaemonSet's maxUnavailable budget and block the whole rollout. Clients on
+    NotReady nodes are skipped and recorded. Runs outside the measured window.
+    """
+    path = run_dir / "energy" / "alumet-restart.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"reason": reason, "started_at": utc_now(), "status": "running", "pods": [], "skipped": []}
+    path.write_text(json.dumps(record, indent=2))
+    try:
+        server = resource_name("deployments", "alumet-relay-server")
+        kubectl("rollout", "status", f"deployment/{server}", "-n", NAMESPACE, "--timeout=60s")
+        nodes = ready_nodes()
+        clients = alumet_clients()
+        targets = [pod for pod in clients if collector_key(pod)[1] in nodes]
+        record["pods"] = [f"{pod['metadata']['name']}@{collector_key(pod)[1]}" for pod in targets]
+        record["skipped"] = [
+            f"{pod['metadata']['name']}@{collector_key(pod)[1]}" for pod in clients if pod not in targets
+        ]
+        if not targets:
+            raise RuntimeError("no Alumet relay client runs on a Ready node")
+        print(f"Alumet: restarting {len(targets)} collector(s) before the run ({reason})", flush=True)
+        if record["skipped"]:
+            print("Alumet: skipping collector(s) on NotReady nodes: " + ", ".join(record["skipped"]), flush=True)
+        old_names = {pod["metadata"]["name"] for pod in targets}
+        expected = {collector_key(pod) for pod in targets}
+        kubectl("delete", "pod", "-n", NAMESPACE, *sorted(old_names), "--wait=false")
+
+        deadline = time.monotonic() + RESTART_TIMEOUT
+        while True:
+            fresh = {
+                collector_key(pod) for pod in alumet_clients()
+                if pod["metadata"]["name"] not in old_names and is_ready(pod)
+            }
+            if expected <= fresh:
+                break
+            if time.monotonic() >= deadline:
+                missing = ", ".join(f"{ds}@{node}" for ds, node in sorted(expected - fresh))
+                raise RuntimeError(f"Alumet collectors not Ready {RESTART_TIMEOUT:.0f}s after restart: {missing}")
+            time.sleep(2)
+        since = utc_now()
+        record["collectors_ready_at"] = since
+        while True:
+            try:
+                result = preflight(since=since)
+                record["status"] = "ready"
+                return result
+            except NoRecentEnergy:
+                if time.monotonic() >= deadline:
+                    raise NoRecentEnergy(
+                        f"Alumet produced no energy within {RESTART_TIMEOUT:.0f}s of restarting its collectors"
+                    ) from None
+                time.sleep(5)
+    except Exception:
+        record["status"] = "failed"
+        raise
+    finally:
+        record["finished_at"] = utc_now()
+        path.write_text(json.dumps(record, indent=2))
+
+
+def preflight_with_recovery(run_dir: Path):
+    """Recover once before measurement starts; ordinary preflight stays read-only.
+
+    Only a stale energy stream triggers a restart, never an auth/query/config error.
+    Keep recovery outside the measured window and persist its outcome for auditing.
+    """
+    try:
+        return preflight()
+    except NoRecentEnergy:
+        if os.environ.get("ERCTL_ALUMET_AUTO_RECOVER", "1") == "0":
+            raise
+    print("Alumet energy stream is stale; waiting 15s before recovery.", flush=True)
+    time.sleep(15)
+    try:
+        return preflight()
+    except NoRecentEnergy:
+        pass
+    return restart_collectors(run_dir, "stale-stream")
+
+
 def start(run_dir: Path) -> None:
-    pod, secret, clients, uncovered = preflight()
+    # Restarting before every run clears the collectors' in-memory per-Pod state, which
+    # otherwise grows across runs until the client is OOM-killed mid-benchmark.
+    if os.environ.get("ERCTL_ALUMET_RESTART_EACH_RUN", "1") != "0":
+        try:
+            preflight()   # fail on auth/query/config errors before disrupting collection
+        except NoRecentEnergy:
+            pass          # the restart below is the recovery
+        pod, secret, clients, uncovered = restart_collectors(run_dir, "each-run")
+    else:
+        pod, secret, clients, uncovered = preflight_with_recovery(run_dir)
     energy_dir = run_dir / "energy"
     energy_dir.mkdir(parents=True, exist_ok=True)
     window = {
@@ -200,7 +321,7 @@ def run_query(flux: str, pod: str | None = None) -> str:
     script = 'IFS= read -r INFLUX_TOKEN; export INFLUX_TOKEN; exec influx query --raw --org "$1" "$2"'
     return kubectl(
         "exec", "-i", "-n", NAMESPACE, pod, "--", "sh", "-c", script,
-        "alumet-query", ORG, flux, input_text=f"{token}\n",
+        "alumet-query", ORG, flux, input_text=f"{token}\n", timeout=QUERY_TIMEOUT,
     )
 
 
@@ -229,19 +350,28 @@ def set_retention(duration: str) -> None:
     print(f"InfluxDB bucket {BUCKET}: retention={duration}")
 
 
-def eligible_nodes() -> list[str]:
+def eligible_nodes() -> tuple[list[str], list[str]]:
+    """Return (nodes to collect on, labelled nodes to release).
+
+    A NotReady node is never eligible: its collector Pod cannot start or terminate, which
+    would hold the DaemonSet's rollout until `rollout status` times out.
+    """
     nodes = json.loads(kubectl("get", "nodes", "-o", "json")).get("items", [])
-    result = []
+    ready = ready_nodes()
+    eligible, release = [], []
     for node in nodes:
+        name = node["metadata"]["name"]
         spec = node.get("spec", {})
         disabled = any(
             taint.get("key") == "eaer.alumet/disabled"
             and taint.get("effect") in {"NoSchedule", "NoExecute"}
             for taint in spec.get("taints", [])
         )
-        if not spec.get("unschedulable") and not disabled:
-            result.append(node["metadata"]["name"])
-    return result
+        if not spec.get("unschedulable") and not disabled and name in ready:
+            eligible.append(name)
+        elif ENABLE_LABEL in node.get("metadata", {}).get("labels", {}):
+            release.append(name)
+    return eligible, release
 
 
 def enable_collection() -> None:
@@ -258,9 +388,13 @@ def enable_collection() -> None:
     kubectl("rollout", "status", f"statefulset/{influx}", "-n", NAMESPACE, "--timeout=5m")
     kubectl("scale", "deployment", server, "-n", NAMESPACE, "--replicas=1")
     kubectl("rollout", "status", f"deployment/{server}", "-n", NAMESPACE, "--timeout=5m")
-    nodes = eligible_nodes()
+    nodes, release = eligible_nodes()
     if not nodes:
-        raise RuntimeError("no schedulable Alumet node is enabled")
+        raise RuntimeError("no Ready, schedulable Alumet node is enabled")
+    for node in release:
+        kubectl("label", "node", node, f"{ENABLE_LABEL}-")
+    if release:
+        print("Alumet: not collecting on NotReady/unschedulable node(s): " + ", ".join(release))
     for node in nodes:
         kubectl("label", "node", node, f"{ENABLE_LABEL}=true", "--overwrite")
     for daemonset in daemonsets:
@@ -319,11 +453,14 @@ def status() -> None:
 
 
 def query_window(window: dict) -> str:
+    # Only what the summaries consume: energy series and the NIC byte counters used by the
+    # transfer-energy estimate. Exporting every measurement made the query slow and large.
     stop = window["ended_at"]
     flux = (
         f"from(bucket: {json.dumps(BUCKET)}) "
         f"|> range(start: time(v: {json.dumps(window['started_at'])}), "
-        f"stop: time(v: {json.dumps(stop)}))"
+        f"stop: time(v: {json.dumps(stop)})) "
+        '|> filter(fn: (r) => r._measurement =~ /energy/ or r._measurement =~ /^network_bytes/)'
     )
     return run_query(flux)
 
@@ -353,11 +490,6 @@ def joule_factor(metric: str) -> float:
     return 1.0
 
 
-def rapl_total(domains: dict[str, float]) -> float:
-    """Choose non-overlapping RAPL domains instead of summing every sub-domain."""
-    return sum(rapl_components(domains).values())
-
-
 def rapl_components(domains: dict[str, float]) -> dict[str, float]:
     """Return a non-overlapping, hardware-labelled view of one node's RAPL domains."""
     platform = domains.get("platform_total", domains.get("platform", 0.0))
@@ -373,6 +505,12 @@ def rapl_components(domains: dict[str, float]) -> dict[str, float]:
             result["dram"] = dram
         return result
     return {f"rapl_{domain}": value for domain, value in domains.items()}
+
+
+def row_node(row: dict[str, str]) -> str:
+    """Node that produced a sample. Machine-level RAPL/NVML rows carry only `relay_client`
+    (the collector's node name); attributed rows also carry `node`."""
+    return row.get("node") or row.get("node_name") or row.get("relay_client") or "unknown"
 
 
 def energy_hardware(metric: str, row: dict[str, str]) -> str:
@@ -401,10 +539,6 @@ def workload_pod_metadata(run_dir: Path) -> dict[str, dict[str, str]]:
             for row in csv.DictReader(stream, delimiter="\t")
             if row.get("pod")
         }
-
-
-def workload_pods(run_dir: Path) -> set[str]:
-    return set(workload_pod_metadata(run_dir))
 
 
 def stage_name(metadata: dict[str, str], fallback: str) -> str:
@@ -479,7 +613,7 @@ def summarize(run_dir: Path, raw: str) -> bool:
                 system_total += value
                 by_system_consumer[task] += value
         else:
-            node = row.get("node") or row.get("node_name") or "unknown"
+            node = row_node(row)
             if metric.lower().startswith("rapl_"):
                 rapl_by_node[node][row.get("domain", "unknown").lower()] += value
             else:
@@ -499,8 +633,9 @@ def summarize(run_dir: Path, raw: str) -> bool:
 
     summary = {
         "provider": "alumet",
+        # Samples without a node cannot get a per-node RAPL domain choice; never call them complete.
         "measurement_status": "failed" if not points else (
-            "partial" if uncovered_clients else "complete"
+            "partial" if uncovered_clients or "unknown" in by_node else "complete"
         ),
         "ready_clients": ready_clients,
         "uncovered_clients": uncovered_clients,

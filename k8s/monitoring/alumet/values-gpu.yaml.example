@@ -17,7 +17,7 @@ alumet-relay-client:
   resources:
     limits:
       cpu: 100m
-      memory: 128Mi
+      memory: 512Mi   # 128Mi is OOM-killed when many workload Pods are tracked
       nvidia.com/gpu: 0
   # Without a device-plugin allocation, the NVIDIA container runtime exposes the GPUs through
   # these variables (honoured for this privileged container). `utility` is enough for NVML.
