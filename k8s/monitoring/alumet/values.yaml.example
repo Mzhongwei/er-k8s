@@ -10,6 +10,7 @@ alumet-relay-client:
     requests:
       memory: 128Mi
     limits:
+      cpu: 500m
       memory: 512Mi
   plugins:
     k8s: {enable: true, poll_interval: 1s}

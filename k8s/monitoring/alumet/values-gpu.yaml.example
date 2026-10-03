@@ -9,6 +9,11 @@ influxdb2:
 alumet-relay-client:
   enabled: true
   hostPID: true
+  # Same selector `erctl alumet start` applies; set here so the first install never lands
+  # on a node without a GPU.
+  nodeSelector:
+    eaer.alumet/enabled: "true"
+    eaer.alumet/gpu-enabled: "true"
   securityContext:
     privileged: true
   # The collector only reads NVML counters and must not reserve a GPU: with nvml enabled the
@@ -16,7 +21,7 @@ alumet-relay-client:
   # of a node away from bert-training / bert-matching. 0 keeps the key without allocating.
   resources:
     limits:
-      cpu: 100m
+      cpu: 500m
       memory: 512Mi   # 128Mi is OOM-killed when many workload Pods are tracked
       nvidia.com/gpu: 0
   # Without a device-plugin allocation, the NVIDIA container runtime exposes the GPUs through

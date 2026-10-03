@@ -90,9 +90,12 @@ def token_secret() -> tuple[str, str]:
     if TOKEN_SECRET:
         candidates = [item for item in secrets if item.get("metadata", {}).get("name") == TOKEN_SECRET]
     else:
+        # The GPU release renders its own unused `<release>-influxdb2-auth` secret even with
+        # InfluxDB disabled, and it sorts first; its token cannot query the real database.
         candidates = [
             item for item in secrets
             if "influxdb" in item.get("metadata", {}).get("name", "").lower()
+            and GPU_CLIENT_FRAGMENT not in item.get("metadata", {}).get("name", "")
             and TOKEN_KEY in item.get("data", {})
         ]
     if not candidates:
@@ -477,8 +480,19 @@ def influx_rows(text: str):
             yield dict(zip(header, row))
 
 
+# Alumet writes the bare metric name to InfluxDB, without its unit, so a suffix cannot be
+# relied on. Units from the agents' startup logs (`- nvml_energy_consumption: F64 (mJ)`).
+METRIC_UNIT_FACTORS = {
+    "rapl_consumed_energy": 1.0,
+    "attributed_rapl_energy": 1.0,
+    "nvml_energy_consumption": 1e-3,
+}
+
+
 def joule_factor(metric: str) -> float:
     name = metric.lower()
+    if name in METRIC_UNIT_FACTORS:
+        return METRIC_UNIT_FACTORS[name]
     if name.endswith("_kj"):
         return 1_000.0
     if name.endswith("_mj"):
