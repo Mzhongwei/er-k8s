@@ -27,7 +27,7 @@ spec:
               cpu: "1"
               memory: 2Gi
             limits:
-              cpu: "2"
+              cpu: "1"
               memory: 4Gi
           volumeMounts:
             - name: pipeline-config
@@ -38,6 +38,8 @@ spec:
               subPath: calculating_similarity.py
             - name: pipeline-embedding-model-cache
               mountPath: /app/data/embedding
+            - name: pipeline-decision-evaluation-cache
+              mountPath: /app/data/predicted
             - name: pipeline-buffer-data
               mountPath: /app/data/buffers
             - name: pipeline-io
@@ -53,6 +55,9 @@ spec:
         - name: pipeline-embedding-model-cache
           persistentVolumeClaim:
             claimName: pipeline-embedding-model-cache-claim
+        - name: pipeline-decision-evaluation-cache
+          persistentVolumeClaim:
+            claimName: pipeline-decision-evaluation-cache-claim
         - name: pipeline-buffer-data
           persistentVolumeClaim:
             claimName: pipeline-buffer-data-claim

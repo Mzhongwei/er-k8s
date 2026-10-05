@@ -46,7 +46,6 @@ GRAPH_TASKS = {
 EMBEDDING_TASKS = {
     "embedding-training",
     "calculating-similarity",
-    "decision-making",
 }
 EXPECTED_BATCH_TASKS = {
     "normalization", "graph-construction", "random-walk",
@@ -56,7 +55,6 @@ EXPECTED_INCREMENTAL_TASKS = {
     "calculating-similarity",
     "candidate-enumeration",
     "cg-feature-extraction",
-    "decision-making",
     "embedding-training",
     "evaluation",
     "graph-construction",

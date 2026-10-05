@@ -229,7 +229,6 @@ wait_for_incremental_jobs() {
         calculating-similarity
         candidate-enumeration
         cg-feature-extraction
-        decision-making
         embedding-training
         evaluation
         graph-construction
@@ -908,12 +907,12 @@ start_pipeline() {
                 run_seed_job save || exit 1
             else
                 # Start producer, consumer and all processing workers together, including
-                # evaluation. decision_making.py writes a per-window predicted-matching
-                # snapshot and references it in its buffer event, so evaluation.py -- running
-                # concurrently -- evaluates the exact graph produced for that window instead of
-                # whatever a shared path happens to hold, matching the business design (evaluate
-                # after every decision, report overwritten so only the latest is kept). It exits
-                # on its own once it sees decision-making's EOS.
+                # evaluation. calculating_similarity.py decides matches and writes a per-window
+                # predicted-matching snapshot, referenced in its buffer event, so evaluation.py --
+                # running concurrently -- evaluates the exact matches produced for that window
+                # instead of whatever a shared path happens to hold, matching the business design
+                # (evaluate after every decision, report overwritten so only the latest is kept).
+                # It exits on its own once it sees calculating-similarity's EOS.
                 for worker_manifest in "$PIPELINE_INCREMENTAL_WORKERS_DIR"/*.yaml; do
                     kubectl apply -n "$NAMESPACE" -f "$worker_manifest"
                 done

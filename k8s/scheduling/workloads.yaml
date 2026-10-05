@@ -48,9 +48,8 @@ incremental:
     cg-feature-extraction: {}
     candidate-enumeration:
       task: {data_ids: [feature_index, pipeline_buffers]}
+    # Also decides the matches, so it reads and writes the predicted matching.
     calculating-similarity:
-      task: {data_ids: [embedding_model, pipeline_buffers]}
-    decision-making:
       task: {data_ids: [embedding_model, predicted_matching, pipeline_buffers]}
     # Only generated when bert_matching.enabled. compiler.py derives GPU use from
     # bert_matching.device in the active pipeline config.

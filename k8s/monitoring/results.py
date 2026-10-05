@@ -14,7 +14,6 @@ import subprocess
 import sys
 import time
 import uuid
-import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +21,7 @@ from pathlib import Path
 
 INCREMENTAL_JOBS = {
     "bert-matching", "calculating-similarity", "candidate-enumeration", "cg-feature-extraction",
-    "decision-making", "embedding-training", "evaluation", "graph-construction",
+    "embedding-training", "evaluation", "graph-construction",
     "kafka-consumer", "kafka-producer", "normalization", "random-walk",
 }
 PLACEMENT_FIELDS = (
@@ -292,7 +291,7 @@ def detect_artifacts(run_dir: Path) -> dict[str, bool]:
     matching = run_dir / "matching"
     graph = report = None
     if (matching / "predicted").exists():
-        graph = next((matching / "predicted").rglob("predicted_matching.graphml"), None)
+        graph = next((matching / "predicted").rglob("predicted_matching.csv"), None)
     if (matching / "communication").exists():
         report = next((matching / "communication").rglob("evaluation_report.json"), None)
     return {
@@ -900,8 +899,9 @@ def write_manifest(run_dir: Path, args: argparse.Namespace) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def edge_count(path: Path) -> int:
-    return sum(1 for element in ET.parse(path).iter() if element.tag.endswith("edge"))
+def pair_count(path: Path) -> int:
+    with path.open(encoding="utf-8") as stream:
+        return max(0, sum(1 for _ in stream) - 1)  # minus the CSV header
 
 
 def energy_summary_paths(run_dir: Path) -> list[Path]:
@@ -923,7 +923,7 @@ def show(run_dir: Path) -> None:
     summary_paths = energy_summary_paths(run_dir)
     summaries = [json.loads(path.read_text(encoding="utf-8")) for path in summary_paths]
     matching = run_dir / "matching"
-    graph = next((matching / "predicted").rglob("predicted_matching.graphml"), None) if (matching / "predicted").exists() else None
+    graph = next((matching / "predicted").rglob("predicted_matching.csv"), None) if (matching / "predicted").exists() else None
     report = next((matching / "communication").rglob("evaluation_report.json"), None) if (matching / "communication").exists() else None
 
     status = manifest.get("status", "unknown")
@@ -931,7 +931,7 @@ def show(run_dir: Path) -> None:
     if manifest.get("archive_status"):
         print(f"Archive: {manifest['archive_status']}")
     if graph:
-        print(f"Matching: {edge_count(graph)} edges  file={graph}")
+        print(f"Matching: {pair_count(graph)} pairs  file={graph}")
     elif offline_prep:
         print("Matching: not applicable (offline batch preparation; no evaluation)")
     else:

@@ -440,7 +440,7 @@ temporary_placement:
     embedding-training: zhongwei-lap
   incremental:
     random-walk: server1-k3s-worker
-    decision-making: server2-labo
+    calculating-similarity: server2-labo
 ```
 
 A task set to `null` continues to use the selected scheduling strategy. With

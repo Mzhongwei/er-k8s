@@ -1,6 +1,7 @@
 # Backs state_management.embedding-dir (/app/data/embedding). Shared by the batch training
 # entry (EmbTrai-training.py seeds/persists it) and the incremental
-# embedding-training/decision-making workers, which keep training it further from the seed.
+# embedding-training worker, which keeps training it further from the seed, and the
+# calculating-similarity worker, which reads its per-window checkpoints.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

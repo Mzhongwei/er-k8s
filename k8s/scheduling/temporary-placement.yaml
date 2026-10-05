@@ -25,6 +25,5 @@ temporary_placement:
     cg-feature-extraction: null
     candidate-enumeration: null
     calculating-similarity: null
-    decision-making: null
     bert-matching: null
     evaluation: null

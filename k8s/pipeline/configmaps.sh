@@ -37,7 +37,6 @@ WORKER_CG_FEATURE_EXTRACTION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolu
 WORKER_EMBEDDING_TRAINING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/embedding_training.py"
 WORKER_CANDIDATE_ENUMERATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/candidate_enumeration.py"
 WORKER_CALCULATING_SIMILARITY_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/calculating_similarity.py"
-WORKER_DECISION_MAKING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/decision_making.py"
 WORKER_EVALUATION_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/evaluation.py"
 WORKER_BERT_MATCHING_SCRIPT="${ROOT_DIR}/code/Energy-Aware-Entity-Resolution/entries/worker/bert_matching.py"
 
@@ -137,7 +136,6 @@ create_or_update_configmap "eaer-worker-cg-feature-extraction" "cg_feature_extra
 create_or_update_configmap "eaer-worker-embedding-training" "embedding_training.py" "$WORKER_EMBEDDING_TRAINING_SCRIPT"
 create_or_update_configmap "eaer-worker-candidate-enumeration" "candidate_enumeration.py" "$WORKER_CANDIDATE_ENUMERATION_SCRIPT"
 create_or_update_configmap "eaer-worker-calculating-similarity" "calculating_similarity.py" "$WORKER_CALCULATING_SIMILARITY_SCRIPT"
-create_or_update_configmap "eaer-worker-decision-making" "decision_making.py" "$WORKER_DECISION_MAKING_SCRIPT"
 create_or_update_configmap "eaer-worker-evaluation" "evaluation.py" "$WORKER_EVALUATION_SCRIPT"
 create_or_update_configmap "eaer-worker-bert-matching" "bert_matching.py" "$WORKER_BERT_MATCHING_SCRIPT"
 
