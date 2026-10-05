@@ -8,3 +8,7 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 allowVolumeExpansion: true
+# Stages poll for paths that do not exist yet (first buffer dir, checkpoint acks); the default
+# negative lookup cache hides them from other nodes for up to acdirmax (60 s).
+mountOptions:
+  - lookupcache=positive
