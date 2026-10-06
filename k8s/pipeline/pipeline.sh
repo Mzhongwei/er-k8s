@@ -23,8 +23,8 @@
 #             PVCs, and saved results. Stopped work cannot be resumed in place.
 #   terminate Force-stops the Argo Workflow (if any), then hard-resets: deletes the EAER
 #             ConfigMaps and wipes+recreates the pipeline's PVCs -- this also clears out
-#             the incremental worker Jobs, since deleting $PIPELINE_INCREMENTAL_DIR is part
-#             of that PVC/Job cleanup. See terminate_pipeline() for the exact scope.
+#             the incremental worker Jobs using the checked-in Job inventory.
+#             See terminate_pipeline() for the exact scope.
 
 # If this script is launched by sh or another non-Bash shell, re-exec it with bash.
 if [ -z "${BASH_VERSION:-}" ]; then
@@ -335,6 +335,10 @@ delete_pipeline_storage() {
     local pvc_name
     local pvc_ref
     local pipeline_pvcs=()
+    local pipeline_claim_names=()
+    local pipeline_jobs=(seed-save seed-restore)
+    local job_manifest job_name pod_ref pod_refs pod_document workflow_names
+    local pipeline_pods=()
     local pipeline_pvs=()
     local pv_name
     local workflow_name
@@ -360,6 +364,7 @@ delete_pipeline_storage() {
             return 1
         fi
         pipeline_pvcs+=("pvc/$pvc_name")
+        pipeline_claim_names+=("$pvc_name")
         pv_name="$(
             kubectl get pvc -n "$NAMESPACE" "$pvc_name" \
                 -o jsonpath='{.spec.volumeName}' 2>/dev/null || true
@@ -367,31 +372,32 @@ delete_pipeline_storage() {
         [ -n "$pv_name" ] && pipeline_pvs+=("pv/$pv_name")
     done < <(find "$PVC_MANIFESTS" -maxdepth 1 -type f -name '*.yaml' -print | sort)
 
-    # Pod cleanup is best-effort. Workflow deletion excludes objects already terminating
-    # and waits for newly requested deletions so a stuck finalizer is reported only once.
-    #
-    # PVC deletion is intentionally different: it must finish before manifests with the
-    # same claim names are applied again. Previously the client was killed after five
-    # seconds and the apply raced with deletion still running in the API server. The old
-    # claims could then disappear after `kubectl apply` reported success, leaving new
-    # workload Pods Pending with "persistentvolumeclaim ... not found".
-    timeout 5 kubectl get po -n "$NAMESPACE" -o name | grep '^pod/pipeline-' | xargs -r kubectl delete -n "$NAMESPACE" || true
-    kubectl delete -n "$NAMESPACE" -R -f "$PIPELINE_INCREMENTAL_DIR" --ignore-not-found=true || true
-    # Seed helpers also mount runtime claims. Remove their Pods before deleting PVCs;
-    # their one-hour TTL is too long for the next experiment's cleanup.
-    kubectl delete job -n "$NAMESPACE" seed-save seed-restore \
-        --ignore-not-found=true --cascade=foreground --wait=true --timeout=5m
+    # A batch-only run may not generate exec/incremental. Always clean up the
+    # full checked-in Job inventory, including workers omitted by this run.
+    for job_manifest in "$K8S_DIR"/pipeline/incremental/workers/*.yaml; do
+        job_name="$(awk '/^[[:space:]]*name:[[:space:]]*/ { print $2; exit }' "$job_manifest")"
+        if [ -z "$job_name" ]; then
+            echo "Unable to read Job name from manifest: $job_manifest" >&2
+            return 1
+        fi
+        pipeline_jobs+=("$job_name")
+    done
+    if ! kubectl delete job -n "$NAMESPACE" "${pipeline_jobs[@]}" \
+        --ignore-not-found=true --cascade=foreground --wait=true --timeout=5m; then
+        echo "Unable to finish deleting old pipeline Jobs; leaving PVCs untouched." >&2
+        return 1
+    fi
+    # Include already-terminating Workflows; API/list errors must stop cleanup.
+    workflow_names="$(kubectl get wf -n "$NAMESPACE" \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')" || return 1
     while IFS= read -r workflow_name; do
-        [ -n "$workflow_name" ] || continue
+        [[ "$workflow_name" == pipeline-* ]] || continue
         pipeline_workflows+=("$workflow_name")
         pipeline_workflow_refs+=("workflow/$workflow_name")
-    done < <(
-        timeout 5 kubectl get wf -n "$NAMESPACE" \
-            -o go-template='{{range .items}}{{if not .metadata.deletionTimestamp}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' \
-            | grep '^pipeline-' || true
-    )
+    done <<< "$workflow_names"
     if [ "${#pipeline_workflows[@]}" -gt 0 ] && ! kubectl delete -n "$NAMESPACE" \
-        "${pipeline_workflow_refs[@]}" --wait=true --timeout=60s; then
+        "${pipeline_workflow_refs[@]}" --ignore-not-found=true \
+        --cascade=foreground --wait=true --timeout=5m; then
         echo "Unable to finish deleting old pipeline Workflows." >&2
         for workflow_name in "${pipeline_workflows[@]}"; do
             workflow_state="$(
@@ -403,6 +409,28 @@ delete_pipeline_storage() {
         done
         return 1
     fi
+    # Also remove orphaned pipeline Pods, including Succeeded Pods. Do not
+    # touch PVCs until every selected Pod has actually disappeared.
+    pod_document="$(kubectl get pods -n "$NAMESPACE" -o json)" || return 1
+    pod_refs="$(python3 "$K8S_DIR/pipeline/cleanup_pods.py" \
+        --jobs "${pipeline_jobs[@]}" --claims "${pipeline_claim_names[@]}" \
+        <<< "$pod_document")" || return 1
+    while IFS= read -r pod_ref; do
+        [ -n "$pod_ref" ] && pipeline_pods+=("$pod_ref")
+    done <<< "$pod_refs"
+    if [ "${#pipeline_pods[@]}" -gt 0 ]; then
+        if ! kubectl delete -n "$NAMESPACE" "${pipeline_pods[@]}" \
+            --ignore-not-found=true --wait=true --timeout=5m; then
+            echo "Unable to finish deleting old pipeline Pods; leaving PVCs untouched." >&2
+            return 1
+        fi
+    fi
+    # Unrelated Pods referencing our claims block cleanup instead of being deleted.
+    pod_document="$(kubectl get pods -n "$NAMESPACE" -o json)" || return 1
+    python3 "$K8S_DIR/pipeline/cleanup_pods.py" --verify \
+        --jobs "${pipeline_jobs[@]}" --claims "${pipeline_claim_names[@]}" \
+        <<< "$pod_document" || return 1
+
     if [ "${#pipeline_pvcs[@]}" -gt 0 ]; then
         kubectl delete -n "$NAMESPACE" "${pipeline_pvcs[@]}" \
             --ignore-not-found=true \
