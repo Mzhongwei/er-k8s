@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
-"""Motivation benchmark: one-factor-at-a-time sweeps of random-walk processes, Gensim
-workers, and BERT matching device, each on two machines.
+"""Motivation benchmark with two designs.
+
+capacity (default): a short list of whole-pipeline execution configurations (BERT CPU cores,
+BERT on the GPU, CPU parallelism of the random walk and Word2Vec, BERT on the laptop). They
+differ in how fast they drain the stream, so each meets a different deadline. The stream
+rate is the simulator's csv.file.timeout (services/dataStreamSimulator application.properties,
+baked into the kafka-producer image); the design is sized for 50 ms per record, i.e. one
+408-record window about every 20 s.
+
+sweep: one-factor-at-a-time sweeps of random-walk processes, Gensim workers, and BERT
+matching device/cores, each on two machines.
 
 Offline preparation (BERT training and embedding training, i.e. the batch phase) runs once
 per dataset at the highest configuration on the base node; its trained state is saved as a
@@ -55,12 +64,17 @@ DATASETS = {
     # },
 }
 # Swept values per stage and node. The thinkpad has fewer than 8 allocatable CPUs and no GPU.
-# BERT CPU thread count is not swept: neither the compiler nor bert_inference expose it yet.
+# BERT values are "cuda" or "cpu:<cores>" (bert_matching.cpus: Pod CPUs and torch threads).
 MATRIX: dict[str, dict[str, list[Any]]] = {
     "random-walk": {SERVER2: [1, 2, 4, 8], THINKPAD: [1, 2, 4]},
     "embedding": {SERVER2: [1, 2, 4, 8], THINKPAD: [1, 2, 4]},
-    "bert": {SERVER2: ["cuda", "cpu"], THINKPAD: ["cpu"]},
+    "bert": {SERVER2: ["cuda", "cpu:2", "cpu:4", "cpu:8"], THINKPAD: ["cpu:4"]},
 }
+# BERT CPU cores when a point does not choose them; equals the manifest's former CPU limit.
+DEFAULT_BERT_CPUS = 2
+# CPU requested by the incremental stages that are not configured here (similarity,
+# candidate enumeration, graph construction, Kafka, ...), all on the base node.
+OTHER_STAGES_CPUS = 2
 # Scheduling task names pinned to the swept node. Only the incremental phase is swept: the
 # batch phase is the shared offline preparation.
 SWEEP_TASKS = {
@@ -71,7 +85,7 @@ SWEEP_TASKS = {
 ENERGY_PROVIDERS = ("ecofloc", "alumet")
 POINT_FIELDS = (
     "random_walk_processes", "random_walk_node", "gensim_workers", "embedding_node",
-    "bert_device", "bert_node",
+    "bert_device", "bert_node", "bert_cpus",
 )
 ENERGY_COMPONENTS = ("cpu", "gpu", "ram", "storage", "nic", "other")
 # Both providers are kept side by side; blank means that provider produced no summary.
@@ -114,6 +128,7 @@ class Point:
     embedding_node: str
     bert_device: str
     bert_node: str
+    bert_cpus: int = DEFAULT_BERT_CPUS  # used only when bert_device is "cpu"
 
     def as_row(self) -> dict[str, Any]:
         return {field: getattr(self, field) for field in POINT_FIELDS}
@@ -124,7 +139,8 @@ class Point:
         return (
             f"p{self.random_walk_processes}@{node(self.random_walk_node)}"
             f"-g{self.gensim_workers}@{node(self.embedding_node)}"
-            f"-bert-{self.bert_device}@{node(self.bert_node)}"
+            f"-bert-{self.bert_device}{self.bert_cpus if self.bert_device == 'cpu' else ''}"
+            f"@{node(self.bert_node)}"
         )
 
     def placement(self) -> dict[str, dict[str, str]]:
@@ -145,6 +161,8 @@ def point_from_row(row: dict[str, str]) -> Point | None:
             int(row["random_walk_processes"]), row["random_walk_node"],
             int(row["gensim_workers"]), row["embedding_node"],
             row["bert_device"], row["bert_node"],
+            # Rows written before bert_cpus existed ran with the manifest's 2-core limit.
+            int(row.get("bert_cpus") or DEFAULT_BERT_CPUS),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -165,9 +183,36 @@ def build_points(
                 elif sweep == "embedding":
                     point = replace(baseline, gensim_workers=value, embedding_node=node)
                 else:
-                    point = replace(baseline, bert_device=value, bert_node=node)
+                    device, _, cores = str(value).partition(":")
+                    point = replace(baseline, bert_device=device, bert_node=node,
+                                    bert_cpus=int(cores or baseline.bert_cpus))
                 points.setdefault(point, []).append(sweep)
     return points
+
+
+def capacity_points(base_node: str) -> dict[Point, list[str]]:
+    """Whole-pipeline configurations of the capacity design, each with its label.
+
+    Sized for one window about every 20 s (csv.file.timeout=50) with the round-2 algorithm
+    settings: per window BERT needs ~70 s on 2 CPU cores (~2 s on the GPU) and Word2Vec
+    ~21 s on one worker, ~14 s on two and ~10 s on four or more. A run lasts about
+    windows x max(20 s, bottleneck time), so options far slower than the stream (BERT on 2
+    or 4 cores) are left out. BERT on CPU is scaled until it nearly keeps up; with BERT on
+    the GPU, Word2Vec becomes the bottleneck and one worker no longer keeps up, so the
+    GPU group scales Word2Vec. The random walk (<1 s per window) stays at one process. The
+    configured Pods leave >= 3 of the server's 20 cores for the other stages and system Pods.
+    """
+    s = base_node
+    design = [
+        ("bert-cpu8-w2v2", Point(1, s, 2, s, "cpu", s, 8)),
+        ("bert-cpu12-w2v2", Point(1, s, 2, s, "cpu", s, 12)),
+        ("bert-gpu-w2v1", Point(1, s, 1, s, "cuda", s)),
+        ("bert-gpu-w2v2", Point(1, s, 2, s, "cuda", s)),
+        ("bert-gpu-w2v4", Point(1, s, 4, s, "cuda", s)),
+        ("bert-gpu-w2v8", Point(1, s, 8, s, "cuda", s)),
+        ("bert-laptop-cpu6-w2v2", Point(1, s, 2, s, "cpu", THINKPAD, 6)),
+    ]
+    return {point: [label] for label, point in design}
 
 
 def run(command: list[str], *, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -214,20 +259,32 @@ def node_capacity(node_name: str, require_gpu: bool) -> int:
 def validate_cluster(points: list[Point], base_node: str, bert_training_device: str) -> None:
     """Fail before any run if a point asks a node for more CPUs or a GPU it lacks."""
     check_tools()
+    # Per node: the largest single Pod and the largest sum of the configured Pods in one
+    # point (every stage of a point runs at the same time, so their CPUs must fit together).
     cpus: dict[str, int] = {}
+    totals: dict[str, int] = {}
     gpu: dict[str, bool] = {base_node: bert_training_device == "cuda"}
     for point in points:
+        point_total: dict[str, int] = {base_node: OTHER_STAGES_CPUS}
         for node, count in (
             (point.random_walk_node, point.random_walk_processes),
             (point.embedding_node, point.gensim_workers),
+            (point.bert_node, point.bert_cpus if point.bert_device == "cpu" else 0),
         ):
             cpus[node] = max(cpus.get(node, 1), count)
+            point_total[node] = point_total.get(node, 0) + count
+        for node, total in point_total.items():
+            totals[node] = max(totals.get(node, 0), total)
         gpu[point.bert_node] = gpu.get(point.bert_node, False) or point.bert_device == "cuda"
     for node in sorted(set(cpus) | set(gpu)):
         capacity = node_capacity(node, gpu.get(node, False))
         if cpus.get(node, 1) > capacity:
             raise RuntimeError(
                 f"matrix requests {cpus[node]} CPU workers on {node}, but it has {capacity} CPUs"
+            )
+        if totals.get(node, 0) > capacity:
+            raise RuntimeError(
+                f"a point requests {totals[node]} CPUs at once on {node}, but it has {capacity} CPUs"
             )
 
 
@@ -293,6 +350,10 @@ def write_config(
     config["bert_matching"] = dict(
         base.get("bert_matching", {}), enabled=True, device=point.bert_device,
     )
+    if point.bert_device == "cpu":
+        config["bert_matching"]["cpus"] = point.bert_cpus
+    else:
+        config["bert_matching"].pop("cpus", None)
     # BERT training only runs in the offline preparation, once per dataset.
     config["bert_training"] = dict(
         base.get("bert_training", {}) or {}, device=bert_training_device, seed=1729,
@@ -526,8 +587,13 @@ def split_list(raw: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument(
+        "--design", choices=("capacity", "sweep"), default="capacity",
+        help="capacity: whole-pipeline configurations (capacity_points); sweep: one factor at a time",
+    )
     parser.add_argument("--datasets", default=",".join(DATASETS), help="Comma-separated dataset names")
-    parser.add_argument("--sweeps", default=",".join(MATRIX), help="Comma-separated subset of: " + ",".join(MATRIX))
+    parser.add_argument("--sweeps", default=",".join(MATRIX),
+                        help="sweep design only: comma-separated subset of: " + ",".join(MATRIX))
     parser.add_argument(
         "--nodes", default=f"{SERVER2},{THINKPAD}",
         help="Comma-separated nodes whose matrix entries are run",
@@ -553,7 +619,8 @@ def main() -> int:
     )
     parser.add_argument("--warmup", action="store_true", help="Run the baseline once, unrecorded, first")
     parser.add_argument("--energy-monitor", choices=("ecofloc", "alumet", "ecofloc-alumet"), default="ecofloc-alumet")
-    parser.add_argument("--output", type=Path, default=ROOT / "reports/serie1-motivation")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="default: reports/serie1-capacity or reports/serie1-motivation")
     parser.add_argument("--dry-run", action="store_true", help="Generate configs without starting workloads")
     parser.add_argument("--keep-going", action="store_true", help="Continue after a failed experiment")
     parser.add_argument("--no-resume", action="store_true", help="Rerun trials already marked Succeeded")
@@ -578,7 +645,8 @@ def main() -> int:
         args.baseline_processes, args.base_node, args.baseline_workers, args.base_node,
         args.baseline_bert_device, args.base_node,
     )
-    points = build_points(baseline, sweeps, nodes)
+    points = capacity_points(args.base_node) if args.design == "capacity" \
+        else build_points(baseline, sweeps, nodes)
     if not points:
         parser.error("the selected sweeps and nodes produce an empty matrix")
     # Offline preparation: the highest matrix setting on the base node for every stage.
@@ -595,7 +663,8 @@ def main() -> int:
     if not isinstance(base, dict):
         raise RuntimeError("base config root must be a YAML object")
 
-    output = args.output.resolve()
+    default_output = "reports/serie1-capacity" if args.design == "capacity" else "reports/serie1-motivation"
+    output = (args.output or ROOT / default_output).resolve()
     configs_dir = output / "configs"
     prep_path = output / "offline-prep.csv"
     runs_path = output / "runs.csv"
@@ -639,7 +708,7 @@ def main() -> int:
         ],
     }, indent=2), encoding="utf-8")
 
-    print(f"Experiment matrix: {len(points)} points x {args.repetitions} repetitions x "
+    print(f"Experiment matrix ({args.design}): {len(points)} points x {args.repetitions} repetitions x "
           f"{len(datasets)} datasets = {len(trials)} runs")
     for point, members in points.items():
         print(f"  {point.slug():40s} sweeps={'+'.join(members)}")

@@ -857,10 +857,26 @@ fixed `--bert-training-device`, while BERT matching uses the device in each matr
 The benchmark-local scheduling bundle does not modify
 `k8s/scheduling/temporary-placement.yaml` or affect ordinary pipeline runs.
 
-Run the complete built-in matrix on both nodes:
+Run the capacity design (the default): seven whole-pipeline configurations that scale
+BERT's CPU cores (`bert_matching.cpus`, which sets the Pod's CPU request/limit and torch
+threads), move BERT to the GPU and scale Word2Vec workers with it, and place BERT on the
+laptop (`capacity_points` in `exp/serie1-motivation.py`). The design is sized for
+`csv.file.timeout=50` in the stream simulator's `application.properties` (one 408-record
+window about every 20 s); rebuild the kafka-producer image after changing it. Results go to
+`reports/serie1-capacity/`.
 
 ```bash
 python3 exp/serie1-motivation.py \
+  --shuffle-seed 1 \
+  --energy-monitor ecofloc-alumet \
+  --keep-going
+```
+
+Run the complete built-in one-factor matrix on both nodes:
+
+```bash
+python3 exp/serie1-motivation.py \
+  --design sweep \
   --nodes server2-labo,k3s-worker-thinkpad \
   --sweeps random-walk,embedding,bert \
   --repetitions 3 \
@@ -872,6 +888,7 @@ Run only the incremental BERT CPU/CUDA comparison on the GPU server:
 
 ```bash
 python3 exp/serie1-motivation.py \
+  --design sweep \
   --nodes server2-labo \
   --sweeps bert \
   --baseline-bert-device cpu \

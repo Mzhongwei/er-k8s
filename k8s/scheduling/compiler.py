@@ -248,11 +248,16 @@ def load_pipeline_runtime(path: Path | None) -> dict[str, Any]:
     bert_training = document.get("bert_training", {})
     matching_device = _bert_device(bert_matching)
     training_device = _bert_device(bert_training, matching_device)
+    # Unset keeps the bert-matching manifest's own CPU request/limit.
+    bert_cpus = bert_matching.get("cpus") if isinstance(bert_matching, dict) else None
+    if bert_cpus is not None and int(bert_cpus) < 1:
+        raise ValueError("bert_matching.cpus must be at least 1")
     return {
         "random_walk_processes": processes,
         "embedding_workers": workers,
         "bert_matching": isinstance(bert_matching, dict) and bert_matching.get("enabled") is True,
         "bert_matching_device": matching_device,
+        "bert_matching_cpus": None if bert_cpus is None else int(bert_cpus),
         "bert_training_device": training_device,
     }
 
@@ -304,6 +309,17 @@ def set_cpu_count(container: dict[str, Any], count: int) -> None:
     limits["cpu"] = str(count)
 
 
+THREAD_ENV_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+
+
+def set_thread_env(container: dict[str, Any], count: int) -> None:
+    """Size BLAS/OpenMP thread pools to the CPU limit instead of the host core count."""
+    env = [item for item in container.get("env") or []
+           if not (isinstance(item, dict) and item.get("name") in THREAD_ENV_VARS)]
+    env.extend({"name": name, "value": str(count)} for name in THREAD_ENV_VARS)
+    container["env"] = env
+
+
 def apply_runtime_to_argo(workflow: dict[str, Any], runtime: dict[str, Any]) -> None:
     templates = {
         slug(str(template.get("name", ""))): template
@@ -334,6 +350,9 @@ def apply_runtime_to_job(document: dict[str, Any], runtime: dict[str, Any]) -> N
         set_cpu_count(containers[0], runtime["random_walk_processes"])
     if name == "embedding-training":
         set_cpu_count(containers[0], runtime["embedding_workers"])
+    if name == BERT_MATCHING_JOB and runtime.get("bert_matching_cpus") is not None:
+        set_cpu_count(containers[0], runtime["bert_matching_cpus"])
+        set_thread_env(containers[0], runtime["bert_matching_cpus"])
 
 
 def apply_rule_to_argo_template(
@@ -809,8 +828,9 @@ def main() -> int:
         help=(
             "Exact pipeline config being executed. Its random_walk.processes controls the "
             "random-walk Pod CPU allocation, embeddings_training.workers controls the "
-            "Gensim Pod CPU allocation and bert_matching.enabled adds BERT training and "
-            "the bert-matching worker."
+            "Gensim Pod CPU allocation, bert_matching.cpus (optional) the bert-matching Pod "
+            "CPU allocation and thread count, and bert_matching.enabled adds BERT training "
+            "and the bert-matching worker."
         ),
     )
 
