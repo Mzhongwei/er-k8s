@@ -29,6 +29,8 @@ RETENTION = os.environ.get("ERCTL_ALUMET_RETENTION", "7d")
 ENABLE_LABEL = "eaer.alumet/enabled"
 GPU_ENABLE_LABEL = os.environ.get("ERCTL_ALUMET_GPU_LABEL", "eaer.alumet/gpu-enabled")
 GPU_CLIENT_FRAGMENT = os.environ.get("ERCTL_ALUMET_GPU_CLIENT_FRAGMENT", "alumet-gpu")
+# Optional comma-separated node names: collect on, check, restart and total only these nodes.
+NODES = {node.strip() for node in os.environ.get("ERCTL_ALUMET_NODES", "").split(",") if node.strip()}
 
 
 def kubectl(*args: str, input_text: str | None = None, timeout: float | None = None) -> str:
@@ -113,6 +115,7 @@ def alumet_clients() -> list[dict]:
         pod for pod in cluster_objects("pods")
         if "alumet-relay-client" in pod.get("metadata", {}).get("name", "")
         and not pod.get("metadata", {}).get("deletionTimestamp")
+        and (not NODES or pod.get("spec", {}).get("nodeName") in NODES)
     ]
 
 
@@ -302,6 +305,7 @@ def start(run_dir: Path) -> None:
         "bucket": BUCKET,
         "ready_clients": clients,
         "uncovered_clients": uncovered,
+        "measured_nodes": sorted(NODES),
     }
     (energy_dir / "alumet-window.json").write_text(json.dumps(window, indent=2), encoding="utf-8")
     print(f"Alumet ready ({len(clients)} client pod(s)):")
@@ -357,7 +361,8 @@ def eligible_nodes() -> tuple[list[str], list[str]]:
     """Return (nodes to collect on, labelled nodes to release).
 
     A NotReady node is never eligible: its collector Pod cannot start or terminate, which
-    would hold the DaemonSet's rollout until `rollout status` times out.
+    would hold the DaemonSet's rollout until `rollout status` times out. With
+    ERCTL_ALUMET_NODES set, nodes outside it are released as well.
     """
     nodes = json.loads(kubectl("get", "nodes", "-o", "json")).get("items", [])
     ready = ready_nodes()
@@ -370,7 +375,8 @@ def eligible_nodes() -> tuple[list[str], list[str]]:
             and taint.get("effect") in {"NoSchedule", "NoExecute"}
             for taint in spec.get("taints", [])
         )
-        if not spec.get("unschedulable") and not disabled and name in ready:
+        selected = not NODES or name in NODES
+        if not spec.get("unschedulable") and not disabled and name in ready and selected:
             eligible.append(name)
         elif ENABLE_LABEL in node.get("metadata", {}).get("labels", {}):
             release.append(name)
@@ -594,6 +600,8 @@ def summarize(run_dir: Path, raw: str) -> bool:
     window = json.loads(window_path.read_text(encoding="utf-8")) if window_path.exists() else {}
     ready_clients = window.get("ready_clients", [])
     uncovered_clients = window.get("uncovered_clients", [])
+    # Empty: every node's hardware energy counts (windows written before the restriction).
+    measured_nodes = set(window.get("measured_nodes", []))
 
     for row in influx_rows(raw):
         metric = row.get("_measurement", "")
@@ -606,11 +614,13 @@ def summarize(run_dir: Path, raw: str) -> bool:
             continue
         if not math.isfinite(value):
             continue
+        consumer_kind = row.get("resource_consumer_kind") or row.get("consumer_kind", "")
+        attributed = "attributed" in metric.lower() or consumer_kind not in {"", "local_machine"}
+        if not attributed and measured_nodes and row_node(row) not in measured_nodes:
+            continue
         points += 1
         by_metric[metric] += value
         hardware = energy_hardware(metric, row)
-        consumer_kind = row.get("resource_consumer_kind") or row.get("consumer_kind", "")
-        attributed = "attributed" in metric.lower() or consumer_kind not in {"", "local_machine"}
         if attributed:
             attributed_total += value
             attributed_by_hardware[hardware] += value

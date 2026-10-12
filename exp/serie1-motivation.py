@@ -2,23 +2,24 @@
 """Motivation benchmark with two designs.
 
 capacity (default): a short list of whole-pipeline execution configurations (BERT CPU cores,
-BERT on the GPU, CPU parallelism of the random walk and Word2Vec, BERT on the laptop). They
+BERT on the GPU, CPU parallelism of the random walk and Word2Vec, the laptop's own set). They
 differ in how fast they drain the stream, so each meets a different deadline. The stream
 rate is the simulator's csv.file.timeout (services/dataStreamSimulator application.properties,
 baked into the kafka-producer image); the design is sized for 50 ms per record, i.e. one
 408-record window about every 20 s.
 
 sweep: one-factor-at-a-time sweeps of random-walk processes, Gensim workers, and BERT
-matching device/cores, each on two machines.
+matching device/cores.
 
-Offline preparation (BERT training and embedding training, i.e. the batch phase) runs once
-per dataset at the highest configuration on the base node; its trained state is saved as a
-seed and its energy is recorded in offline-prep.csv but not used by the analysis. Every
-trial restores that seed and runs only the incremental phase. A trial keeps all incremental
-stages at the baseline configuration on the base node, except the swept stage, which takes
-the swept setting and is pinned to the swept node. Runs shared by several sweeps (the
-all-baseline point) execute once per repetition. Energy is kept separately for EcoFLOC and
-Alumet.
+Every stage of a run executes on one node. --nodes selects server2, thinkpad, or both, and
+each selected node runs the same tests with its settings (DEFAULT_NODE_CONFIG updated by
+NODE_OVERRIDES). Offline preparation (BERT training and embedding training, i.e. the batch
+phase) runs once per dataset and node at that node's highest configuration; its trained state
+is saved as a per-node seed and its energy is recorded in offline-prep.csv but not used by the
+analysis. Every trial restores that seed and runs only the incremental phase. A sweep trial
+keeps all incremental stages at the baseline configuration, except the swept stage, which
+takes the swept setting. Runs shared by several sweeps (the all-baseline point) execute once
+per repetition. Energy is kept separately for EcoFLOC and Alumet.
 """
 from __future__ import annotations
 
@@ -45,17 +46,29 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml"
 SERVER2 = "server2-labo"
 THINKPAD = "k3s-worker-thinkpad"
+# Short names accepted by --nodes (besides "both" and the full node names); also used in slugs.
+NODE_ALIASES = {"server2": SERVER2, "thinkpad": THINKPAD}
+NODE_SHORT = {SERVER2: "s2", THINKPAD: "tp"}
 RESULTS_ROOT = ROOT / "k8s/results"
 DATASETS = {
-    "8-movie": {
-        "data_source_A": "/data/rtas/8-movie/table_A.csv",
-        "data_source_B": "/data/rtas/8-movie/table_B.csv",
-        "ground_truth": "/data/rtas/8-movie/matches.txt",
-        "trainset_path": "/data/rtas/8-movie/train.csv",
-        "evalset_path": "/data/rtas/8-movie/eval.csv",
+    "retrieval-extrait": {
+        "data_source_A": "/data/rtas/retrieval-extrait/table_A.csv",
+        "data_source_B": "/data/rtas/retrieval-extrait/table_B.csv",
+        "ground_truth": "/data/rtas/retrieval-extrait/matches.txt",
+        "trainset_path": "/data/rtas/retrieval-extrait/train.csv",
+        "evalset_path": "/data/rtas/retrieval-extrait/eval.csv",
         "record_id_source_field": "id",
         "top_k": 1,
     },
+    # "8-movie": {
+    #     "data_source_A": "/data/rtas/8-movie/table_A.csv",
+    #     "data_source_B": "/data/rtas/8-movie/table_B.csv",
+    #     "ground_truth": "/data/rtas/8-movie/matches.txt",
+    #     "trainset_path": "/data/rtas/8-movie/train.csv",
+    #     "evalset_path": "/data/rtas/8-movie/eval.csv",
+    #     "record_id_source_field": "id",
+    #     "top_k": 1,
+    # },
     # "large1-pdc": {
     #     "data_source_A": "/data/large_datasets/large1-pdc/tableA.jsonl",
     #     "data_source_B": "/data/large_datasets/large1-pdc/tableB.jsonl",
@@ -63,20 +76,44 @@ DATASETS = {
     #     "top_k": 5,
     # },
 }
-# Swept values per stage and node. The thinkpad has fewer than 8 allocatable CPUs and no GPU.
+# Test settings of one node; NODE_OVERRIDES replaces top-level keys for each node.
 # BERT values are "cuda" or "cpu:<cores>" (bert_matching.cpus: Pod CPUs and torch threads).
-MATRIX: dict[str, dict[str, list[Any]]] = {
-    "random-walk": {SERVER2: [1, 2, 4, 8], THINKPAD: [1, 2, 4]},
-    "embedding": {SERVER2: [1, 2, 4, 8], THINKPAD: [1, 2, 4]},
-    "bert": {SERVER2: ["cuda", "cpu:2", "cpu:4", "cpu:8"], THINKPAD: ["cpu:4"]},
+DEFAULT_NODE_CONFIG: dict[str, Any] = {
+    # Offline BERT training device, used once per dataset in the batch phase.
+    "bert_training_device": "cuda",
+    # capacity design: label -> (random-walk processes, Gensim workers, BERT matching).
+    # See capacity_points for how these were sized.
+    "capacity": {
+        "bert-cpu8-w2v2": (1, 2, "cpu:8"),
+        "bert-cpu12-w2v2": (1, 2, "cpu:12"),
+        "bert-gpu-w2v1": (1, 1, "cuda"),
+        "bert-gpu-w2v2": (1, 2, "cuda"),
+        "bert-gpu-w2v4": (1, 4, "cuda"),
+        "bert-gpu-w2v8": (1, 8, "cuda"),
+    },
+    # sweep design: swept values per stage.
+    "sweep": {
+        "random-walk": [1, 2, 4, 8],
+        "embedding": [1, 2, 4, 8],
+        "bert": ["cuda", "cpu:2", "cpu:4", "cpu:8"],
+    },
+}
+NODE_OVERRIDES: dict[str, dict[str, Any]] = {
+    SERVER2: {},
+    # Fewer than 8 allocatable CPUs and no GPU.
+    THINKPAD: {
+        "bert_training_device": "cpu",
+        "capacity": {"bert-cpu6-w2v2": (1, 2, "cpu:6")},
+        "sweep": {"random-walk": [1, 2, 4], "embedding": [1, 2, 4], "bert": ["cpu:4"]},
+    },
 }
 # BERT CPU cores when a point does not choose them; equals the manifest's former CPU limit.
 DEFAULT_BERT_CPUS = 2
 # CPU requested by the incremental stages that are not configured here (similarity,
-# candidate enumeration, graph construction, Kafka, ...), all on the base node.
+# candidate enumeration, graph construction, Kafka, ...), on the same node.
 OTHER_STAGES_CPUS = 2
-# Scheduling task names pinned to the swept node. Only the incremental phase is swept: the
-# batch phase is the shared offline preparation.
+# Scheduling task names of each swept stage. Only the incremental phase is swept: the batch
+# phase is the offline preparation.
 SWEEP_TASKS = {
     "random-walk": {"incremental": ["random-walk"]},
     "embedding": {"incremental": ["embedding-training"]},
@@ -134,8 +171,7 @@ class Point:
         return {field: getattr(self, field) for field in POINT_FIELDS}
 
     def slug(self) -> str:
-        short = {SERVER2: "s2", THINKPAD: "tp"}
-        node = lambda name: short.get(name, re.sub(r"[^A-Za-z0-9]+", "", name))
+        node = short_node
         return (
             f"p{self.random_walk_processes}@{node(self.random_walk_node)}"
             f"-g{self.gensim_workers}@{node(self.embedding_node)}"
@@ -155,6 +191,20 @@ class Point:
         return pinned
 
 
+def short_node(name: str) -> str:
+    return NODE_SHORT.get(name, re.sub(r"[^A-Za-z0-9]+", "", name))
+
+
+def node_config(node: str) -> dict[str, Any]:
+    return {**DEFAULT_NODE_CONFIG, **NODE_OVERRIDES.get(node, {})}
+
+
+def node_point(node: str, processes: int, workers: int, bert: str) -> Point:
+    """A point with every configured stage on one node."""
+    device, _, cores = str(bert).partition(":")
+    return Point(processes, node, workers, node, device, node, int(cores or DEFAULT_BERT_CPUS))
+
+
 def point_from_row(row: dict[str, str]) -> Point | None:
     try:
         return Point(
@@ -169,28 +219,25 @@ def point_from_row(row: dict[str, str]) -> Point | None:
 
 
 def build_points(
-    baseline: Point, sweeps: list[str], nodes: list[str],
+    baseline: Point, sweeps: list[str], matrix: dict[str, list[Any]],
 ) -> dict[Point, list[str]]:
-    """Map each distinct point to the sweeps it belongs to."""
+    """Map each distinct point of one node to the sweeps it belongs to."""
     points: dict[Point, list[str]] = {}
     for sweep in sweeps:
-        for node, values in MATRIX[sweep].items():
-            if node not in nodes:
-                continue
-            for value in values:
-                if sweep == "random-walk":
-                    point = replace(baseline, random_walk_processes=value, random_walk_node=node)
-                elif sweep == "embedding":
-                    point = replace(baseline, gensim_workers=value, embedding_node=node)
-                else:
-                    device, _, cores = str(value).partition(":")
-                    point = replace(baseline, bert_device=device, bert_node=node,
-                                    bert_cpus=int(cores or baseline.bert_cpus))
-                points.setdefault(point, []).append(sweep)
+        for value in matrix.get(sweep, []):
+            if sweep == "random-walk":
+                point = replace(baseline, random_walk_processes=value)
+            elif sweep == "embedding":
+                point = replace(baseline, gensim_workers=value)
+            else:
+                device, _, cores = str(value).partition(":")
+                point = replace(baseline, bert_device=device,
+                                bert_cpus=int(cores or baseline.bert_cpus))
+            points.setdefault(point, []).append(sweep)
     return points
 
 
-def capacity_points(base_node: str) -> dict[Point, list[str]]:
+def capacity_points(node: str, design: dict[str, tuple[int, int, str]]) -> dict[Point, list[str]]:
     """Whole-pipeline configurations of the capacity design, each with its label.
 
     Sized for one window about every 20 s (csv.file.timeout=50) with the round-2 algorithm
@@ -202,22 +249,26 @@ def capacity_points(base_node: str) -> dict[Point, list[str]]:
     GPU group scales Word2Vec. The random walk (<1 s per window) stays at one process. The
     configured Pods leave >= 3 of the server's 20 cores for the other stages and system Pods.
     """
-    s = base_node
-    design = [
-        ("bert-cpu8-w2v2", Point(1, s, 2, s, "cpu", s, 8)),
-        ("bert-cpu12-w2v2", Point(1, s, 2, s, "cpu", s, 12)),
-        ("bert-gpu-w2v1", Point(1, s, 1, s, "cuda", s)),
-        ("bert-gpu-w2v2", Point(1, s, 2, s, "cuda", s)),
-        ("bert-gpu-w2v4", Point(1, s, 4, s, "cuda", s)),
-        ("bert-gpu-w2v8", Point(1, s, 8, s, "cuda", s)),
-        ("bert-laptop-cpu6-w2v2", Point(1, s, 2, s, "cpu", THINKPAD, 6)),
-    ]
-    return {point: [label] for label, point in design}
+    points: dict[Point, list[str]] = {}
+    for label, (processes, workers, bert) in design.items():
+        points.setdefault(node_point(node, processes, workers, bert), []).append(label)
+    return points
 
 
-def run(command: list[str], *, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
+def run(
+    command: list[str], *, check: bool = True, capture: bool = False,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     print("+", " ".join(command), flush=True)
-    return subprocess.run(command, cwd=ROOT, check=check, text=True, capture_output=capture)
+    return subprocess.run(
+        command, cwd=ROOT, check=check, text=True, capture_output=capture,
+        env={**os.environ, **env} if env else None,
+    )
+
+
+def alumet_env(nodes: list[str]) -> dict[str, str]:
+    """Limit Alumet collection, checks and totals to the nodes a run uses."""
+    return {"ERCTL_ALUMET_NODES": ",".join(nodes)}
 
 
 def kubernetes_cpu(value: str) -> float:
@@ -323,8 +374,8 @@ def write_scheduling_config(output: Path, base_node: str, point: Point) -> Path:
     return entry_path
 
 
-def seed_store_name(dataset: str) -> str:
-    return f"serie1-{dataset}"
+def seed_store_name(dataset: str, node: str) -> str:
+    return f"serie1-{dataset}-{short_node(node)}"
 
 
 def write_config(
@@ -565,6 +616,7 @@ def row_key(row: dict[str, Any]) -> tuple[Any, ...] | None:
 
 def start_pipeline(
     config_path: Path, scheduling_config: Path, energy_monitor: str, phase: str, seed_store: str,
+    node: str,
 ) -> tuple[subprocess.CompletedProcess[str], Path | None, str, str]:
     before = {path.resolve() for path in RESULTS_ROOT.glob("embedding-training-inference-evaluation-*")}
     started = datetime.now(timezone.utc).isoformat()
@@ -573,7 +625,7 @@ def start_pipeline(
         "--scheduling-config", str(scheduling_config),
         "--phase", phase, "--seed-store", seed_store,
         "--energy-monitor", energy_monitor, "--results-summary",
-    ], check=False)
+    ], check=False, env=alumet_env([node]))
     finished = datetime.now(timezone.utc).isoformat()
     after = {path.resolve() for path in RESULTS_ROOT.glob("embedding-training-inference-evaluation-*")}
     created = sorted(after - before, key=lambda path: path.stat().st_mtime)
@@ -592,13 +644,13 @@ def main() -> int:
         help="capacity: whole-pipeline configurations (capacity_points); sweep: one factor at a time",
     )
     parser.add_argument("--datasets", default=",".join(DATASETS), help="Comma-separated dataset names")
-    parser.add_argument("--sweeps", default=",".join(MATRIX),
-                        help="sweep design only: comma-separated subset of: " + ",".join(MATRIX))
+    parser.add_argument("--sweeps", default=",".join(SWEEP_TASKS),
+                        help="sweep design only: comma-separated subset of: " + ",".join(SWEEP_TASKS))
     parser.add_argument(
-        "--nodes", default=f"{SERVER2},{THINKPAD}",
-        help="Comma-separated nodes whose matrix entries are run",
+        "--nodes", default="both",
+        help="server2, thinkpad, or both (also comma-separated full node names); every stage of a "
+             "run executes on one node and each selected node runs every test",
     )
-    parser.add_argument("--base-node", default=SERVER2, help="Node for every stage that is not swept")
     parser.add_argument("--baseline-processes", type=int, default=1, help="Random-walk processes when not swept")
     parser.add_argument("--baseline-workers", type=int, default=1, help="Gensim workers when not swept")
     parser.add_argument(
@@ -606,8 +658,8 @@ def main() -> int:
         help="BERT matching device when not swept",
     )
     parser.add_argument(
-        "--bert-training-device", choices=("cpu", "cuda"), default="cuda",
-        help="Offline BERT training device, fixed on the base node for every run",
+        "--bert-training-device", choices=("cpu", "cuda"), default=None,
+        help="Offline BERT training device on every node (default: the node's bert_training_device)",
     )
     parser.add_argument(
         "--repetitions", type=int, default=1,
@@ -635,30 +687,51 @@ def main() -> int:
     if unknown:
         parser.error(f"unknown datasets: {', '.join(unknown)}")
     sweeps = split_list(args.sweeps)
-    if not sweeps or set(sweeps) - set(MATRIX):
-        parser.error(f"--sweeps accepts only: {', '.join(MATRIX)}")
-    nodes = split_list(args.nodes)
+    if not sweeps or set(sweeps) - set(SWEEP_TASKS):
+        parser.error(f"--sweeps accepts only: {', '.join(SWEEP_TASKS)}")
+    nodes: list[str] = []
+    for value in split_list(args.nodes):
+        selected = [SERVER2, THINKPAD] if value == "both" else [NODE_ALIASES.get(value, value)]
+        for node in selected:
+            if node not in NODE_OVERRIDES:
+                parser.error(f"unknown node {value}; use server2, thinkpad, both, or a NODE_OVERRIDES key")
+            if node not in nodes:
+                nodes.append(node)
+    if not nodes:
+        parser.error("--nodes selects no node")
     if args.repetitions < 1 or args.baseline_processes < 1 or args.baseline_workers < 1:
         parser.error("--repetitions, --baseline-processes and --baseline-workers must be positive")
 
-    baseline = Point(
-        args.baseline_processes, args.base_node, args.baseline_workers, args.base_node,
-        args.baseline_bert_device, args.base_node,
-    )
-    points = capacity_points(args.base_node) if args.design == "capacity" \
-        else build_points(baseline, sweeps, nodes)
+    # Per node: its settings, the sweep baseline, and the offline-preparation point (the
+    # highest sweep setting of every stage).
+    configs = {node: node_config(node) for node in nodes}
+    training_device = {
+        node: args.bert_training_device or configs[node]["bert_training_device"] for node in nodes
+    }
+    baselines: dict[str, Point] = {}
+    prep_points: dict[str, Point] = {}
+    points: dict[Point, list[str]] = {}
+    for node in nodes:
+        matrix = configs[node]["sweep"]
+        baselines[node] = node_point(
+            node, args.baseline_processes, args.baseline_workers, args.baseline_bert_device,
+        )
+        bert_values = [str(value).partition(":")[0] for value in matrix.get("bert", [])]
+        prep_points[node] = node_point(
+            node,
+            max(matrix.get("random-walk") or [args.baseline_processes]),
+            max(matrix.get("embedding") or [args.baseline_workers]),
+            "cuda" if "cuda" in bert_values else args.baseline_bert_device,
+        )
+        node_points = capacity_points(node, configs[node]["capacity"]) if args.design == "capacity" \
+            else build_points(baselines[node], sweeps, matrix)
+        points.update(node_points)
+        if not args.dry_run:
+            validate_cluster(
+                [*node_points, baselines[node], prep_points[node]], node, training_device[node],
+            )
     if not points:
         parser.error("the selected sweeps and nodes produce an empty matrix")
-    # Offline preparation: the highest matrix setting on the base node for every stage.
-    base_values = lambda sweep, default: MATRIX[sweep].get(args.base_node) or [default]
-    prep_point = Point(
-        max(base_values("random-walk", args.baseline_processes)), args.base_node,
-        max(base_values("embedding", args.baseline_workers)), args.base_node,
-        "cuda" if "cuda" in base_values("bert", args.baseline_bert_device) else args.baseline_bert_device,
-        args.base_node,
-    )
-    if not args.dry_run:
-        validate_cluster([*points, baseline, prep_point], args.base_node, args.bert_training_device)
     base = yaml.safe_load(args.base_config.read_text(encoding="utf-8"))
     if not isinstance(base, dict):
         raise RuntimeError("base config root must be a YAML object")
@@ -714,13 +787,16 @@ def main() -> int:
         print(f"  {point.slug():40s} sweeps={'+'.join(members)}")
 
     def prepare(dataset: str, point: Point) -> tuple[Path, Path]:
+        # Every stage of a point runs on one node; the BERT node names it.
+        node = point.bert_node
         config_path = configs_dir / f"{dataset}-{point.slug()}.yaml"
-        write_config(base, config_path, dataset, point, args.bert_training_device)
-        return config_path, write_scheduling_config(output, args.base_node, point)
+        write_config(base, config_path, dataset, point, training_device[node])
+        return config_path, write_scheduling_config(output, node, point)
 
-    def run_offline_prep(dataset: str) -> int:
-        """Train once per dataset at the highest configuration and save the seed."""
-        seed_store = seed_store_name(dataset)
+    def run_offline_prep(dataset: str, node: str) -> int:
+        """Train once per dataset and node at the highest configuration and save the seed."""
+        seed_store = seed_store_name(dataset, node)
+        prep_point = prep_points[node]
         done = any(
             row.get("dataset") == dataset and row.get("seed_store") == seed_store
             and row.get("status") == "Succeeded" for row in prep_rows
@@ -728,20 +804,23 @@ def main() -> int:
         if done and not args.rebuild_seeds:
             print(f"[prep] {dataset} seed {seed_store} already built")
             return 0
-        config_path = configs_dir / f"{dataset}-offline-prep.yaml"
-        write_config(base, config_path, dataset, prep_point, args.bert_training_device)
-        scheduling_config = write_scheduling_config(output, args.base_node, prep_point)
+        config_path = configs_dir / f"{dataset}-{short_node(node)}-offline-prep.yaml"
+        write_config(base, config_path, dataset, prep_point, training_device[node])
+        scheduling_config = write_scheduling_config(output, node, prep_point)
         print(f"[prep] {dataset} seed {seed_store} with {prep_point.slug()}", flush=True)
         if args.dry_run:
             return 0
         result, run_dir, started, finished = start_pipeline(
-            config_path, scheduling_config, args.energy_monitor, "batch", seed_store,
+            config_path, scheduling_config, args.energy_monitor, "batch", seed_store, node,
         )
         manifest = read_json(run_dir / "manifest.json") if run_dir else {}
-        prep_rows[:] = [row for row in prep_rows if row.get("dataset") != dataset]
+        prep_rows[:] = [
+            row for row in prep_rows
+            if (row.get("dataset"), row.get("seed_store")) != (dataset, seed_store)
+        ]
         prep_rows.append({
             "dataset": dataset, "seed_store": seed_store, **prep_point.as_row(),
-            "bert_training_device": args.bert_training_device, "base_node": args.base_node,
+            "bert_training_device": training_device[node], "base_node": node,
             "status": str(manifest.get("status") or ("Succeeded" if result.returncode == 0 else "Failed")),
             "run_dir": str(run_dir.relative_to(ROOT)) if run_dir else "",
             **(extract_energy(run_dir) if run_dir else {}),
@@ -750,19 +829,26 @@ def main() -> int:
         write_csv(prep_path, PREP_FIELDS, prep_rows)
         return result.returncode
 
+    if "alumet" in args.energy_monitor and not args.dry_run:
+        # Collect only on the selected nodes; collectors elsewhere are removed.
+        run(["bash", "k8s/erctl.sh", "alumet", "start"], env=alumet_env(nodes))
+
     for dataset in datasets:
-        code = run_offline_prep(dataset)
-        if code != 0:
-            print(f"Offline preparation failed for {dataset}; see {prep_path}", file=sys.stderr)
-            return code
+        for node in nodes:
+            code = run_offline_prep(dataset, node)
+            if code != 0:
+                print(f"Offline preparation failed for {dataset} on {node}; see {prep_path}",
+                      file=sys.stderr)
+                return code
 
     if args.warmup and not args.dry_run:
-        print("Warm-up run (not recorded)", flush=True)
-        config_path, scheduling_config = prepare(datasets[0], baseline)
-        start_pipeline(
-            config_path, scheduling_config, args.energy_monitor, "incremental",
-            seed_store_name(datasets[0]),
-        )
+        for node in nodes:
+            print(f"Warm-up run on {node} (not recorded)", flush=True)
+            config_path, scheduling_config = prepare(datasets[0], baselines[node])
+            start_pipeline(
+                config_path, scheduling_config, args.energy_monitor, "incremental",
+                seed_store_name(datasets[0], node), node,
+            )
 
     for index, (dataset, point, repetition) in enumerate(trials, start=1):
         key = dataset, point, repetition
@@ -775,16 +861,17 @@ def main() -> int:
         if args.dry_run:
             continue
 
-        seed_store = seed_store_name(dataset)
+        seed_store = seed_store_name(dataset, point.bert_node)
         result, run_dir, started, finished = start_pipeline(
             config_path, scheduling_config, args.energy_monitor, "incremental", seed_store,
+            point.bert_node,
         )
         manifest = read_json(run_dir / "manifest.json") if run_dir else {}
         status = str(manifest.get("status") or ("Succeeded" if result.returncode == 0 else "Failed"))
         all_f1, left_f1 = extract_f1(run_dir) if run_dir else ("", "")
         row: dict[str, Any] = {
             "dataset": dataset, "sweeps": "+".join(points[point]), **point.as_row(),
-            "repetition": repetition, "base_node": args.base_node, "seed_store": seed_store,
+            "repetition": repetition, "base_node": point.bert_node, "seed_store": seed_store,
             "status": status, "run_dir": str(run_dir.relative_to(ROOT)) if run_dir else "",
             "all_mutual_topk_f1": all_f1, "left_target_only_f1": left_f1,
             **(extract_energy(run_dir) if run_dir else {}), "trial_index": index,

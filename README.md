@@ -655,6 +655,8 @@ INEXISTENT` and `0.00 Joules` is an invalid measurement; the preflight now rejec
 Alumet is a persistent cluster service rather than a per-run child process. `erctl` checks that its node clients and InfluxDB are ready, records the pipeline's UTC time window, exports that window to `energy/alumet-raw.csv`, and writes `energy/alumet-summary.json`. Hardware and attributed energy are kept separate because adding them would double-count energy.
 
 Before each run, `erctl` recreates the relay-client Pods on Ready nodes and waits until they report new energy, all outside the measured window (`energy/alumet-restart.json` records it). This clears per-Pod state that otherwise grows across runs until the client is OOM-killed. Clients on NotReady nodes are skipped. Set `ERCTL_ALUMET_RESTART_EACH_RUN=0` to only restart when the energy stream is stale; `ERCTL_ALUMET_RESTART_TIMEOUT` (default 180 s) bounds the wait. The window export is limited to energy and `network_bytes` series and to `ERCTL_ALUMET_QUERY_TIMEOUT` (default 300 s).
+
+Set `ERCTL_ALUMET_NODES=node1,node2` to collect on, check, restart and total only those nodes: `erctl alumet start` then removes the collectors elsewhere, and each run's hardware totals skip other nodes. `exp/serie1-motivation.py` sets it to the nodes selected by `--nodes` (and per run, to that run's node).
 Attributed energy is split into EAER Pods found in `placement.tsv`, named system consumers, and consumers that Alumet could not map to a Pod (`unknown`). The raw InfluxDB export and the complete per-consumer breakdown remain available for auditing.
 
 
@@ -851,16 +853,19 @@ off the control node. Archive failure is reported separately and does not change
 
 The benchmark performs one-factor-at-a-time sweeps of `random_walk.processes`, Gensim
 Word2Vec `embeddings_training.workers`, and the BERT matching device. Gensim remains
-CPU-only. Each swept stage is pinned independently to `server2-labo` or
-`k3s-worker-thinkpad`; unswept stages remain on `--base-node`. BERT training has its own
-fixed `--bert-training-device`, while BERT matching uses the device in each matrix point.
+CPU-only. Every stage of a run, the offline preparation included, executes on one node:
+`--nodes server2`, `--nodes thinkpad`, or `--nodes both` (the default; full node names also
+work), and each selected node runs the same tests. Per-node values (capacity configurations,
+sweep values, BERT training device) are `DEFAULT_NODE_CONFIG` updated by `NODE_OVERRIDES` at
+the top of `exp/serie1-motivation.py`; `--bert-training-device` overrides the training device
+on every node. Each node keeps its own seed (`serie1-<dataset>-s2`, `serie1-<dataset>-tp`).
 The benchmark-local scheduling bundle does not modify
 `k8s/scheduling/temporary-placement.yaml` or affect ordinary pipeline runs.
 
-Run the capacity design (the default): seven whole-pipeline configurations that scale
-BERT's CPU cores (`bert_matching.cpus`, which sets the Pod's CPU request/limit and torch
-threads), move BERT to the GPU and scale Word2Vec workers with it, and place BERT on the
-laptop (`capacity_points` in `exp/serie1-motivation.py`). The design is sized for
+Run the capacity design (the default): whole-pipeline configurations that scale BERT's
+CPU cores (`bert_matching.cpus`, which sets the Pod's CPU request/limit and torch threads)
+and move BERT to the GPU and scale Word2Vec workers with it on the server, plus the laptop's
+own configuration (the `capacity` entries in `exp/serie1-motivation.py`). The design is sized for
 `csv.file.timeout=50` in the stream simulator's `application.properties` (one 408-record
 window about every 20 s); rebuild the kafka-producer image after changing it. Results go to
 `reports/serie1-capacity/`.
@@ -877,7 +882,7 @@ Run the complete built-in one-factor matrix on both nodes:
 ```bash
 python3 exp/serie1-motivation.py \
   --design sweep \
-  --nodes server2-labo,k3s-worker-thinkpad \
+  --nodes both \
   --sweeps random-walk,embedding,bert \
   --repetitions 3 \
   --energy-monitor ecofloc-alumet \
@@ -889,7 +894,7 @@ Run only the incremental BERT CPU/CUDA comparison on the GPU server:
 ```bash
 python3 exp/serie1-motivation.py \
   --design sweep \
-  --nodes server2-labo \
+  --nodes server2 \
   --sweeps bert \
   --baseline-bert-device cpu \
   --bert-training-device cuda \
@@ -897,7 +902,7 @@ python3 exp/serie1-motivation.py \
   --keep-going
 ```
 
-The CPU process/thread values are defined by `MATRIX` in `exp/serie1-motivation.py` and are
+The CPU process/thread values are defined by the `sweep` entries in `exp/serie1-motivation.py` and are
 validated against each selected node before execution. `reports/serie1-motivation/runs.csv`
 stores F1, total energy, status, each stage's node/configuration, and repetition.
 `stage-timings.csv` stores the same experiment dimensions with per-stage timings. Selecting
