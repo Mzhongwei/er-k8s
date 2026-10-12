@@ -388,6 +388,12 @@ def write_config(
     config.update({key: value for key, value in dataset_config.items() if key not in internal_keys})
     # Model, index and record paths include version_name, so it must match the seed's.
     config["version_name"] = f"bench-{dataset}"
+    # A fresh topic and consumer group per run: the shared default topic keeps records an
+    # earlier run produced but never consumed, and the next consumer would read them first.
+    run_token = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    config["kafka"] = dict(
+        base.get("kafka", {}), topicid=f"eaer-serie1-{run_token}", groupid=f"eaer-serie1-{run_token}",
+    )
     config["record_ids"] = dict(
         base.get("record_ids", {}),
         source_field=dataset_config.get("record_id_source_field", ""),
