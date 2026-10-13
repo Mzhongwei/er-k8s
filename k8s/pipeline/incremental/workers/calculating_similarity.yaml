@@ -27,7 +27,7 @@ spec:
               cpu: "1"
               memory: 4Gi
             limits:
-              cpu: "1"
+              cpu: "4"        # scoring threads follow this limit (calculating_similarity.threads)
               memory: 12Gi
           volumeMounts:
             - name: pipeline-config
