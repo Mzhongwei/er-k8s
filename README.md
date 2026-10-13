@@ -862,7 +862,17 @@ on every node. Each node keeps its own seed (`serie1-<dataset>-s2`, `serie1-<dat
 The benchmark-local scheduling bundle does not modify
 `k8s/scheduling/temporary-placement.yaml` or affect ordinary pipeline runs.
 
-Run the capacity design (the default): whole-pipeline configurations that scale BERT's
+Run the single design (the default): one configuration per dataset (BERT on the GPU, eight
+Gensim workers), run once on each dataset in `DATASETS`. Each dataset sets its own window size
+(`window_count`: 6750 for retrieval-extrait, 450 for 8-movie). `--record-interval-ms N` passes
+`csv.file.timeout=N` to the stream simulator (default 50 ms in its image) to shorten the
+stream; it changes the stream rate. Results go to `reports/serie1-single/`.
+
+```bash
+python3 exp/serie1-motivation.py --nodes server2 --energy-monitor ecofloc-alumet --keep-going
+```
+
+Run the capacity design (`--design capacity`): whole-pipeline configurations that scale BERT's
 CPU cores (`bert_matching.cpus`, which sets the Pod's CPU request/limit and torch threads)
 and move BERT to the GPU and scale Word2Vec workers with it on the server, plus the laptop's
 own configuration (the `capacity` entries in `exp/serie1-motivation.py`). The design is sized for

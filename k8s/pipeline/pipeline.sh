@@ -732,7 +732,11 @@ ensure_seed_volume() {
 run_seed_job() {
     # save:    copy the trained-state PVCs into <seed volume>/<SEED_STORE> (atomic rename).
     # restore: copy <seed volume>/<SEED_STORE> into the freshly recreated, empty PVCs.
-    local action="$1" job="seed-$1" script counts succeeded failed
+    local action="$1" job="seed-$1" script counts succeeded failed node_selector=""
+    # SEED_JOB_NODE pins the copy Job to the run's node; unset lets Kubernetes choose.
+    if [ -n "${SEED_JOB_NODE:-}" ]; then
+        node_selector="nodeSelector: {kubernetes.io/hostname: \"$SEED_JOB_NODE\"}"
+    fi
     case "$action" in
         save)
             script='set -eu; d="/seeds/$SEED"; rm -rf "$d.tmp"; for v in graph embedding index bert; do mkdir -p "$d.tmp/$v"; cp -a "/pvc/$v/." "$d.tmp/$v/"; done; rm -rf "$d"; mv "$d.tmp" "$d"; du -sh "$d"'
@@ -760,6 +764,7 @@ spec:
         app: $job
     spec:
       restartPolicy: Never
+      $node_selector
       containers:
         - name: main
           image: $SEED_JOB_IMAGE

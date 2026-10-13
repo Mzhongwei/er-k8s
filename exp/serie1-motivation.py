@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Motivation benchmark with two designs.
+"""Motivation benchmark with three designs.
 
-capacity (default): a short list of whole-pipeline execution configurations (BERT CPU cores,
+single (default): one configuration per dataset (the fastest: BERT on the GPU, eight Gensim
+workers), run once, to get every dataset through the pipeline quickly. Each dataset sets its
+own window size (DATASETS[...]["window_count"]); --record-interval-ms shortens the stream.
+
+capacity: a short list of whole-pipeline execution configurations (BERT CPU cores,
 BERT on the GPU, CPU parallelism of the random walk and Word2Vec, the laptop's own set). They
 differ in how fast they drain the stream, so each meets a different deadline. The stream
 rate is the simulator's csv.file.timeout (services/dataStreamSimulator application.properties,
@@ -59,16 +63,20 @@ DATASETS = {
         "evalset_path": "/data/rtas/retrieval-extrait/eval.csv",
         "record_id_source_field": "id",
         "top_k": 1,
+        # Records per window (kafka.window_count); large windows spread the per-window
+        # checkpoint and snapshot costs over more records.
+        "window_count": 6750,
     },
-    # "8-movie": {
-    #     "data_source_A": "/data/rtas/8-movie/table_A.csv",
-    #     "data_source_B": "/data/rtas/8-movie/table_B.csv",
-    #     "ground_truth": "/data/rtas/8-movie/matches.txt",
-    #     "trainset_path": "/data/rtas/8-movie/train.csv",
-    #     "evalset_path": "/data/rtas/8-movie/eval.csv",
-    #     "record_id_source_field": "id",
-    #     "top_k": 1,
-    # },
+    "8-movie": {
+        "data_source_A": "/data/rtas/8-movie/table_A.csv",
+        "data_source_B": "/data/rtas/8-movie/table_B.csv",
+        "ground_truth": "/data/rtas/8-movie/matches.txt",
+        "trainset_path": "/data/rtas/8-movie/train.csv",
+        "evalset_path": "/data/rtas/8-movie/eval.csv",
+        "record_id_source_field": "id",
+        "top_k": 1,
+        "window_count": 450,
+    },
     # "large1-pdc": {
     #     "data_source_A": "/data/large_datasets/large1-pdc/tableA.jsonl",
     #     "data_source_B": "/data/large_datasets/large1-pdc/tableB.jsonl",
@@ -91,6 +99,8 @@ DEFAULT_NODE_CONFIG: dict[str, Any] = {
         "bert-gpu-w2v4": (1, 4, "cuda"),
         "bert-gpu-w2v8": (1, 8, "cuda"),
     },
+    # single design: one configuration per dataset, the fastest one, run once.
+    "single": {"bert-gpu-w2v8": (1, 8, "cuda")},
     # sweep design: swept values per stage.
     "sweep": {
         "random-walk": [1, 2, 4, 8],
@@ -104,6 +114,7 @@ NODE_OVERRIDES: dict[str, dict[str, Any]] = {
     THINKPAD: {
         "bert_training_device": "cpu",
         "capacity": {"bert-cpu6-w2v2": (1, 2, "cpu:6")},
+        "single": {"bert-cpu4-w2v2": (1, 2, "cpu:4")},
         "sweep": {"random-walk": [1, 2, 4], "embedding": [1, 2, 4], "bert": ["cpu:4"]},
     },
 }
@@ -136,7 +147,7 @@ ENERGY_SUMMARY_FIELDS = tuple(
     )
 ) + ("alumet_workload_attributed_energy_j",)
 RUN_FIELDS = (
-    "dataset", "sweeps", *POINT_FIELDS, "repetition", "base_node", "seed_store",
+    "dataset", "sweeps", *POINT_FIELDS, "repetition", "base_node", "seed_store", "window_count",
     "status", "run_dir", "all_mutual_topk_f1", "left_target_only_f1",
     *ENERGY_SUMMARY_FIELDS, "trial_index", "started_at", "finished_at", "return_code",
 )
@@ -271,6 +282,33 @@ def alumet_env(nodes: list[str]) -> dict[str, str]:
     return {"ERCTL_ALUMET_NODES": ",".join(nodes)}
 
 
+ECOFLOC_NODES_FILE = ROOT / "k8s/monitoring/ecofloc/energy-nodes.conf"
+
+
+def write_ecofloc_nodes_file(output: Path, node: str) -> Path:
+    """An EcoFLOC node list with only ``node``: its preflight then checks, and its energy
+    covers, the node a run uses instead of every node in energy-nodes.conf."""
+    entries = []
+    for line in ECOFLOC_NODES_FILE.read_text(encoding="utf-8").splitlines():
+        spec = line.split("#", 1)[0].strip()
+        if spec and spec.split("=", 1)[0].strip() == node:
+            entries.append(spec)
+    if not entries:
+        raise RuntimeError(f"{ECOFLOC_NODES_FILE} has no EcoFLOC entry for {node}")
+    path = output / "energy" / f"ecofloc-nodes-{short_node(node)}.conf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(entries) + "\n", encoding="utf-8")
+    return path
+
+
+def node_env(node: str, ecofloc_nodes_file: Path | None) -> dict[str, str]:
+    """Environment of a pipeline run on ``node``: energy monitors and the seed Job stay on it."""
+    env = {**alumet_env([node]), "SEED_JOB_NODE": node}
+    if ecofloc_nodes_file is not None:
+        env["ENERGY_NODES_FILE"] = str(ecofloc_nodes_file)
+    return env
+
+
 def kubernetes_cpu(value: str) -> float:
     value = str(value).strip()
     return float(value[:-1]) / 1000.0 if value.endswith("m") else float(value)
@@ -380,11 +418,11 @@ def seed_store_name(dataset: str, node: str) -> str:
 
 def write_config(
     base: dict[str, Any], destination: Path, dataset: str, point: Point,
-    bert_training_device: str,
+    bert_training_device: str, record_interval_ms: int | None = None,
 ) -> None:
     config = dict(base)
     dataset_config = DATASETS[dataset]
-    internal_keys = {"top_k", "record_id_source_field"}
+    internal_keys = {"top_k", "record_id_source_field", "window_count"}
     config.update({key: value for key, value in dataset_config.items() if key not in internal_keys})
     # Model, index and record paths include version_name, so it must match the seed's.
     config["version_name"] = f"bench-{dataset}"
@@ -394,6 +432,10 @@ def write_config(
     config["kafka"] = dict(
         base.get("kafka", {}), topicid=f"eaer-serie1-{run_token}", groupid=f"eaer-serie1-{run_token}",
     )
+    if "window_count" in dataset_config:
+        config["kafka"]["window_count"] = int(dataset_config["window_count"])
+    if record_interval_ms is not None:
+        config["kafka"]["record_interval_ms"] = int(record_interval_ms)
     config["record_ids"] = dict(
         base.get("record_ids", {}),
         source_field=dataset_config.get("record_id_source_field", ""),
@@ -622,7 +664,7 @@ def row_key(row: dict[str, Any]) -> tuple[Any, ...] | None:
 
 def start_pipeline(
     config_path: Path, scheduling_config: Path, energy_monitor: str, phase: str, seed_store: str,
-    node: str,
+    env: dict[str, str],
 ) -> tuple[subprocess.CompletedProcess[str], Path | None, str, str]:
     before = {path.resolve() for path in RESULTS_ROOT.glob("embedding-training-inference-evaluation-*")}
     started = datetime.now(timezone.utc).isoformat()
@@ -631,7 +673,7 @@ def start_pipeline(
         "--scheduling-config", str(scheduling_config),
         "--phase", phase, "--seed-store", seed_store,
         "--energy-monitor", energy_monitor, "--results-summary",
-    ], check=False, env=alumet_env([node]))
+    ], check=False, env=env)
     finished = datetime.now(timezone.utc).isoformat()
     after = {path.resolve() for path in RESULTS_ROOT.glob("embedding-training-inference-evaluation-*")}
     created = sorted(after - before, key=lambda path: path.stat().st_mtime)
@@ -646,16 +688,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
-        "--design", choices=("capacity", "sweep"), default="capacity",
-        help="capacity: whole-pipeline configurations (capacity_points); sweep: one factor at a time",
+        "--design", choices=("single", "capacity", "sweep"), default="single",
+        help="single: one fastest configuration per dataset; capacity: whole-pipeline "
+             "configurations (capacity_points); sweep: one factor at a time",
+    )
+    parser.add_argument(
+        "--record-interval-ms", type=int, default=None,
+        help="Producer pause between records (default: the simulator image's csv.file.timeout, "
+             "50 ms); lower values shorten the stream and change the stream rate",
     )
     parser.add_argument("--datasets", default=",".join(DATASETS), help="Comma-separated dataset names")
     parser.add_argument("--sweeps", default=",".join(SWEEP_TASKS),
                         help="sweep design only: comma-separated subset of: " + ",".join(SWEEP_TASKS))
     parser.add_argument(
-        "--nodes", default="both",
-        help="server2, thinkpad, or both (also comma-separated full node names); every stage of a "
-             "run executes on one node and each selected node runs every test",
+        "--nodes", default="server2",
+        help="server2 (default), thinkpad, or both (also comma-separated full node names); every "
+             "stage of a run executes on one node and each selected node runs every test",
     )
     parser.add_argument("--baseline-processes", type=int, default=1, help="Random-walk processes when not swept")
     parser.add_argument("--baseline-workers", type=int, default=1, help="Gensim workers when not swept")
@@ -729,7 +777,8 @@ def main() -> int:
             max(matrix.get("embedding") or [args.baseline_workers]),
             "cuda" if "cuda" in bert_values else args.baseline_bert_device,
         )
-        node_points = capacity_points(node, configs[node]["capacity"]) if args.design == "capacity" \
+        node_points = capacity_points(node, configs[node][args.design]) \
+            if args.design in ("single", "capacity") \
             else build_points(baselines[node], sweeps, matrix)
         points.update(node_points)
         if not args.dry_run:
@@ -742,7 +791,9 @@ def main() -> int:
     if not isinstance(base, dict):
         raise RuntimeError("base config root must be a YAML object")
 
-    default_output = "reports/serie1-capacity" if args.design == "capacity" else "reports/serie1-motivation"
+    default_output = {
+        "single": "reports/serie1-single", "capacity": "reports/serie1-capacity",
+    }.get(args.design, "reports/serie1-motivation")
     output = (args.output or ROOT / default_output).resolve()
     configs_dir = output / "configs"
     prep_path = output / "offline-prep.csv"
@@ -779,6 +830,12 @@ def main() -> int:
     if args.shuffle_seed is not None:
         random.Random(args.shuffle_seed).shuffle(trials)
     output.mkdir(parents=True, exist_ok=True)
+    ecofloc_files = {
+        node: write_ecofloc_nodes_file(output, node) for node in nodes
+    } if "ecofloc" in args.energy_monitor else {}
+
+    def run_env(node: str) -> dict[str, str]:
+        return node_env(node, ecofloc_files.get(node))
     (output / "trial-order.json").write_text(json.dumps({
         "shuffle_seed": args.shuffle_seed,
         "trials": [
@@ -796,7 +853,7 @@ def main() -> int:
         # Every stage of a point runs on one node; the BERT node names it.
         node = point.bert_node
         config_path = configs_dir / f"{dataset}-{point.slug()}.yaml"
-        write_config(base, config_path, dataset, point, training_device[node])
+        write_config(base, config_path, dataset, point, training_device[node], args.record_interval_ms)
         return config_path, write_scheduling_config(output, node, point)
 
     def run_offline_prep(dataset: str, node: str) -> int:
@@ -817,7 +874,7 @@ def main() -> int:
         if args.dry_run:
             return 0
         result, run_dir, started, finished = start_pipeline(
-            config_path, scheduling_config, args.energy_monitor, "batch", seed_store, node,
+            config_path, scheduling_config, args.energy_monitor, "batch", seed_store, run_env(node),
         )
         manifest = read_json(run_dir / "manifest.json") if run_dir else {}
         prep_rows[:] = [
@@ -853,7 +910,7 @@ def main() -> int:
             config_path, scheduling_config = prepare(datasets[0], baselines[node])
             start_pipeline(
                 config_path, scheduling_config, args.energy_monitor, "incremental",
-                seed_store_name(datasets[0], node), node,
+                seed_store_name(datasets[0], node), run_env(node),
             )
 
     for index, (dataset, point, repetition) in enumerate(trials, start=1):
@@ -870,7 +927,7 @@ def main() -> int:
         seed_store = seed_store_name(dataset, point.bert_node)
         result, run_dir, started, finished = start_pipeline(
             config_path, scheduling_config, args.energy_monitor, "incremental", seed_store,
-            point.bert_node,
+            run_env(point.bert_node),
         )
         manifest = read_json(run_dir / "manifest.json") if run_dir else {}
         status = str(manifest.get("status") or ("Succeeded" if result.returncode == 0 else "Failed"))
@@ -878,6 +935,7 @@ def main() -> int:
         row: dict[str, Any] = {
             "dataset": dataset, "sweeps": "+".join(points[point]), **point.as_row(),
             "repetition": repetition, "base_node": point.bert_node, "seed_store": seed_store,
+            "window_count": DATASETS[dataset].get("window_count", base.get("kafka", {}).get("window_count", "")),
             "status": status, "run_dir": str(run_dir.relative_to(ROOT)) if run_dir else "",
             "all_mutual_topk_f1": all_f1, "left_target_only_f1": left_f1,
             **(extract_energy(run_dir) if run_dir else {}), "trial_index": index,
