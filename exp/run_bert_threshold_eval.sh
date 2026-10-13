@@ -7,6 +7,9 @@
 #     run_dir  k8s/results/embedding-training-inference-evaluation-...  (has matching/predicted/)
 #     dataset  retrieval-extrait (default) or 8-movie; selects /data/rtas/<dataset>/ and the seed
 #     limit    optional: score a random sample of this many pairs first (quick check)
+#   RUN_VERSION=bench-<dataset of the run>  when the run used another dataset than the model,
+#     e.g. a retrieval-extrait run scored with the retrieval-extrait-hn model: pairs whose
+#     records are not in <dataset>'s tables (held out for training) are then skipped.
 #
 # Runs one Job with the pipeline's BERT image and one GPU on $NODE (default server2-labo). It
 # waits for the GPU, so do not run it while a pipeline holds the GPU. The model comes from the
@@ -24,7 +27,8 @@ VERSION="bench-${DATASET}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JOB="bert-threshold-eval"
 
-PAIRS="$RUN_DIR/matching/predicted/$VERSION/predicted_matching.csv"
+RUN_VERSION="${RUN_VERSION:-$VERSION}"
+PAIRS="$RUN_DIR/matching/predicted/$RUN_VERSION/predicted_matching.csv"
 [ -f "$PAIRS" ] || { echo "decision pairs not found: $PAIRS" >&2; exit 1; }
 SEED_HOST_DIR="$(awk '/^[[:space:]]*path:/ {print $2; exit}' "$ROOT/k8s/datasets/seed-volume.yaml")"
 MODEL_HOST_DIR="$SEED_HOST_DIR/$SEED/bert/$VERSION"
@@ -49,6 +53,7 @@ kubectl create configmap -n "$NAMESPACE" "$JOB-script" \
 
 LIMIT_ARGS=""
 [ -n "$LIMIT" ] && LIMIT_ARGS="\"--limit\", \"$LIMIT\","
+[ "$RUN_VERSION" != "$VERSION" ] && LIMIT_ARGS="$LIMIT_ARGS \"--skip-missing\","
 kubectl apply -n "$NAMESPACE" -f - <<EOF
 apiVersion: batch/v1
 kind: Job
@@ -60,6 +65,9 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      # As compiler.py does for GPU Pods: k3s keeps runc as the default runtime, which does
+      # not expose the GPU even when one is allocated.
+      runtimeClassName: nvidia
       nodeSelector: {kubernetes.io/hostname: "$NODE"}
       tolerations:
         - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}

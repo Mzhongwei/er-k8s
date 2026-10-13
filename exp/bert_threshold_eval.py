@@ -95,6 +95,9 @@ def main() -> int:
     parser.add_argument("--max-length", type=int, default=128, help="bert_matching.max_length")
     parser.add_argument("--max-text-chars", type=int, default=DEFAULT_MAX_TEXT_CHARS)
     parser.add_argument("--limit", type=int, default=None, help="score a random sample of N pairs (quick check)")
+    parser.add_argument("--skip-missing", action="store_true",
+                        help="drop pairs whose records are not in the tables (e.g. B records held out "
+                             "for BERT training) instead of failing")
     args = parser.parse_args()
 
     started = time.time()
@@ -110,7 +113,12 @@ def main() -> int:
     texts = read_texts(args.table_a, set(pairs.left_id), args.source_field, args.max_text_chars)
     texts.update(read_texts(args.table_b, set(pairs.right_id), args.source_field, args.max_text_chars))
     missing = sorted((set(pairs.left_id) | set(pairs.right_id)) - set(texts))
-    if missing:
+    if missing and args.skip_missing:
+        before = len(pairs)
+        pairs = pairs[pairs.left_id.isin(texts) & pairs.right_id.isin(texts)].reset_index(drop=True)
+        print(f"skipped {before - len(pairs)} pairs whose records are not in the tables; "
+              f"pairs={len(pairs)} true={int(pairs.label.sum())}", flush=True)
+    elif missing:
         print(f"[error] {len(missing)} ids have no record text, e.g. {missing[:5]}", file=sys.stderr)
         return 1
     print(f"texts ready: {len(texts)} records ({time.time() - started:.0f}s)", flush=True)

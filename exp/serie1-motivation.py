@@ -55,18 +55,35 @@ NODE_ALIASES = {"server2": SERVER2, "thinkpad": THINKPAD}
 NODE_SHORT = {SERVER2: "s2", THINKPAD: "tp"}
 RESULTS_ROOT = ROOT / "k8s/results"
 DATASETS = {
-    "retrieval-extrait": {
-        "data_source_A": "/data/rtas/retrieval-extrait/table_A.csv",
-        "data_source_B": "/data/rtas/retrieval-extrait/table_B.csv",
-        "ground_truth": "/data/rtas/retrieval-extrait/matches.txt",
-        "trainset_path": "/data/rtas/retrieval-extrait/train.csv",
-        "evalset_path": "/data/rtas/retrieval-extrait/eval.csv",
+    # retrieval-extrait with a BERT training set from a run's embedding decision: the B
+    # records of those pairs (true pairs and hard negatives) are held out of the stream
+    # (exp/build_bert_hard_negatives.py).
+    "retrieval-extrait-hn": {
+        "data_source_A": "/data/rtas/retrieval-extrait-hn/table_A.csv",
+        "data_source_B": "/data/rtas/retrieval-extrait-hn/table_B.csv",
+        "ground_truth": "/data/rtas/retrieval-extrait-hn/matches.txt",
+        "trainset_path": "/data/rtas/retrieval-extrait-hn/train.csv",
+        "evalset_path": "/data/rtas/retrieval-extrait-hn/eval.csv",
         "record_id_source_field": "id",
         "top_k": 3,
         # Records per window (kafka.window_count); large windows spread the per-window
         # checkpoint and snapshot costs over more records.
         "window_count": 6750,
+        # bert_training.epochs; training keeps the epoch with the lowest eval loss.
+        "bert_epochs": 5,
     },
+    # Superseded by retrieval-extrait-hn: its 800 training pairs (half random negatives,
+    # 2 epochs) left BERT's probabilities squeezed between 0.3 and 0.75.
+    # "retrieval-extrait": {
+    #     "data_source_A": "/data/rtas/retrieval-extrait/table_A.csv",
+    #     "data_source_B": "/data/rtas/retrieval-extrait/table_B.csv",
+    #     "ground_truth": "/data/rtas/retrieval-extrait/matches.txt",
+    #     "trainset_path": "/data/rtas/retrieval-extrait/train.csv",
+    #     "evalset_path": "/data/rtas/retrieval-extrait/eval.csv",
+    #     "record_id_source_field": "id",
+    #     "top_k": 3,
+    #     "window_count": 6750,
+    # },
     "8-movie": {
         "data_source_A": "/data/rtas/8-movie/table_A.csv",
         "data_source_B": "/data/rtas/8-movie/table_B.csv",
@@ -422,7 +439,7 @@ def write_config(
 ) -> None:
     config = dict(base)
     dataset_config = DATASETS[dataset]
-    internal_keys = {"top_k", "record_id_source_field", "window_count"}
+    internal_keys = {"top_k", "record_id_source_field", "window_count", "bert_epochs"}
     config.update({key: value for key, value in dataset_config.items() if key not in internal_keys})
     # Model, index and record paths include version_name, so it must match the seed's.
     config["version_name"] = f"bench-{dataset}"
@@ -457,6 +474,8 @@ def write_config(
     config["bert_training"] = dict(
         base.get("bert_training", {}) or {}, device=bert_training_device, seed=1729,
     )
+    if "bert_epochs" in dataset_config:
+        config["bert_training"]["epochs"] = int(dataset_config["bert_epochs"])
     # One top_k for both the window's mutual top-k and the decision. Decision making off:
     # BERT matching judges each window's candidates directly (bert_matching is always on).
     top_k = int(dataset_config["top_k"])
@@ -737,6 +756,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None,
                         help="default: reports/serie1-capacity or reports/serie1-motivation")
     parser.add_argument("--dry-run", action="store_true", help="Generate configs without starting workloads")
+    parser.add_argument("--prep-only", action="store_true",
+                        help="Stop after the offline preparation (e.g. to evaluate the trained BERT first)")
     parser.add_argument("--keep-going", action="store_true", help="Continue after a failed experiment")
     parser.add_argument("--no-resume", action="store_true", help="Rerun trials already marked Succeeded")
     parser.add_argument(
@@ -918,6 +939,10 @@ def main() -> int:
                 print(f"Offline preparation failed for {dataset} on {node}; see {prep_path}",
                       file=sys.stderr)
                 return code
+
+    if args.prep_only:
+        print(f"Offline preparation done (--prep-only): {prep_path}")
+        return 0
 
     if args.warmup and not args.dry_run:
         for node in nodes:
