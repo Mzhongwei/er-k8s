@@ -31,10 +31,10 @@ spec:
           resources:
             requests:
               cpu: 500m
-              memory: 1Gi
+              memory: 2Gi
             limits:
               cpu: "2"
-              memory: 4Gi
+              memory: 8Gi
           volumeMounts:
             - name: pipeline-config
               mountPath: /app/config/examples/config-embedding.yaml
