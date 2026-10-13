@@ -62,7 +62,7 @@ DATASETS = {
         "trainset_path": "/data/rtas/retrieval-extrait/train.csv",
         "evalset_path": "/data/rtas/retrieval-extrait/eval.csv",
         "record_id_source_field": "id",
-        "top_k": 1,
+        "top_k": 3,
         # Records per window (kafka.window_count); large windows spread the per-window
         # checkpoint and snapshot costs over more records.
         "window_count": 6750,
@@ -74,7 +74,7 @@ DATASETS = {
         "trainset_path": "/data/rtas/8-movie/train.csv",
         "evalset_path": "/data/rtas/8-movie/eval.csv",
         "record_id_source_field": "id",
-        "top_k": 1,
+        "top_k": 3,
         "window_count": 450,
     },
     # "large1-pdc": {
@@ -148,7 +148,7 @@ ENERGY_SUMMARY_FIELDS = tuple(
 ) + ("alumet_workload_attributed_energy_j",)
 RUN_FIELDS = (
     "dataset", "sweeps", *POINT_FIELDS, "repetition", "base_node", "seed_store", "window_count",
-    "status", "run_dir", "all_mutual_topk_f1", "left_target_only_f1",
+    "top_k", "decision_making", "status", "run_dir", "all_mutual_topk_f1", "left_target_only_f1",
     *ENERGY_SUMMARY_FIELDS, "trial_index", "started_at", "finished_at", "return_code",
 )
 PREP_FIELDS = (
@@ -418,7 +418,7 @@ def seed_store_name(dataset: str, node: str) -> str:
 
 def write_config(
     base: dict[str, Any], destination: Path, dataset: str, point: Point,
-    bert_training_device: str, record_interval_ms: int | None = None,
+    bert_training_device: str, record_interval_ms: int | None = None, decision_making: bool = True,
 ) -> None:
     config = dict(base)
     dataset_config = DATASETS[dataset]
@@ -457,8 +457,12 @@ def write_config(
     config["bert_training"] = dict(
         base.get("bert_training", {}) or {}, device=bert_training_device, seed=1729,
     )
+    # One top_k for both the window's mutual top-k and the decision. Decision making off:
+    # BERT matching judges each window's candidates directly (bert_matching is always on).
+    top_k = int(dataset_config["top_k"])
+    config["calculating_similarity"] = dict(base.get("calculating_similarity", {}), top_k=top_k)
     config["decision_making"] = dict(
-        base.get("decision_making", {}), top_k=int(dataset_config["top_k"])
+        base.get("decision_making", {}), top_k=top_k, enabled=decision_making,
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
@@ -693,6 +697,11 @@ def main() -> int:
              "configurations (capacity_points); sweep: one factor at a time",
     )
     parser.add_argument(
+        "--decision-making", choices=("on", "off"), default="on",
+        help="on: BERT filters the embedding decision; off: BERT judges each window's mutual "
+             "top-k candidates directly (the decision is skipped)",
+    )
+    parser.add_argument(
         "--record-interval-ms", type=int, default=None,
         help="Producer pause between records (default: the simulator image's csv.file.timeout, "
              "50 ms); lower values shorten the stream and change the stream rate",
@@ -791,9 +800,13 @@ def main() -> int:
     if not isinstance(base, dict):
         raise RuntimeError("base config root must be a YAML object")
 
+    decision_making = args.decision_making == "on"
     default_output = {
         "single": "reports/serie1-single", "capacity": "reports/serie1-capacity",
     }.get(args.design, "reports/serie1-motivation")
+    # Matching settings change the results, so each gets its own directory and resume state.
+    top_ks = "-".join(sorted({str(DATASETS[dataset]["top_k"]) for dataset in datasets}))
+    default_output += f"-k{top_ks}-{'decision' if decision_making else 'bert-only'}"
     output = (args.output or ROOT / default_output).resolve()
     configs_dir = output / "configs"
     prep_path = output / "offline-prep.csv"
@@ -853,7 +866,8 @@ def main() -> int:
         # Every stage of a point runs on one node; the BERT node names it.
         node = point.bert_node
         config_path = configs_dir / f"{dataset}-{point.slug()}.yaml"
-        write_config(base, config_path, dataset, point, training_device[node], args.record_interval_ms)
+        write_config(base, config_path, dataset, point, training_device[node], args.record_interval_ms,
+                     decision_making=decision_making)
         return config_path, write_scheduling_config(output, node, point)
 
     def run_offline_prep(dataset: str, node: str) -> int:
@@ -868,7 +882,8 @@ def main() -> int:
             print(f"[prep] {dataset} seed {seed_store} already built")
             return 0
         config_path = configs_dir / f"{dataset}-{short_node(node)}-offline-prep.yaml"
-        write_config(base, config_path, dataset, prep_point, training_device[node])
+        write_config(base, config_path, dataset, prep_point, training_device[node],
+                     decision_making=decision_making)
         scheduling_config = write_scheduling_config(output, node, prep_point)
         print(f"[prep] {dataset} seed {seed_store} with {prep_point.slug()}", flush=True)
         if args.dry_run:
@@ -936,6 +951,7 @@ def main() -> int:
             "dataset": dataset, "sweeps": "+".join(points[point]), **point.as_row(),
             "repetition": repetition, "base_node": point.bert_node, "seed_store": seed_store,
             "window_count": DATASETS[dataset].get("window_count", base.get("kafka", {}).get("window_count", "")),
+            "top_k": DATASETS[dataset]["top_k"], "decision_making": args.decision_making,
             "status": status, "run_dir": str(run_dir.relative_to(ROOT)) if run_dir else "",
             "all_mutual_topk_f1": all_f1, "left_target_only_f1": left_f1,
             **(extract_energy(run_dir) if run_dir else {}), "trial_index": index,

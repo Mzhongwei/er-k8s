@@ -866,10 +866,15 @@ Run the single design (the default): one configuration per dataset (BERT on the 
 Gensim workers), run once on each dataset in `DATASETS`. Each dataset sets its own window size
 (`window_count`: 6750 for retrieval-extrait, 450 for 8-movie). `--record-interval-ms N` passes
 `csv.file.timeout=N` to the stream simulator (default 50 ms in its image) to shorten the
-stream; it changes the stream rate. Results go to `reports/serie1-single/`.
+stream; it changes the stream rate. Each dataset's `top_k` (3) sets both the similarity
+stage's and the decision's mutual top-k. BERT matching is always on; `--decision-making off`
+skips the embedding decision so BERT judges each window's candidates directly (see "Final
+matching" in `code/Energy-Aware-Entity-Resolution/README.md`). Results go to
+`reports/serie1-<design>-k<top_k>-<decision|bert-only>/`, one directory per matching setting.
 
 ```bash
-python3 exp/serie1-motivation.py --nodes server2 --energy-monitor ecofloc-alumet --keep-going
+python3 exp/serie1-motivation.py --nodes server2 --energy-monitor ecofloc-alumet --keep-going \
+  --decision-making off
 ```
 
 Run the capacity design (`--design capacity`): whole-pipeline configurations that scale BERT's
