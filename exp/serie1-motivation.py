@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import atexit
+import importlib.util
 import csv
 import json
 import math
@@ -38,6 +40,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -147,7 +150,7 @@ SWEEP_TASKS = {
     "embedding": {"incremental": ["embedding-training"]},
     "bert": {"incremental": ["bert-matching"]},
 }
-ENERGY_PROVIDERS = ("ecofloc", "alumet")
+ENERGY_PROVIDERS = ("ecofloc", "alumet", "rapl")
 POINT_FIELDS = (
     "random_walk_processes", "random_walk_node", "gensim_workers", "embedding_node",
     "bert_device", "bert_node", "bert_cpus",
@@ -162,10 +165,10 @@ ENERGY_SUMMARY_FIELDS = tuple(
         f"{provider}_status", f"{provider}_total_energy_j",
         *(f"{provider}_{component}_j" for component in ENERGY_COMPONENTS),
     )
-) + ("alumet_workload_attributed_energy_j",)
+) + ("alumet_workload_attributed_energy_j", "rapl_incremental_energy_j", "rapl_idle_power_w")
 RUN_FIELDS = (
     "dataset", "sweeps", *POINT_FIELDS, "repetition", "base_node", "seed_store", "window_count",
-    "top_k", "decision_making", "status", "run_dir", "all_mutual_topk_f1", "left_target_only_f1",
+    "top_k", "decision_making", "bert_threshold", "status", "run_dir", "all_mutual_topk_f1", "left_target_only_f1",
     *ENERGY_SUMMARY_FIELDS, "trial_index", "started_at", "finished_at", "return_code",
 )
 PREP_FIELDS = (
@@ -318,6 +321,58 @@ def write_ecofloc_nodes_file(output: Path, node: str) -> Path:
     return path
 
 
+class RaplSampler:
+    """RAPL+NVML sampling over the whole benchmark (k8s/monitoring/rapl/rapl.py): an idle
+    baseline first, then each run's energy is cut from the samples by its time interval."""
+
+    def __init__(self, output: Path, nodes: list[str], idle_seconds: int):
+        spec = importlib.util.spec_from_file_location("rapl", ROOT / "k8s/monitoring/rapl/rapl.py")
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        self.nodes, self.idle_seconds = nodes, idle_seconds
+        self.samples = output / "rapl" / datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        self.baselines: list[tuple[float, float]] = []
+
+    def start(self) -> None:
+        if not self.module.preflight(self.module.load_nodes(self.nodes)):
+            raise RuntimeError("RAPL preflight failed (see above)")
+        self.module.start(self.samples, self.nodes)
+        atexit.register(self.module.stop_sampler, self.samples)
+        self.baselines.append(self.idle("idle-before"))
+
+    def idle(self, label: str) -> tuple[float, float]:
+        print(f"[rapl] idle baseline {label}: {self.idle_seconds} s", flush=True)
+        self.module.mark(self.samples, f"{label}-start")
+        start = time.time()
+        time.sleep(self.idle_seconds)
+        self.module.mark(self.samples, f"{label}-end")
+        return start, time.time()
+
+    def record(self, run_dir: Path | None, started: str, finished: str) -> None:
+        if not run_dir:
+            return
+        try:
+            summary = self.module.summarize(
+                self.samples, self.module.parse_time(started), self.module.parse_time(finished), self.baselines,
+            )
+        except (OSError, ValueError, KeyError) as error:
+            print(f"[rapl] no summary for {run_dir.name}: {error}", file=sys.stderr)
+            return
+        path = run_dir / "energy" / "rapl-summary.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    def finish(self, output: Path) -> None:
+        """A second idle period, summarized against the first one: its incremental energy
+        should be close to zero; otherwise the idle power drifted during the benchmark."""
+        after = self.idle("idle-after")
+        drift = self.module.summarize(self.samples, *after, self.baselines)
+        (output / "rapl-idle-drift.json").write_text(json.dumps(drift, indent=2), encoding="utf-8")
+        print(f"[rapl] idle drift over {self.idle_seconds} s: {drift['incremental_by_component_j']} J "
+              f"(baseline {[n['idle_power_w'] for n in drift['nodes'].values()]} W)")
+        self.module.stop_sampler(self.samples)
+
+
 def node_env(node: str, ecofloc_nodes_file: Path | None) -> dict[str, str]:
     """Environment of a pipeline run on ``node``: energy monitors and the seed Job stay on it."""
     env = {**alumet_env([node]), "SEED_JOB_NODE": node}
@@ -436,6 +491,7 @@ def seed_store_name(dataset: str, node: str) -> str:
 def write_config(
     base: dict[str, Any], destination: Path, dataset: str, point: Point,
     bert_training_device: str, record_interval_ms: int | None = None, decision_making: bool = True,
+    bert_threshold: float | None = None,
 ) -> None:
     config = dict(base)
     dataset_config = DATASETS[dataset]
@@ -466,6 +522,8 @@ def write_config(
     config["bert_matching"] = dict(
         base.get("bert_matching", {}), enabled=True, device=point.bert_device,
     )
+    if bert_threshold is not None:
+        config["bert_matching"]["threshold"] = float(bert_threshold)
     if point.bert_device == "cpu":
         config["bert_matching"]["cpus"] = point.bert_cpus
     else:
@@ -516,7 +574,9 @@ def extract_f1(run_dir: Path) -> tuple[Any, Any]:
 def extract_energy(run_dir: Path) -> dict[str, Any]:
     """Whole-run energy from both providers, side by side, split by hardware component."""
     row: dict[str, Any] = {}
-    for provider, components_key in (("ecofloc", "by_metric_j"), ("alumet", "hardware_by_device_j")):
+    for provider, components_key in (
+        ("ecofloc", "by_metric_j"), ("alumet", "hardware_by_device_j"), ("rapl", "by_component_j"),
+    ):
         data = read_json(run_dir / "energy" / f"{provider}-summary.json")
         if not data:
             continue
@@ -535,6 +595,12 @@ def extract_energy(run_dir: Path) -> dict[str, Any]:
             row[f"{provider}_{component}_j"] = round(value, 6)
         if provider == "alumet":
             row["alumet_workload_attributed_energy_j"] = data.get("workload_attributed_energy_j", "")
+        if provider == "rapl":
+            row["rapl_incremental_energy_j"] = data.get("incremental_energy_j", "")
+            row["rapl_idle_power_w"] = round(sum(
+                power for node in data.get("nodes", {}).values()
+                for power in node.get("idle_power_w", {}).values()
+            ), 3)
     return row
 
 
@@ -721,6 +787,10 @@ def main() -> int:
              "top-k candidates directly (the decision is skipped)",
     )
     parser.add_argument(
+        "--bert-threshold", type=float, default=None,
+        help="bert_matching.threshold (default: the base config's, 0.5); see exp/bert_threshold_eval.py",
+    )
+    parser.add_argument(
         "--record-interval-ms", type=int, default=None,
         help="Producer pause between records (default: the simulator image's csv.file.timeout, "
              "50 ms); lower values shorten the stream and change the stream rate",
@@ -753,6 +823,13 @@ def main() -> int:
     )
     parser.add_argument("--warmup", action="store_true", help="Run the baseline once, unrecorded, first")
     parser.add_argument("--energy-monitor", choices=("ecofloc", "alumet", "ecofloc-alumet"), default="ecofloc-alumet")
+    parser.add_argument(
+        "--rapl", action="store_true",
+        help="Also measure RAPL (CPU, DRAM) and NVML (GPU) energy with an idle baseline "
+             "(k8s/monitoring/rapl); virtual nodes are measured on their physical host",
+    )
+    parser.add_argument("--idle-seconds", type=int, default=600,
+                        help="Idle baseline before and after the benchmark with --rapl (default 600)")
     parser.add_argument("--output", type=Path, default=None,
                         help="default: reports/serie1-capacity or reports/serie1-motivation")
     parser.add_argument("--dry-run", action="store_true", help="Generate configs without starting workloads")
@@ -888,7 +965,7 @@ def main() -> int:
         node = point.bert_node
         config_path = configs_dir / f"{dataset}-{point.slug()}.yaml"
         write_config(base, config_path, dataset, point, training_device[node], args.record_interval_ms,
-                     decision_making=decision_making)
+                     decision_making=decision_making, bert_threshold=args.bert_threshold)
         return config_path, write_scheduling_config(output, node, point)
 
     def run_offline_prep(dataset: str, node: str) -> int:
@@ -912,6 +989,8 @@ def main() -> int:
         result, run_dir, started, finished = start_pipeline(
             config_path, scheduling_config, args.energy_monitor, "batch", seed_store, run_env(node),
         )
+        if rapl:
+            rapl.record(run_dir, started, finished)
         manifest = read_json(run_dir / "manifest.json") if run_dir else {}
         prep_rows[:] = [
             row for row in prep_rows
@@ -931,6 +1010,9 @@ def main() -> int:
     if "alumet" in args.energy_monitor and not args.dry_run:
         # Collect only on the selected nodes; collectors elsewhere are removed.
         run(["bash", "k8s/erctl.sh", "alumet", "start"], env=alumet_env(nodes))
+    rapl = RaplSampler(output, nodes, args.idle_seconds) if args.rapl and not args.dry_run else None
+    if rapl:
+        rapl.start()
 
     for dataset in datasets:
         for node in nodes:
@@ -969,6 +1051,8 @@ def main() -> int:
             config_path, scheduling_config, args.energy_monitor, "incremental", seed_store,
             run_env(point.bert_node),
         )
+        if rapl:
+            rapl.record(run_dir, started, finished)
         manifest = read_json(run_dir / "manifest.json") if run_dir else {}
         status = str(manifest.get("status") or ("Succeeded" if result.returncode == 0 else "Failed"))
         all_f1, left_f1 = extract_f1(run_dir) if run_dir else ("", "")
@@ -977,6 +1061,7 @@ def main() -> int:
             "repetition": repetition, "base_node": point.bert_node, "seed_store": seed_store,
             "window_count": DATASETS[dataset].get("window_count", base.get("kafka", {}).get("window_count", "")),
             "top_k": DATASETS[dataset]["top_k"], "decision_making": args.decision_making,
+            "bert_threshold": args.bert_threshold if args.bert_threshold is not None else "",
             "status": status, "run_dir": str(run_dir.relative_to(ROOT)) if run_dir else "",
             "all_mutual_topk_f1": all_f1, "left_target_only_f1": left_f1,
             **(extract_energy(run_dir) if run_dir else {}), "trial_index": index,
@@ -999,6 +1084,8 @@ def main() -> int:
     write_csv(runs_path, RUN_FIELDS, rows)
     write_csv(stages_path, STAGE_FIELDS, stage_data)
     write_csv(energy_path, ENERGY_FIELDS, energy_data)
+    if rapl:
+        rapl.finish(output)
     print(f"Offline preparation (recorded, not analyzed): {prep_path}")
     print(f"Run summary: {runs_path}")
     print(f"Per-stage timings: {stages_path}")

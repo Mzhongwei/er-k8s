@@ -22,6 +22,15 @@ alumet-relay-client:
 alumet-relay-server:
   nodeSelector:
     kubernetes.io/hostname: server2-labo
+  # The chart default (128Mi) is OOM-killed after hours of collection; each restart also
+  # stops the clients' sources until they are restarted (see alumet.py).
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
   plugins:
     influxdb:
       enable: true

@@ -1,0 +1,24 @@
+# RAPL/NVML energy sampling nodes (rapl.py). Copy to nodes.conf and edit.
+#
+#   node  ssh  host  vm
+#   node  Kubernetes node name (as in runs and ERCTL_ALUMET_NODES)
+#   ssh   how to reach the node: local, or an ssh destination (user@host or alias)
+#   host  physical host of the node when it is a virtual machine (ssh destination), else -
+#   vm    qemu guest name of the node on that host (qemu -name guest=...), else -
+#
+# Whether a node is a virtual machine is detected with systemd-detect-virt; a virtual node
+# without host/vm is refused. GPU power is read with nvidia-smi on the node itself.
+#
+# Every RAPL target (the node, or the host of a virtual node) needs, for passwordless reads:
+#   /usr/local/bin/read-rapl  (root-owned, 755):
+#     #!/bin/sh
+#     t=$(date +%s.%N)
+#     for z in /sys/class/powercap/intel-rapl:*; do
+#       printf '%s %s %s %s %s\n' "$t" "${z##*/}" "$(cat "$z/name")" "$(cat "$z/energy_uj")" "$(cat "$z/max_energy_range_uj")"
+#     done
+#   /etc/sudoers.d/read-rapl  (440):  <user> ALL=(root) NOPASSWD: /usr/local/bin/read-rapl
+#
+# Run from server2 (the coordinator); ssh destinations need key-based login (BatchMode).
+
+server2-labo         local                   -              -
+server1-k3s-worker   vagrant@192.168.1.53    server1-host   k3s-worker-vm_default

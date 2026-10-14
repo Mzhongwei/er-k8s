@@ -14,7 +14,9 @@
 # Runs one Job with the pipeline's BERT image and one GPU on $NODE (default server2-labo). It
 # waits for the GPU, so do not run it while a pipeline holds the GPU. The model comes from the
 # seed store (<seed>/bert/bench-<dataset>), the tables from the dataset volume. Results:
-#   <run_dir>/bert-threshold-eval/{report.json,pairs.csv,log.txt}
+#   <run_dir>/bert-threshold-eval-<dataset>/{report.json,pairs.csv,log.txt}
+# Writes under <seed volume>/_eval; make it writable once to run without sudo:
+#   sudo mkdir -p /srv/nfs/k8s/eaer-seeds/_eval && sudo chmod a+rwx /srv/nfs/k8s/eaer-seeds/_eval
 set -euo pipefail
 
 RUN_DIR="$(cd "${1:?usage: $0 <run_dir> [dataset] [limit]}" && pwd)"
@@ -41,7 +43,7 @@ IMAGE="$(tr -d '[:space:]' < "$ROOT/k8s/images/image-repository.conf"):bert"
 # The decision pairs reach the Pod through the (writable) seed volume.
 WORK_NAME="_eval/${JOB}-$(date +%Y%m%d-%H%M%S)"
 WORK_HOST_DIR="$SEED_HOST_DIR/$WORK_NAME"
-SUDO=""; [ -w "$SEED_HOST_DIR" ] || SUDO="sudo"
+SUDO=""; [ -w "$SEED_HOST_DIR/_eval" ] || SUDO="sudo"
 $SUDO mkdir -p "$WORK_HOST_DIR"
 $SUDO cp "$PAIRS" "$WORK_HOST_DIR/predicted_matching.csv"
 $SUDO chmod -R a+rwX "$WORK_HOST_DIR"
@@ -106,10 +108,11 @@ kubectl logs -n "$NAMESPACE" -f "job/$JOB" || true
 kubectl wait -n "$NAMESPACE" --for=condition=complete "job/$JOB" --timeout=60s >/dev/null 2>&1 \
     || { echo "$JOB did not succeed; see: kubectl describe job -n $NAMESPACE $JOB" >&2; exit 1; }
 
-OUT="$RUN_DIR/bert-threshold-eval"
+OUT="$RUN_DIR/bert-threshold-eval-$DATASET"
 mkdir -p "$OUT"
 cp "$WORK_HOST_DIR/out/report.json" "$WORK_HOST_DIR/out/pairs.csv" "$OUT/"
 kubectl logs -n "$NAMESPACE" "job/$JOB" > "$OUT/log.txt" 2>&1 || true
-$SUDO rm -rf "$WORK_HOST_DIR"
+# The Pod's files may belong to another user; a leftover work directory is harmless.
+$SUDO rm -rf "$WORK_HOST_DIR" 2>/dev/null || echo "note: could not remove $WORK_HOST_DIR" >&2
 kubectl delete configmap -n "$NAMESPACE" "$JOB-script" --ignore-not-found=true >/dev/null
 echo "Results: $OUT/report.json and $OUT/pairs.csv"
