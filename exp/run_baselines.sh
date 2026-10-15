@@ -39,7 +39,8 @@ phase() {
     local code=$?
     build=1  # images are built (or reused) by the first phase only
     log "phase $name: exit code $code"
-    return $code
+    # A failing phase (e.g. offline preparation) usually fails the next ones the same way.
+    [ "$code" -eq 0 ] || { log "stopping; fix the error above, then rerun (completed trials are skipped)"; exit "$code"; }
 }
 
 for name in $PHASES; do

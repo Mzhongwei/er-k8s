@@ -496,6 +496,21 @@ def write_scheduling_config(output: Path, base_node: str, point: Point) -> Path:
     return entry_path
 
 
+def seed_on_disk(seed_store: str) -> Path | None:
+    """The seed directory when this host is the NFS server and the seed is complete: the seed
+    Job publishes graph/embedding/index/bert in one rename (k8s/pipeline/pipeline.sh)."""
+    manifest = ROOT / "k8s/datasets/seed-volume.yaml"
+    if not manifest.exists():
+        return None
+    match = re.search(r"^\s*path:\s*(\S+)", manifest.read_text(encoding="utf-8"), re.MULTILINE)
+    seed = Path(match.group(1)) / seed_store if match else None
+    try:
+        complete = seed is not None and all((seed / part).is_dir() for part in ("graph", "embedding", "index", "bert"))
+    except PermissionError:
+        return None
+    return seed if complete else None
+
+
 def seed_store_name(dataset: str, node: str) -> str:
     return f"serie1-{dataset}-{short_node(node_config(node).get('seed_node', node))}"
 
@@ -1009,9 +1024,11 @@ def main() -> int:
         # directory is reused, so all of them start from the same models.
         elsewhere = [path for path in sorted((ROOT / "reports").glob("*/offline-prep.csv"))
                      if path != prep_path and built(load_rows(path))]
-        if (built(prep_rows) or elsewhere) and not args.rebuild_seeds:
-            print(f"[prep] {dataset} seed {seed_store} already built"
-                  + ("" if built(prep_rows) else f" (recorded in {elsewhere[-1].relative_to(ROOT)})"))
+        on_disk = seed_on_disk(seed_store)
+        if (built(prep_rows) or elsewhere or on_disk) and not args.rebuild_seeds:
+            where = ("" if built(prep_rows) else f" (recorded in {elsewhere[-1].relative_to(ROOT)})" if elsewhere
+                     else f" (found in {on_disk})")
+            print(f"[prep] {dataset} seed {seed_store} already built{where}")
             return 0
         config_path = configs_dir / f"{dataset}-{short_node(node)}-offline-prep.yaml"
         write_config(base, config_path, dataset, prep_point, training_device[node],
