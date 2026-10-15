@@ -52,10 +52,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "code/Energy-Aware-Entity-Resolution/config/examples/config-embedding.yaml"
 SERVER2 = "server2-labo"
+SERVER1 = "server1-k3s-worker"
 THINKPAD = "k3s-worker-thinkpad"
 # Short names accepted by --nodes (besides "both" and the full node names); also used in slugs.
-NODE_ALIASES = {"server2": SERVER2, "thinkpad": THINKPAD}
-NODE_SHORT = {SERVER2: "s2", THINKPAD: "tp"}
+NODE_ALIASES = {"server2": SERVER2, "server1": SERVER1, "thinkpad": THINKPAD}
+NODE_SHORT = {SERVER2: "s2", SERVER1: "s1", THINKPAD: "tp"}
 RESULTS_ROOT = ROOT / "k8s/results"
 DATASETS = {
     # retrieval-extrait with a BERT training set from a run's embedding decision: the B
@@ -74,6 +75,12 @@ DATASETS = {
         "window_count": 6750,
         # bert_training.epochs; training keeps the epoch with the lowest eval loss.
         "bert_epochs": 5,
+        # bert_matching.max_matches_per_left/right without the decision: every A matches
+        # exactly one B, a B may match several A (A holds several offers of one product).
+        "max_matches": (1, None),
+        # Default --bert-threshold: best projected F1 of exp/bert_threshold_eval.py on the
+        # round-5 candidates (0.95 keeps 95% of true pairs, 59% of false ones).
+        "bert_threshold": 0.95,
     },
     # Superseded by retrieval-extrait-hn: its 800 training pairs (half random negatives,
     # 2 epochs) left BERT's probabilities squeezed between 0.3 and 0.75.
@@ -96,6 +103,7 @@ DATASETS = {
         "record_id_source_field": "id",
         "top_k": 3,
         "window_count": 450,
+        "max_matches": (1, 1),  # one-to-one
     },
     # "large1-pdc": {
     #     "data_source_A": "/data/large_datasets/large1-pdc/tableA.jsonl",
@@ -130,6 +138,10 @@ DEFAULT_NODE_CONFIG: dict[str, Any] = {
 }
 NODE_OVERRIDES: dict[str, dict[str, Any]] = {
     SERVER2: {},
+    # Virtual machine on a shared host (16 CPUs, 47 GB, Quadro RTX 4000); its data volumes are
+    # NFS on server2. It reuses server2's seed (same BERT and initial embedding), so runs on
+    # both nodes start from identical models; "seed_node" also skips its offline preparation.
+    SERVER1: {"seed_node": SERVER2},
     # Fewer than 8 allocatable CPUs and no GPU.
     THINKPAD: {
         "bert_training_device": "cpu",
@@ -168,7 +180,7 @@ ENERGY_SUMMARY_FIELDS = tuple(
 ) + ("alumet_workload_attributed_energy_j", "rapl_incremental_energy_j", "rapl_idle_power_w")
 RUN_FIELDS = (
     "dataset", "sweeps", *POINT_FIELDS, "repetition", "base_node", "seed_store", "window_count",
-    "top_k", "decision_making", "bert_threshold", "status", "run_dir", "all_mutual_topk_f1", "left_target_only_f1",
+    "top_k", "decision_making", "bert_threshold", "max_matches", "status", "run_dir", "all_mutual_topk_f1", "left_target_only_f1",
     *ENERGY_SUMMARY_FIELDS, "trial_index", "started_at", "finished_at", "return_code",
 )
 PREP_FIELDS = (
@@ -485,7 +497,7 @@ def write_scheduling_config(output: Path, base_node: str, point: Point) -> Path:
 
 
 def seed_store_name(dataset: str, node: str) -> str:
-    return f"serie1-{dataset}-{short_node(node)}"
+    return f"serie1-{dataset}-{short_node(node_config(node).get('seed_node', node))}"
 
 
 def write_config(
@@ -495,7 +507,9 @@ def write_config(
 ) -> None:
     config = dict(base)
     dataset_config = DATASETS[dataset]
-    internal_keys = {"top_k", "record_id_source_field", "window_count", "bert_epochs"}
+    internal_keys = {
+        "top_k", "record_id_source_field", "window_count", "bert_epochs", "max_matches", "bert_threshold",
+    }
     config.update({key: value for key, value in dataset_config.items() if key not in internal_keys})
     # Model, index and record paths include version_name, so it must match the seed's.
     config["version_name"] = f"bench-{dataset}"
@@ -522,8 +536,14 @@ def write_config(
     config["bert_matching"] = dict(
         base.get("bert_matching", {}), enabled=True, device=point.bert_device,
     )
+    if bert_threshold is None:
+        bert_threshold = dataset_config.get("bert_threshold")
     if bert_threshold is not None:
         config["bert_matching"]["threshold"] = float(bert_threshold)
+    if "max_matches" in dataset_config:
+        left, right = dataset_config["max_matches"]
+        config["bert_matching"]["max_matches_per_left"] = left
+        config["bert_matching"]["max_matches_per_right"] = right
     if point.bert_device == "cpu":
         config["bert_matching"]["cpus"] = point.bert_cpus
     else:
@@ -761,7 +781,7 @@ def start_pipeline(
         "bash", "k8s/erctl.sh", "pipeline", "start", "-c", str(config_path),
         "--scheduling-config", str(scheduling_config),
         "--phase", phase, "--seed-store", seed_store,
-        "--energy-monitor", energy_monitor, "--results-summary",
+        *(["--energy-monitor", energy_monitor] if energy_monitor != "none" else []), "--results-summary",
     ], check=False, env=env)
     finished = datetime.now(timezone.utc).isoformat()
     after = {path.resolve() for path in RESULTS_ROOT.glob("embedding-training-inference-evaluation-*")}
@@ -788,7 +808,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--bert-threshold", type=float, default=None,
-        help="bert_matching.threshold (default: the base config's, 0.5); see exp/bert_threshold_eval.py",
+        help="bert_matching.threshold for every dataset (default: the dataset's bert_threshold, else the "
+             "base config's 0.5); see exp/bert_threshold_eval.py",
     )
     parser.add_argument(
         "--record-interval-ms", type=int, default=None,
@@ -800,7 +821,7 @@ def main() -> int:
                         help="sweep design only: comma-separated subset of: " + ",".join(SWEEP_TASKS))
     parser.add_argument(
         "--nodes", default="server2",
-        help="server2 (default), thinkpad, or both (also comma-separated full node names); every "
+        help="server2 (default), server1, thinkpad, or both (= server2 + thinkpad) (also comma-separated full node names); every "
              "stage of a run executes on one node and each selected node runs every test",
     )
     parser.add_argument("--baseline-processes", type=int, default=1, help="Random-walk processes when not swept")
@@ -822,7 +843,10 @@ def main() -> int:
         help="Randomize trial order with this seed; the order is saved to trial-order.json",
     )
     parser.add_argument("--warmup", action="store_true", help="Run the baseline once, unrecorded, first")
-    parser.add_argument("--energy-monitor", choices=("ecofloc", "alumet", "ecofloc-alumet"), default="ecofloc-alumet")
+    parser.add_argument(
+        "--energy-monitor", choices=("ecofloc", "alumet", "ecofloc-alumet", "none"), default="ecofloc-alumet",
+        help="none: neither (e.g. with --rapl only, or on server1 where both fail inside the VM)",
+    )
     parser.add_argument(
         "--rapl", action="store_true",
         help="Also measure RAPL (CPU, DRAM) and NVML (GPU) energy with an idle baseline "
@@ -855,7 +879,7 @@ def main() -> int:
         selected = [SERVER2, THINKPAD] if value == "both" else [NODE_ALIASES.get(value, value)]
         for node in selected:
             if node not in NODE_OVERRIDES:
-                parser.error(f"unknown node {value}; use server2, thinkpad, both, or a NODE_OVERRIDES key")
+                parser.error(f"unknown node {value}; use server2, server1, thinkpad, both, or a NODE_OVERRIDES key")
             if node not in nodes:
                 nodes.append(node)
     if not nodes:
@@ -971,13 +995,23 @@ def main() -> int:
     def run_offline_prep(dataset: str, node: str) -> int:
         """Train once per dataset and node at the highest configuration and save the seed."""
         seed_store = seed_store_name(dataset, node)
+        seed_node = node_config(node).get("seed_node", node)
+        if seed_node != node:
+            print(f"[prep] {dataset} on {node} reuses {seed_node}'s seed {seed_store}")
+            return 0
         prep_point = prep_points[node]
-        done = any(
-            row.get("dataset") == dataset and row.get("seed_store") == seed_store
-            and row.get("status") == "Succeeded" for row in prep_rows
-        )
-        if done and not args.rebuild_seeds:
-            print(f"[prep] {dataset} seed {seed_store} already built")
+        def built(rows: list[dict[str, str]]) -> bool:
+            return any(
+                row.get("dataset") == dataset and row.get("seed_store") == seed_store
+                and row.get("status") == "Succeeded" for row in rows
+            )
+        # A seed is shared by every benchmark on this node: one built for another output
+        # directory is reused, so all of them start from the same models.
+        elsewhere = [path for path in sorted((ROOT / "reports").glob("*/offline-prep.csv"))
+                     if path != prep_path and built(load_rows(path))]
+        if (built(prep_rows) or elsewhere) and not args.rebuild_seeds:
+            print(f"[prep] {dataset} seed {seed_store} already built"
+                  + ("" if built(prep_rows) else f" (recorded in {elsewhere[-1].relative_to(ROOT)})"))
             return 0
         config_path = configs_dir / f"{dataset}-{short_node(node)}-offline-prep.yaml"
         write_config(base, config_path, dataset, prep_point, training_device[node],
@@ -1010,7 +1044,10 @@ def main() -> int:
     if "alumet" in args.energy_monitor and not args.dry_run:
         # Collect only on the selected nodes; collectors elsewhere are removed.
         run(["bash", "k8s/erctl.sh", "alumet", "start"], env=alumet_env(nodes))
-    rapl = RaplSampler(output, nodes, args.idle_seconds) if args.rapl and not args.dry_run else None
+    # server2 serves the volumes (NFS) and Kafka to every node: a run on server1 also costs
+    # energy there, so server2 is always sampled (its idle baseline cancels when unused).
+    rapl = RaplSampler(output, sorted({*nodes, SERVER2}), args.idle_seconds) \
+        if args.rapl and not args.dry_run else None
     if rapl:
         rapl.start()
 
@@ -1061,7 +1098,9 @@ def main() -> int:
             "repetition": repetition, "base_node": point.bert_node, "seed_store": seed_store,
             "window_count": DATASETS[dataset].get("window_count", base.get("kafka", {}).get("window_count", "")),
             "top_k": DATASETS[dataset]["top_k"], "decision_making": args.decision_making,
-            "bert_threshold": args.bert_threshold if args.bert_threshold is not None else "",
+            "bert_threshold": next((value for value in (args.bert_threshold, DATASETS[dataset].get("bert_threshold"))
+                                    if value is not None), ""),
+            "max_matches": "/".join(str(v or "any") for v in DATASETS[dataset].get("max_matches", (None, None))),
             "status": status, "run_dir": str(run_dir.relative_to(ROOT)) if run_dir else "",
             "all_mutual_topk_f1": all_f1, "left_target_only_f1": left_f1,
             **(extract_energy(run_dir) if run_dir else {}), "trial_index": index,

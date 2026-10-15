@@ -1,10 +1,21 @@
 # RAPL/NVML energy sampling nodes (rapl.py). Copy to nodes.conf and edit.
 #
-#   node  ssh  host  vm
+#   node  ssh  host  vm  [nic_w=W] [nic_gbps=G] [nic=IFACE] [disk=DEV[,DEV] disk_active_w=W disk_idle_w=W]
 #   node  Kubernetes node name (as in runs and ERCTL_ALUMET_NODES)
 #   ssh   how to reach the node: local, or an ssh destination (user@host or alias)
 #   host  physical host of the node when it is a virtual machine (ssh destination), else -
 #   vm    qemu guest name of the node on that host (qemu -name guest=...), else -
+#
+#   nic_w     active power of the node's (physical) NIC from its datasheet; enables the NIC
+#             model nic_w * (rx + tx bytes/s) / line rate on the node's interface counters
+#             (a VM's own interface: its traffic only). Without it, no NIC energy.
+#   nic_gbps  line rate in Gb/s (default 1); nic: interface (default: the default route's)
+#   Find the NIC with: lspci | grep -i ether; ethtool <iface> | grep Speed
+#   disk      block devices (as in /proc/diskstats) of a physical node, e.g. the one holding the
+#             NFS exports: df /srv/nfs/k8s; lsblk -dno NAME,MODEL,ROTA,TRAN
+#   disk_active_w, disk_idle_w  datasheet active / idle power, one value or one per disk;
+#             model idle + (active - idle) * busy fraction from io_ticks
+#   Physical nodes always record node and nfsd CPU time (summary: data_service).
 #
 # Whether a node is a virtual machine is detected with systemd-detect-virt; a virtual node
 # without host/vm is refused. GPU power is read with nvidia-smi on the node itself.
@@ -20,5 +31,11 @@
 #
 # Run from server2 (the coordinator); ssh destinations need key-based login (BatchMode).
 
-server2-labo         local                   -              -
-server1-k3s-worker   vagrant@192.168.1.53    server1-host   k3s-worker-vm_default
+# server2: NIC Intel I210 (enp2s0, 02:00.0; <0.75 W at 1000BASE-T, Intel support 000088049);
+#          NFS exports on nvme1n1, Solidigm P41 Plus (NVMe power states: PS0 max 4.00 W,
+#          PS3 0.025 W, from smartctl -c). Both maxima: the models are upper bounds.
+# server1: host NIC Aquantia AQC108 (enp7s0 under br0) linked at 1 Gb/s; 4 W is the AQN-108
+#          card's typical power at 5 Gb/s (Marvell brief), an upper bound at 1 Gb/s. Its NIC
+#          counters are the VM's own interface: the other VMs' traffic is not counted.
+server2-labo         local                   -              -                       nic_w=0.75 nic_gbps=1 disk=nvme1n1 disk_active_w=4.0 disk_idle_w=0.025
+server1-k3s-worker   vagrant@192.168.1.53    server1-host   k3s-worker-vm_default   nic_w=4 nic_gbps=1

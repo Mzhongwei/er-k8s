@@ -8,7 +8,20 @@ is read on its physical host, whose other virtual machines are separated from ou
 time of each qemu process (``attribution`` in the summary). Its GPU, passed through, is read
 inside the virtual machine, where the driver is.
 
-Nodes are listed in nodes.conf, else nodes.conf.example. Every RAPL target needs the
+Nodes are listed in nodes.conf, else nodes.conf.example.
+
+The NIC is not measured but modelled, for nodes given its active power (nic_w): with the
+byte counters of the node's default-route interface (inside a virtual machine: its own
+traffic only),
+    P_nic = nic_w * (sent + received bytes/s) / (nic_gbps * 1e9 / 8).
+Traffic between Pods of one node and to a local NFS server never reaches the NIC.
+
+Disks are modelled from /proc/diskstats on physical nodes given their datasheet power
+(disk=, disk_active_w=, disk_idle_w=): P = idle + (active - idle) * busy fraction (io_ticks),
+which counts every request that reaches the device -- the NFS server's included -- and not the
+writes absorbed by the page cache. On physical nodes the sampler also records the CPU time of
+the whole node and of the kernel NFS server threads (nfsd), so a summary splits the node's
+incremental CPU energy into its NFS-server share (``data_service``). Every RAPL target needs the
 read-only helper /usr/local/bin/read-rapl with a passwordless sudo rule (see the example).
 
     rapl.py preflight [--nodes a,b]
@@ -50,9 +63,28 @@ COMPONENT_OF_ZONE = {"package": "cpu", "dram": "ram"}
 # ---------------------------------------------------------------------------- nodes
 
 class Node:
-    def __init__(self, name: str, ssh: str, host: str, vm: str):
+    def __init__(self, name: str, ssh: str, host: str, vm: str, options: dict[str, str] | None = None):
         self.name, self.ssh, self.host, self.vm = name, ssh, host, vm
         self.virtual = False  # set by detect()
+        options = options or {}
+        known = {"nic_w", "nic_gbps", "nic", "disk", "disk_active_w", "disk_idle_w"}
+        unknown = set(options) - known
+        if unknown:
+            raise SystemExit(f"{name}: unknown options {', '.join(sorted(unknown))} ({', '.join(sorted(known))})")
+        self.nic_w = float(options["nic_w"]) if "nic_w" in options else None
+        self.nic_gbps = float(options.get("nic_gbps", 1))
+        self.nic = options.get("nic")  # interface; default: the default route's
+        # Block devices (comma-separated) with their active / idle power, one value or one per disk.
+        disks = [d for d in options.get("disk", "").split(",") if d]
+        def per_disk(key):
+            values = [float(v) for v in options.get(key, "").split(",") if v]
+            if disks and len(values) not in (1, len(disks)):
+                raise SystemExit(f"{name}: {key} needs one value or one per disk")
+            return values * len(disks) if len(values) == 1 else values
+        active, idle = per_disk("disk_active_w"), per_disk("disk_idle_w")
+        if disks and not (active and idle):
+            raise SystemExit(f"{name}: disk= needs disk_active_w= and disk_idle_w=")
+        self.disks = {disk: (a, i) for disk, a, i in zip(disks, active, idle)}
 
     @property
     def rapl_target(self) -> str:
@@ -66,9 +98,10 @@ def load_nodes(selected: list[str] | None = None) -> list[Node]:
         fields = line.split("#", 1)[0].split()
         if not fields:
             continue
-        if len(fields) != 4:
-            raise SystemExit(f"{path}: expected 'node ssh host vm', got: {line.strip()}")
-        nodes.append(Node(*(None if value == "-" else value for value in fields)))
+        if len(fields) < 4 or any("=" not in field for field in fields[4:]):
+            raise SystemExit(f"{path}: expected 'node ssh host vm [key=value ...]', got: {line.strip()}")
+        options = dict(field.split("=", 1) for field in fields[4:])
+        nodes.append(Node(*(None if value == "-" else value for value in fields[:4]), options))
     if selected:
         unknown = set(selected) - {node.name for node in nodes}
         if unknown:
@@ -119,6 +152,35 @@ while :; do
 done
 """
 
+# On the node itself: cumulative bytes of one interface, one 'N' line per second.
+NIC_SAMPLE = """
+i={nic}
+[ -n "$i" ] || i=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p')
+[ -r /sys/class/net/$i/statistics/rx_bytes ] || {{ echo "no interface statistics for '$i'" >&2; exit 3; }}
+sample() {{ echo "N $(date +%s.%N) $i $(cat /sys/class/net/$i/statistics/rx_bytes) $(cat /sys/class/net/$i/statistics/tx_bytes)"; }}
+"""
+NIC_LOOP = NIC_SAMPLE + """
+while :; do sample; sleep {period}; done
+"""
+
+# On a physical node: whole-node CPU ticks ('C' busy total), kernel NFS server ticks ('F'),
+# and per configured disk the sectors read/written and busy milliseconds ('D').
+SYS_LOOP = """
+tck=$(getconf CLK_TCK)
+while :; do
+  t=$(date +%s.%N)
+  awk -v t="$t" '/^cpu /{{b=$2+$3+$4+$7+$8+$9; print "C", t, b, b+$5+$6; exit}}' /proc/stat
+  n=0
+  for p in $(pgrep -x nfsd); do
+    s=$(cat /proc/$p/stat 2>/dev/null) || continue
+    n=$((n + $(echo "$s" | sed 's/^.*) //' | awk '{{print $12 + $13}}')))
+  done
+  echo "F $t $n $tck"
+  for d in {disks}; do awk -v t="$t" -v d="$d" '$3 == d {{print "D", t, d, $6, $10, $13}}' /proc/diskstats; done
+  sleep {period}
+done
+"""
+
 GPU_LOOP = ("command -v nvidia-smi >/dev/null || exit 0; "
             "f=power.draw.instant; nvidia-smi --query-gpu=$f --format=csv >/dev/null 2>&1 || f=power.draw; "
             "exec stdbuf -oL nvidia-smi --query-gpu=index,name,$f --format=csv,noheader,nounits "
@@ -141,6 +203,16 @@ def preflight(nodes: list[Node]) -> bool:
                 if node.vm not in names:
                     raise RuntimeError(f"no qemu process named {node.vm} on {node.host} (found: {', '.join(names)})")
                 note = f"; host {node.host} runs {len(names)} VMs: {', '.join(names)}"
+            if not node.virtual:
+                present = set(check_output(node.ssh, "awk '{print $3}' /proc/diskstats").split())
+                missing = set(node.disks) - present
+                if missing:
+                    raise RuntimeError(f"disks not in /proc/diskstats: {', '.join(sorted(missing))}")
+                nfsd = len(check_output(node.ssh, "pgrep -x nfsd || true").split())
+                note += f"; nfsd threads={nfsd}" + (f"; disks {','.join(node.disks)}" if node.disks else "")
+            if node.nic_w is not None:
+                line = check_output(node.ssh, NIC_SAMPLE.format(nic=node.nic or "") + "sample\n")
+                note += f"; NIC model {line.split()[2]} {node.nic_w} W at {node.nic_gbps:g} Gb/s"
             print(f"[ok] {node.name}: {'VM, RAPL on ' + node.host if node.virtual else 'RAPL local'} "
                   f"zones={','.join(zones)} gpu={','.join(gpus) or 'none'}{note}")
         except (RuntimeError, subprocess.TimeoutExpired) as error:
@@ -171,7 +243,7 @@ class Stream(threading.Thread):
                 self.process = subprocess.Popen(command(self.target, self.script), stdout=subprocess.PIPE,
                                                 stderr=subprocess.PIPE, text=True, bufsize=1)
                 for line in self.process.stdout:
-                    self.handle(line.split() if self.kind == "rapl" else line, files)
+                    self.handle(line if self.kind == "gpu" else line.split(), files)
                 code = self.process.wait()
                 error = (self.process.stderr.read() or "").strip().replace("\n", " ")[:300]
                 if self.stop.is_set():
@@ -205,6 +277,15 @@ class Stream(threading.Thread):
                        "\t".join(line[1:]))
         elif line and line[0] == "Q" and len(line) == 6:
             self.write(files, f"qemu-{self.node.name}.tsv", "t\tpid\tvm\tcpu_ticks\tclk_tck", "\t".join(line[1:]))
+        elif line and line[0] == "C" and len(line) == 4:
+            self.write(files, f"cpu-{self.node.name}.tsv", "t\tbusy_ticks\ttotal_ticks", "\t".join(line[1:]))
+        elif line and line[0] == "F" and len(line) == 4:
+            self.write(files, f"nfsd-{self.node.name}.tsv", "t\tcpu_ticks\tclk_tck", "\t".join(line[1:]))
+        elif line and line[0] == "D" and len(line) == 6:
+            self.write(files, f"disk-{self.node.name}.tsv", "t\tdisk\tsectors_read\tsectors_written\tbusy_ms",
+                       "\t".join(line[1:]))
+        elif line and line[0] == "N" and len(line) == 5:
+            self.write(files, f"nic-{self.node.name}.tsv", "t\tinterface\trx_bytes\ttx_bytes", "\t".join(line[1:]))
 
     def terminate(self) -> None:
         if self.process and self.process.poll() is None:
@@ -218,7 +299,9 @@ def run_sampler(out: Path, nodes: list[Node]) -> None:
     (out / "sampler.json").write_text(json.dumps({
         "started_at": time.time(),
         "nodes": {node.name: {"virtual": node.virtual, "rapl_target": node.rapl_target,
-                              "gpu_target": node.ssh, "vm": node.vm if node.virtual else None}
+                              "gpu_target": node.ssh, "vm": node.vm if node.virtual else None,
+                              "nic_w": node.nic_w, "nic_gbps": node.nic_gbps,
+                              "disks": {d: {"active_w": a, "idle_w": i} for d, (a, i) in node.disks.items()}}
                   for node in nodes},
     }, indent=2), encoding="utf-8")
     stop = threading.Event()
@@ -227,6 +310,12 @@ def run_sampler(out: Path, nodes: list[Node]) -> None:
         rapl_script = RAPL_LOOP.format(read_rapl=READ_RAPL, qemu="1" if node.virtual else "", period=RAPL_PERIOD_S)
         streams.append(Stream(out, node, "rapl", node.rapl_target, rapl_script, stop))
         streams.append(Stream(out, node, "gpu", node.ssh, GPU_LOOP, stop))
+        if not node.virtual:
+            sys_script = SYS_LOOP.format(disks=" ".join(node.disks), period=RAPL_PERIOD_S)
+            streams.append(Stream(out, node, "sys", node.ssh, sys_script, stop))
+        if node.nic_w is not None:
+            nic_script = NIC_LOOP.format(nic=node.nic or "", period=RAPL_PERIOD_S)
+            streams.append(Stream(out, node, "nic", node.ssh, nic_script, stop))
 
     def shutdown(*_):
         stop.set()
@@ -341,8 +430,9 @@ def max_gap(times: list[float], start: float, end: float) -> float:
     return max(b - a for a, b in zip(inside, inside[1:]))
 
 
-def energy_series(out: Path, node: str) -> dict[str, list[tuple[float, float]]]:
-    """Per component, the cumulative energy (J) of the node: RAPL zones and integrated GPU power."""
+def energy_series(out: Path, node: str, info: dict | None = None) -> dict[str, list[tuple[float, float]]]:
+    """Per component, the cumulative energy (J) of the node: RAPL zones, integrated GPU power
+    and, with nic_w in ``info`` (sampler.json), the modelled NIC energy."""
     zones: dict[str, list[tuple[float, float, float]]] = {}
     names: dict[str, str] = {}
     for row in read_tsv(out / f"rapl-{node}.tsv"):
@@ -369,6 +459,30 @@ def energy_series(out: Path, node: str) -> dict[str, list[tuple[float, float]]]:
                 total += (t - t0) * (power + p0) / 2
             series.append((t, total))
         components.setdefault("gpu", []).append(series)
+    if info and info.get("nic_w") is not None:
+        # E = nic_w * bytes / (bytes/s at line rate); a counter reset adds nothing.
+        joules_per_byte = info["nic_w"] / (info["nic_gbps"] * 1e9 / 8)
+        series, total, previous = [], 0.0, None
+        for row in read_tsv(out / f"nic-{node}.tsv"):
+            count = float(row["rx_bytes"]) + float(row["tx_bytes"])
+            if previous is not None and count >= previous:
+                total += (count - previous) * joules_per_byte
+            previous = count
+            series.append((float(row["t"]), total))
+        if series:
+            components["nic"] = [series]
+    disks = (info or {}).get("disks") or {}
+    busy: dict[str, list[tuple[float, float]]] = {}
+    for row in read_tsv(out / f"disk-{node}.tsv"):
+        if row["disk"] in disks:
+            busy.setdefault(row["disk"], []).append((float(row["t"]), float(row["busy_ms"]) / 1000))
+    for disk, samples in busy.items():
+        # E(t) = idle * elapsed + (active - idle) * busy seconds, from the first sample on.
+        active, idle = disks[disk]["active_w"], disks[disk]["idle_w"]
+        samples.sort()
+        t0, b0 = samples[0]
+        components.setdefault("storage", []).append(
+            [(t, idle * (t - t0) + (active - idle) * max(0.0, b - b0)) for t, b in samples])
     # Sum several sockets / GPUs of one component on the union of their time stamps.
     merged = {}
     for component, parts in components.items():
@@ -489,7 +603,7 @@ def summarize(out: Path, start: float, end: float, baselines: list[tuple[float, 
     totals: dict[str, float] = {}
     incremental: dict[str, float] = {}
     for node, info in meta["nodes"].items():
-        series = energy_series(out, node)
+        series = energy_series(out, node, info)
         energies, gaps = interval_energy(series, start, end)
         node_summary = {"virtual": info["virtual"], "total_j": {c: round(e, 3) for c, e in energies.items()},
                         "max_gap_s": {c: round(g, 3) for c, g in gaps.items()}}
@@ -528,17 +642,80 @@ def summarize(out: Path, start: float, end: float, baselines: list[tuple[float, 
                 else:
                     node_incremental[component] = share
         node_summary["incremental_j"] = {c: round(e, 3) for c, e in node_incremental.items()}
+        service = data_service(out, node, info, start, end, baselines, node_incremental)
+        if service:
+            node_summary["data_service"] = service
         summary["nodes"][node] = node_summary
         for component, value in energies.items():
             totals[component] = totals.get(component, 0.0) + value
         for component, value in node_incremental.items():
             incremental[component] = incremental.get(component, 0.0) + value
     summary["measurement_status"] = status if baselines else f"{status} (no idle baseline)"
+    modelled = {}
+    if any(info.get("nic_w") is not None for info in meta["nodes"].values()):
+        modelled["nic"] = "nic_w * (rx + tx bytes/s) / line rate, not measured"
+    if any(info.get("disks") for info in meta["nodes"].values()):
+        modelled["storage"] = "idle_w + (active_w - idle_w) * busy fraction (diskstats io_ticks), not measured"
+    if modelled:
+        summary["modelled_components"] = modelled
     summary["by_component_j"] = {c: round(v, 3) for c, v in totals.items()}
     summary["total_energy_j"] = round(sum(totals.values()), 3)
     summary["incremental_by_component_j"] = {c: round(v, 3) for c, v in incremental.items()}
     summary["incremental_energy_j"] = round(sum(incremental.values()), 3) if baselines else None
     return summary
+
+
+def counter_series(rows: list[dict[str, str]], column: str) -> list[tuple[float, float]]:
+    return sorted((float(row["t"]), float(row[column])) for row in rows)
+
+
+def increase(series: list[tuple[float, float]], start: float, end: float) -> float | None:
+    a, b = value_at(series, start), value_at(series, end)
+    return None if a is None or b is None else b - a
+
+
+def data_service(out: Path, node: str, info: dict, start: float, end: float,
+                 baselines: list[tuple[float, float]], incremental: dict[str, float]) -> dict:
+    """The node's work for data exchange: kernel NFS server CPU time and its share of the
+    incremental CPU energy (by CPU time above idle), disk traffic, and the modelled
+    storage and NIC increments."""
+    cpu_rows = read_tsv(out / f"cpu-{node}.tsv")
+    nfsd_rows = read_tsv(out / f"nfsd-{node}.tsv")
+    if not cpu_rows or not nfsd_rows:
+        return {}
+    busy, nfsd = counter_series(cpu_rows, "busy_ticks"), counter_series(nfsd_rows, "cpu_ticks")
+    tck = float(nfsd_rows[0]["clk_tck"])
+    duration = end - start
+    busy_run, nfsd_run = increase(busy, start, end), increase(nfsd, start, end)
+    if busy_run is None or nfsd_run is None:
+        return {"error": "no CPU samples over the interval"}
+
+    def idle_rate(series):
+        rates = [increase(series, *b) / (b[1] - b[0]) for b in baselines if increase(series, *b) is not None]
+        return sum(rates) / len(rates) if rates else 0.0
+
+    busy_excess = busy_run - idle_rate(busy) * duration
+    nfsd_excess = nfsd_run - idle_rate(nfsd) * duration
+    share = min(1.0, max(0.0, nfsd_excess / busy_excess)) if busy_excess > 0 else 0.0
+    result = {
+        "nfsd_cpu_seconds": round(nfsd_run / tck, 3),
+        "nfsd_share_of_incremental_cpu_time": round(share, 4),
+        "nfsd_cpu_j": round(share * incremental["cpu"], 3) if "cpu" in incremental and baselines else None,
+    }
+    disks = info.get("disks") or {}
+    rows = [row for row in read_tsv(out / f"disk-{node}.tsv") if row["disk"] in disks]
+    if rows:
+        read = written = 0.0
+        for disk in disks:
+            mine = [row for row in rows if row["disk"] == disk]
+            read += increase(counter_series(mine, "sectors_read"), start, end) or 0.0
+            written += increase(counter_series(mine, "sectors_written"), start, end) or 0.0
+        result["disk_read_gb"] = round(read * 512 / 1e9, 3)
+        result["disk_written_gb"] = round(written * 512 / 1e9, 3)
+    for component in ("storage", "nic"):
+        if component in incremental:
+            result[f"{component}_incremental_j"] = round(incremental[component], 3)
+    return result
 
 
 def frange(start: float, stop: float, step: float):
