@@ -81,6 +81,12 @@ DATASETS = {
         # Default --bert-threshold: best projected F1 of exp/bert_threshold_eval.py on the
         # round-5 candidates (0.95 keeps 95% of true pairs, 59% of false ones).
         "bert_threshold": 0.95,
+        # Candidate generation without the decision (calculating_similarity): running best
+        # with k=2 and cosine >= 0.5 keeps the recall of the mutual top-3 (0.42) with a third
+        # of its pairs (exp/blocking_rules.py on the round-7 model), so BERT on the P2200
+        # (~42 pairs/s) keeps up with T = 135 s; the budget caps the first windows.
+        "candidates": {"candidate_rule": "running_best", "running_best_k": 2,
+                       "min_similarity": 0.5, "pairs_per_window": 5000},
     },
     # Superseded by retrieval-extrait-hn: its 800 training pairs (half random negatives,
     # 2 epochs) left BERT's probabilities squeezed between 0.3 and 0.75.
@@ -104,6 +110,7 @@ DATASETS = {
         "top_k": 3,
         "window_count": 450,
         "max_matches": (1, 1),  # one-to-one
+        "candidates": {"candidate_rule": "running_best", "running_best_k": 2, "min_similarity": 0.5},
     },
     # "large1-pdc": {
     #     "data_source_A": "/data/large_datasets/large1-pdc/tableA.jsonl",
@@ -522,12 +529,14 @@ def seed_store_name(dataset: str, node: str) -> str:
 def write_config(
     base: dict[str, Any], destination: Path, dataset: str, point: Point,
     bert_training_device: str, record_interval_ms: int | None = None, decision_making: bool = True,
-    bert_threshold: float | None = None,
+    bert_threshold: float | None = None, candidate_rule: str = "dataset",
+    workers_schedule: list[int] | None = None, replay_windows: list[int] | None = None,
 ) -> None:
     config = dict(base)
     dataset_config = DATASETS[dataset]
     internal_keys = {
         "top_k", "record_id_source_field", "window_count", "bert_epochs", "max_matches", "bert_threshold",
+        "candidates",
     }
     config.update({key: value for key, value in dataset_config.items() if key not in internal_keys})
     # Model, index and record paths include version_name, so it must match the seed's.
@@ -577,6 +586,16 @@ def write_config(
     # BERT matching judges each window's candidates directly (bert_matching is always on).
     top_k = int(dataset_config["top_k"])
     config["calculating_similarity"] = dict(base.get("calculating_similarity", {}), top_k=top_k)
+    # Candidate rule without the decision: the dataset's (default), or forced.
+    candidates = dict(dataset_config.get("candidates") or {}) if candidate_rule == "dataset" \
+        else {"candidate_rule": candidate_rule}
+    if decision_making:
+        candidates = {}
+    config["calculating_similarity"].update(candidates)
+    if workers_schedule:
+        config["embeddings_training"]["workers_schedule"] = list(workers_schedule)
+    if replay_windows:
+        config["replay"] = {"snapshot_windows": list(replay_windows)}
     config["decision_making"] = dict(
         base.get("decision_making", {}), top_k=top_k, enabled=decision_making,
     )
@@ -831,6 +850,24 @@ def main() -> int:
              "base config's 0.5); see exp/bert_threshold_eval.py",
     )
     parser.add_argument(
+        "--candidate-rule", choices=("dataset", "mutual_topk", "running_best"), default="dataset",
+        help="Candidate generation without the decision: the dataset's (DATASETS candidates; "
+             "default) or a forced rule",
+    )
+    parser.add_argument(
+        "--workers-schedule", default="",
+        help="Comma-separated Gensim worker counts cycled over the windows (E1a), e.g. 2,4,8,12; "
+             "the Word2Vec Pod gets as many CPUs as the largest",
+    )
+    parser.add_argument(
+        "--replay-windows", default="",
+        help="Comma-separated window ordinals whose state is saved for replay (E1b), e.g. 10,75,145",
+    )
+    parser.add_argument(
+        "--gensim-workers", type=int, default=None,
+        help="Override the Word2Vec workers of the design's points (Pod CPUs and config)",
+    )
+    parser.add_argument(
         "--record-interval-ms", type=int, default=None,
         help="Producer pause between records (default: the simulator image's csv.file.timeout, "
              "50 ms); lower values shorten the stream and change the stream rate",
@@ -885,6 +922,10 @@ def main() -> int:
         help="Rerun the offline preparation even if offline-prep.csv records a successful one",
     )
     args = parser.parse_args()
+    workers_schedule = [int(v) for v in split_list(args.workers_schedule)] if args.workers_schedule else []
+    replay_windows = [int(v) for v in split_list(args.replay_windows)] if args.replay_windows else []
+    if workers_schedule and args.gensim_workers is None:
+        args.gensim_workers = max(workers_schedule)  # the Pod must fit the largest count
 
     datasets = split_list(args.datasets)
     unknown = sorted(set(datasets) - set(DATASETS))
@@ -930,6 +971,9 @@ def main() -> int:
         node_points = capacity_points(node, configs[node][args.design]) \
             if args.design in ("single", "capacity") \
             else build_points(baselines[node], sweeps, matrix)
+        if args.gensim_workers is not None:
+            node_points = {replace(point, gensim_workers=args.gensim_workers): labels
+                           for point, labels in node_points.items()}
         points.update(node_points)
         if not args.dry_run:
             validate_cluster(
@@ -1008,7 +1052,9 @@ def main() -> int:
         node = point.bert_node
         config_path = configs_dir / f"{dataset}-{point.slug()}.yaml"
         write_config(base, config_path, dataset, point, training_device[node], args.record_interval_ms,
-                     decision_making=decision_making, bert_threshold=args.bert_threshold)
+                     decision_making=decision_making, bert_threshold=args.bert_threshold,
+                     candidate_rule=args.candidate_rule, workers_schedule=workers_schedule,
+                     replay_windows=replay_windows)
         return config_path, write_scheduling_config(output, node, point)
 
     def run_offline_prep(dataset: str, node: str) -> int:
