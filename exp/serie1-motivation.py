@@ -363,6 +363,9 @@ class RaplSampler:
     def record(self, run_dir: Path | None, started: str, finished: str) -> None:
         if not run_dir:
             return
+        # The samplers write every second: wait until samples past the end of the run exist,
+        # otherwise its last second has no sample after it and the interval looks uncovered.
+        time.sleep(max(0.0, self.module.parse_time(finished) + 5 - time.time()))
         try:
             summary = self.module.summarize(
                 self.samples, self.module.parse_time(started), self.module.parse_time(finished), self.baselines,
@@ -378,6 +381,7 @@ class RaplSampler:
         """A second idle period, summarized against the first one: its incremental energy
         should be close to zero; otherwise the idle power drifted during the benchmark."""
         after = self.idle("idle-after")
+        time.sleep(5)  # samples past the end of the idle period, as in record()
         drift = self.module.summarize(self.samples, *after, self.baselines)
         (output / "rapl-idle-drift.json").write_text(json.dumps(drift, indent=2), encoding="utf-8")
         print(f"[rapl] idle drift over {self.idle_seconds} s: {drift['incremental_by_component_j']} J "
