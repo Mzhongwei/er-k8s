@@ -19,7 +19,23 @@ REQUIREMENTS=code/Energy-Aware-Entity-Resolution/requirements/for_entries
 
 case "${1:-}" in
     setup)
-        python3 -m venv "$VENV"
+        # The BERT image's pins (transformers 4.30.2, tokenizers 0.13.3) have wheels up to
+        # Python 3.11 only; newer Pythons build tokenizers from source (needs Rust).
+        if [ -x "$VENV/bin/python" ] && ! "$VENV/bin/python" -c 'import sys; sys.exit(sys.version_info[:2] != (3, 11))'; then
+            echo "$VENV is not Python 3.11: remove it (rm -rf $VENV) and rerun setup" >&2
+            exit 1
+        fi
+        if [ ! -x "$VENV/bin/python" ]; then
+            if command -v "${PYTHON:-python3.11}" >/dev/null; then
+                "${PYTHON:-python3.11}" -m venv "$VENV"
+            elif command -v uv >/dev/null; then
+                uv venv --seed --python 3.11 "$VENV"  # uv fetches a standalone Python 3.11
+            else
+                echo "Python 3.11 not found: install python3.11 (with venv), set PYTHON=/path/to/python3.11," >&2
+                echo "or install uv (https://docs.astral.sh/uv/) so setup can fetch one" >&2
+                exit 1
+            fi
+        fi
         # Same versions as docker/Dockerfile.bert; scipy as in the embedding image (TF-IDF).
         "$VENV/bin/pip" install --upgrade pip
         "$VENV/bin/pip" install torch==2.5.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
