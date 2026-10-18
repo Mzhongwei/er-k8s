@@ -2,6 +2,7 @@
 # TF-IDF + BERT demo (exp-caise/run_demo.py) on a GPU node, outside Kubernetes.
 #
 #   bash exp-caise/run_demo.sh setup              # once: Python venv with the BERT image's packages
+#   bash exp-caise/run_demo.sh check              # every dataset's files in place under DATA_ROOT?
 #   nohup bash exp-caise/run_demo.sh run > caise-demo.log 2>&1 &
 #   bash exp-caise/run_demo.sh run --datasets abt_buy,movie --threshold 0.7
 #
@@ -29,6 +30,10 @@ AutoModelForSequenceClassification.from_pretrained("bert-base-uncased", num_labe
 AutoTokenizer.from_pretrained("bert-base-uncased")'
         "$VENV/bin/python" -c 'import torch; print("CUDA available:", torch.cuda.is_available())'
         ;;
+    check)
+        shift
+        "$VENV/bin/python" exp-caise/run_demo.py --data-root "$DATA_ROOT" --check "$@"
+        ;;
     run)
         shift
         nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv || true
@@ -36,7 +41,7 @@ AutoTokenizer.from_pretrained("bert-base-uncased")'
             --data-root "$DATA_ROOT" --output "$OUTPUT" --device cuda "$@"
         ;;
     *)
-        echo "usage: $0 setup | run [run_demo.py arguments]" >&2
+        echo "usage: $0 setup | check [--datasets ...] | run [run_demo.py arguments]" >&2
         exit 2
         ;;
 esac

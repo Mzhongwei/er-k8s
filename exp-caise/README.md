@@ -22,6 +22,7 @@ On server1 (GPU), from the repository root:
 
 ```bash
 bash exp-caise/run_demo.sh setup                       # once
+DATA_ROOT=/data bash exp-caise/run_demo.sh check       # files of every dataset in place?
 nohup bash exp-caise/run_demo.sh run > caise-demo.log 2>&1 &
 # a subset, another threshold, or candidates only:
 bash exp-caise/run_demo.sh run --datasets abt_buy,movie --threshold 0.7

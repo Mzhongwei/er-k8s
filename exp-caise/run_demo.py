@@ -214,12 +214,65 @@ def run_dataset(name: str, settings: dict, args) -> dict:
     return result
 
 
+def check_dataset(name: str, settings: dict, data_root: Path) -> list[str]:
+    """Problems with a dataset's files (empty: ready); prints what was found."""
+    directory = data_root / settings["dir"]
+    if not directory.is_dir():
+        print(f"[check] FAIL {name:22s} {directory}\n         - directory does not exist", flush=True)
+        return ["directory does not exist"]
+    problems, found = [], {}
+    for key, names in (("A", ("tableA.csv", "table_A.csv")), ("B", ("tableB.csv", "table_B.csv")),
+                       ("matches", ("matches.txt",)), ("train", ("train.csv",)),
+                       ("valid", ("valid.csv", "eval.csv"))):
+        try:
+            found[key] = first_file(directory, *names)
+        except FileNotFoundError:
+            problems.append(f"missing {' or '.join(names)}")
+    tables = {}
+    for side in ("A", "B"):
+        if side in found:
+            columns = list(pd.read_csv(found[side], nrows=0).columns)
+            if "id" not in columns:
+                problems.append(f"table {side} has no id column ({columns})")
+                continue
+            ids = pd.read_csv(found[side], usecols=["id"])["id"].astype(str)
+            if ids.duplicated().any():
+                problems.append(f"table {side}: {int(ids.duplicated().sum())} duplicate ids")
+            missing_fields = [f for f in settings.get("fields") or [] if f not in [c.lower() for c in columns]]
+            if missing_fields:
+                problems.append(f"table {side} lacks TF-IDF fields {missing_fields}")
+            tables[side] = set(ids)
+    line = f"A={len(tables.get('A', ()))} B={len(tables.get('B', ()))}"
+    if "matches" in found:
+        pairs = read_matches(found["matches"])
+        if not pairs:
+            problems.append("matches.txt is empty")
+        elif len(tables) == 2:
+            present = sum(left in tables["A"] and right in tables["B"] for left, right in pairs)
+            line += f" matches={len(pairs)} (ids in tables: {present / len(pairs):.0%})"
+            if present / len(pairs) < 0.5:
+                problems.append("fewer than half of matches.txt's ids are in the tables (swapped sides or wrong files?)")
+    for key in ("train", "valid"):
+        if key in found:
+            frame = pd.read_csv(found[key])
+            sides = {column.split(".")[0] for column in frame.columns if "." in column}
+            if "label" not in frame.columns or not {"table1", "table2"} <= sides:
+                problems.append(f"{found[key].name} needs label, table1.* and table2.* columns")
+            else:
+                line += f" {found[key].name}={len(frame)} ({int(frame['label'].sum())} positive)"
+    print(f"[check] {'OK  ' if not problems else 'FAIL'} {name:22s} {directory}  {line}", flush=True)
+    for problem in problems:
+        print(f"         - {problem}", flush=True)
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data-root", type=Path, default=Path("/data"))
     parser.add_argument("--datasets-file", type=Path, default=Path(__file__).with_name("datasets.yaml"))
     parser.add_argument("--datasets", help="comma-separated names from the datasets file (default: all)")
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--check", action="store_true", help="only check that every dataset's files are in place")
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--no-bert", dest="bert", action="store_false", help="candidates only")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--epochs", type=int, help="BERT epochs (default: per dataset)")
@@ -231,9 +284,16 @@ def main() -> int:
     parser.add_argument("--pairs-per-window", type=int, help="keep at most this many candidates per window")
     args = parser.parse_args()
     args.data_root = args.data_root.resolve()
+    names = args.datasets.split(",") if args.datasets else None
+    if args.check:
+        failed = [name for name, settings in dataset_settings(args.datasets_file, names).items()
+                  if check_dataset(name, settings, args.data_root)]
+        print(f"[check] {'all datasets ready' if not failed else 'not ready: ' + ', '.join(failed)}")
+        return 1 if failed else 0
+    if args.output is None:
+        parser.error("--output is required (except with --check)")
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
-    names = args.datasets.split(",") if args.datasets else None
 
     rows = []
     for name, settings in dataset_settings(args.datasets_file, names).items():
