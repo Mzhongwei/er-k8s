@@ -1,0 +1,40 @@
+# Datasets of the TF-IDF demo (run_demo.py). `dir` is relative to --data-root; each directory
+# holds tableA.csv|table_A.csv, tableB.csv|table_B.csv, matches.txt, train.csv and
+# valid.csv|eval.csv (BERT training/validation pairs).
+#
+#   window       B records per window (the stream's kafka.window_count)
+#   k            running-best depth: an A record proposes a B that enters its k best so far
+#                (itunes: B holds duplicate listings whose scores tie; ties go to the
+#                smaller id, so a larger k keeps the labelled duplicate)
+#   query_top_k  each B also proposes its best A records (needed where an A matches several B)
+#   max_matches  [per A, per B] after BERT (null: unlimited), from the dataset's cardinality:
+#                [1, 1] clean-clean one-to-one, [1, null] dirty A against a clean B
+#   fields       columns tokenized for TF-IDF (default: all attribute columns)
+defaults:
+  window: 450
+  k: 2
+  query_top_k: 0
+  max_matches: [null, null]
+  bert_epochs: 3
+
+datasets:
+  amazon_google:      {dir: exp_datasets/1-amazon_google, query_top_k: 3}
+  fodors_zagats:      {dir: exp_datasets/2-fordors_zagats, max_matches: [1, 1]}
+  beer:               {dir: exp_datasets/3-beer, max_matches: [1, 1]}
+  dblp_acm:           {dir: exp_datasets/4-dblp_acm, max_matches: [1, 1]}
+  dblp_acm_dirty:     {dir: exp_datasets/4-1_dirty_dblp_acm, max_matches: [1, 1]}
+  dblp_scholar:       {dir: exp_datasets/5-dblp_scholar, query_top_k: 3}
+  dblp_scholar_dirty: {dir: exp_datasets/5_1-dirty_dblp_scholar, query_top_k: 3}
+  itunes_amazon:      {dir: exp_datasets/6-itunes_amazon, k: 4, query_top_k: 1}
+  itunes_amazon_dirty: {dir: exp_datasets/6_1-dirty_itunes_amazon, k: 4, query_top_k: 1}
+  walmart_amazon:     {dir: exp_datasets/7-walmart_amazon, query_top_k: 3}
+  walmart_amazon_dirty: {dir: exp_datasets/7_1-dirty_walmart_amazon, query_top_k: 3}
+  movie:              {dir: exp_datasets/8-movie, max_matches: [1, 1]}
+  abt_buy:            {dir: exp_datasets/9-abt_buy, query_top_k: 3}
+  # The RTAS stream: B records of the BERT training pairs are held out of the stream.
+  retrieval_hn:
+    dir: rtas/retrieval-extrait-hn
+    window: 6750
+    max_matches: [1, null]
+    fields: [brand, title]
+    bert_epochs: 5

@@ -1,10 +1,12 @@
 """Time and RAPL/NVML energy of the replayed windows (output of exp/run_replay.sh).
 
-  python3 exp/replay_analyze.py reports/replay-<dataset>-<time>
+  python3 exp/replay_analyze.py reports/replay-<dataset>-<time> [node]
 
 For every repetition, the phases of exp/replay_stage.py are matched with the node's samples:
 incremental (above-idle, baseline from the idle period before the replays) energy of CPU
-package, DRAM and GPU per phase. Writes results.csv and prints per (state, alternative) means:
+package, DRAM and GPU per phase; on a virtual node, its attributed share of the host. If other
+nodes were sampled (the NFS server when replaying on another node), their increment is added
+as <phase>_storage_j. Writes results.csv and prints per (state, alternative) means:
 
   Word2Vec  restore (model load), train, write; train energy per window; reconfiguration
             latency L = Pod start (creation -> container start) + imports + restore
@@ -26,14 +28,17 @@ rapl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rapl)
 
 
-def incremental(samples: Path, start: float, end: float, baselines) -> dict[str, float]:
+def incremental(samples: Path, start: float, end: float, baselines) -> dict[str, dict[str, float]]:
     summary = rapl.summarize(samples, start, end, baselines)
-    node = next(iter(summary["nodes"].values()))
-    return {component: node["incremental_j"].get(component, 0.0) for component in ("cpu", "ram", "gpu")}
+    return {name: {component: node["incremental_j"].get(component, 0.0) for component in ("cpu", "ram", "gpu")}
+            for name, node in summary["nodes"].items()}
 
 
-def main(out: Path) -> int:
+def main(out: Path, node: str | None = None) -> int:
     samples = out / "rapl"
+    nodes = list(json.loads((samples / "sampler.json").read_text())["nodes"])
+    node = node or nodes[0]
+    others = [name for name in nodes if name != node]
     marks = {label: float(t) for t, label in
              (line.split("\t", 1) for line in (samples / "marks.tsv").read_text().splitlines())}
     baselines = [(marks["idle-before-start"], marks["idle-before-end"])]
@@ -58,8 +63,11 @@ def main(out: Path) -> int:
                "pod_start_s": pods.get(job), "imports_s": record["imports_done"] - record["process_start"]}
         for phase, (a, b) in phases.items():
             row[f"{phase}_s"] = round(record[b] - record[a], 3)
-            energy = incremental(samples, record[a], record[b], baselines)
+            per_node = incremental(samples, record[a], record[b], baselines)
+            energy = per_node[node]
             row[f"{phase}_j"] = round(sum(energy.values()), 1)
+            if others:
+                row[f"{phase}_storage_j"] = round(sum(sum(per_node[name].values()) for name in others), 1)
             row[f"{phase}_cpu_j"] = round(energy["cpu"], 1)
             row[f"{phase}_gpu_j"] = round(energy["gpu"], 1)
         if record["mode"] == "word2vec" and row["pod_start_s"] is not None:
@@ -87,9 +95,10 @@ def main(out: Path) -> int:
         work = "train" if stage == "word2vec" else "judge"
         print(f"{stage:9s} {state:6s} {alternative:12s} {mean(group, 'restore_s'):9.1f} {mean(group, work + '_s'):8.1f} "
               f"{mean(group, 'write_s'):8.1f} {mean(group, work + '_j'):8.0f} {mean(group, 'reconfiguration_s'):6.1f}")
-    print(f"\nresults: {out / 'results.csv'}  (energy: incremental CPU package + DRAM + GPU, idle baseline before the replays)")
+    print(f"\nresults: {out / 'results.csv'}  (energy on {node}: incremental CPU package + DRAM + GPU, "
+          f"idle baseline before the replays" + (f"; storage side on {', '.join(others)} in *_storage_j)" if others else ")"))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(Path(sys.argv[1])))
+    sys.exit(main(Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None))

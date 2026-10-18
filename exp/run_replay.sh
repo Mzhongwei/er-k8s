@@ -11,7 +11,10 @@
 #   nohup bash exp/run_replay.sh retrieval-extrait-hn > replay.log 2>&1 &
 # Environment: STATES ("10 75 145"), WORKERS ("2 4 8 12"), REPS (2), BERT_STATE (75),
 # BERT_DEVICES ("cuda cpu:8 cpu:12"), IDLE_SECONDS (300), NODE (server2-labo).
-# Results: reports/replay-<dataset>-<time>/{replay.jsonl,pods.jsonl,rapl/,results.csv}
+# E2b, on another node: NODE=server1-k3s-worker. The states stay on the NFS volumes served by
+# server2, so a restore on server1 reads them across nodes; server2 is sampled as well and its
+# increment is reported as the storage side of each phase. Nothing else may run on either node.
+# Results: reports/replay-<dataset>[-<node>]-<time>/{replay.jsonl,pods.jsonl,rapl/,results.csv}
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,8 +28,11 @@ BERT_DEVICES="${BERT_DEVICES:-cuda cpu:8 cpu:12}"
 IDLE_SECONDS="${IDLE_SECONDS:-300}"
 NODE="${NODE:-server2-labo}"
 NAMESPACE="${NAMESPACE:-argo}"
+STORAGE_NODE="${STORAGE_NODE:-server2-labo}"  # serves the NFS volumes
 REPO="$(tr -d '[:space:]' < k8s/images/image-repository.conf)"
-OUT="reports/replay-${DATASET}-$(date +%Y%m%d-%H%M%S)"
+SUFFIX=""; [ "$NODE" != "$STORAGE_NODE" ] && SUFFIX="-${NODE%%-*}"
+OUT="reports/replay-${DATASET}${SUFFIX}-$(date +%Y%m%d-%H%M%S)"
+RAPL_NODES="$NODE"; [ "$NODE" != "$STORAGE_NODE" ] && RAPL_NODES="$NODE,$STORAGE_NODE"
 RAPL="python3 k8s/monitoring/rapl/rapl.py"
 mkdir -p "$OUT"
 log() { echo "[$(date '+%F %T')] $*"; }
@@ -34,7 +40,8 @@ log() { echo "[$(date '+%F %T')] $*"; }
 kubectl create configmap -n "$NAMESPACE" replay-script --from-file=replay_stage.py=exp/replay_stage.py \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
-$RAPL start --out "$OUT/rapl" --nodes "$NODE"
+$RAPL preflight --nodes "$RAPL_NODES"
+$RAPL start --out "$OUT/rapl" --nodes "$RAPL_NODES"
 trap '$RAPL stop --out "$OUT/rapl" >/dev/null 2>&1 || true' EXIT
 idle() {
     log "idle $1: ${IDLE_SECONDS} s"
@@ -124,5 +131,5 @@ idle idle-after
 $RAPL stop --out "$OUT/rapl"
 trap - EXIT
 kubectl delete configmap -n "$NAMESPACE" replay-script --ignore-not-found=true >/dev/null
-python3 exp/replay_analyze.py "$OUT"
+python3 exp/replay_analyze.py "$OUT" "$NODE"
 log "results in $OUT"

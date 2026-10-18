@@ -24,6 +24,11 @@ import matplotlib.pyplot as plt  # noqa: E402
 RECORDS = Path("/home/zhongwei/Data_integration/experiment_records/rtas_data")
 ROUND5 = RECORDS / "round5/results/embedding-training-inference-evaluation-20261014-081018-1458128"
 ROUND6 = RECORDS / "round6/baseline-single-s2"
+# Word2Vec workers cycled over windows (2, 4, 8, 12 by window ordinal mod 4), RB_2 candidates.
+ROUND9 = RECORDS / "round9/results/embedding-training-inference-evaluation-20261016-181537-3912421"
+WORKERS_SCHEDULE = (2, 4, 8, 12)
+# Ordinal blue ramp (steps 250/400/550/700), validated with validate_palette.js --ordinal.
+WORKER_COLORS = ("#86b6ef", "#3987e5", "#1c5cab", "#0d366b")
 PAPER = Path("/home/zhongwei/Documents/Papers-latex/RTAS_2027__ddl_05_11_2026__/figures")
 WINDOW_RECORDS = 6750
 PERIOD_S = 135.0  # 6,750 records x 20 ms
@@ -203,10 +208,64 @@ def figure_power(report: Path, out: Path) -> None:
     print(f"run duration {(t1 - t0) / 3600:.2f} h")
 
 
+def figure_workers(metrics, out: Path) -> None:
+    """(a) Word2Vec busy time per window for each worker count of the schedule."""
+    fig, ax = plt.subplots(figsize=(WIDTH, HEIGHT))
+    windows_all = metrics["embedding-training"]
+    ends = {}
+    for k, (workers, color) in enumerate(zip(WORKERS_SCHEDULE, WORKER_COLORS)):
+        windows = [w for w in sorted(windows_all) if w % len(WORKERS_SCHEDULE) == k]
+        busy = rolling_median([float(windows_all[w]["compute_seconds"]) for w in windows], width=5)
+        ax.plot(windows, busy, color=color)
+        ends[workers] = (windows[-1], busy[-1], color)
+        print(f"{workers:2d} workers: first {busy[0]:6.1f} s, last {busy[-1]:6.1f} s")
+    offsets = {2: 0, 4: 2, 8: -6, 12: 6}  # 8 and 12 end close together
+    for workers, (x, y, color) in ends.items():
+        label_end(ax, x, y, f"{workers} workers", color, offsets[workers])
+    ax.axhline(PERIOD_S, color=MUTED, linewidth=0.8, linestyle=(0, (4, 2)))
+    # The lines leave no room for a label on the plot: T is marked on the axis instead.
+    ax.set_yticks([0, 50, 100, PERIOD_S, 200, 250, 300])
+    ax.set_yticklabels(["0", "50", "100", f"$T$={PERIOD_S:.0f}", "200", "250", "300"])
+    ax.set_xlabel("window index (6,750 records each)")
+    ax.set_ylabel("Word2Vec busy time per window (s)")
+    ax.set_ylim(0, 300)
+    ax.set_xlim(0, 195)
+    ax.set_xticks(range(0, 151, 25))
+    fig.savefig(out / "motiv_h_workers.pdf")
+    plt.close(fig)
+
+
+def figure_shift(metrics, out: Path) -> None:
+    """(b) Demand shifts between stages: BERT falls while graph construction and the
+    Word2Vec checkpoint handover grow."""
+    fig, ax = plt.subplots(figsize=(WIDTH, HEIGHT))
+    series = (
+        ("bert-matching", "compute_seconds", "BERT matching", STAGES["bert-matching"][1], "-", 0),
+        ("graph-construction", "compute_seconds", "graph construction", STAGES["graph-construction"][1],
+         STAGES["graph-construction"][2], 3),
+        ("embedding-training", "transfer_seconds", "Word2Vec checkpoint write", STAGES["embedding-training"][1],
+         (0, (1.5, 1.2)), -4),
+    )
+    for task, field, label, color, dash, dy in series:
+        windows = sorted(metrics[task])
+        values = rolling_median([float(metrics[task][w][field]) for w in windows])
+        ax.plot(windows, values, color=color, linestyle=dash)
+        label_end(ax, windows[-1], values[-1], label, color, dy)
+        print(f"{label}: first {values[0]:6.1f} s, last {values[-1]:6.1f} s")
+    ax.set_xlabel("window index (6,750 records each)")
+    ax.set_ylabel("time per window (s)")
+    ax.set_ylim(0, 160)
+    ax.set_xlim(0, 215)
+    ax.set_xticks(range(0, 151, 25))
+    fig.savefig(out / "motiv_i_shift.pdf")
+    plt.close(fig)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--round5", type=Path, default=ROUND5)
     parser.add_argument("--round6", type=Path, default=ROUND6)
+    parser.add_argument("--round9", type=Path, default=ROUND9)
     parser.add_argument("--out", type=Path, default=PAPER)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -215,6 +274,9 @@ def main() -> int:
     stats_growth(metrics)
     figure_backlog(metrics, args.out)
     figure_power(args.round6, args.out)
+    round9 = window_metrics(args.round9)
+    figure_workers(round9, args.out)
+    figure_shift(round9, args.out)
     return 0
 
 
