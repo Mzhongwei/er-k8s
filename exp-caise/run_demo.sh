@@ -37,7 +37,8 @@ case "${1:-}" in
             fi
         fi
         # Same versions as docker/Dockerfile.bert; scipy as in the embedding image (TF-IDF).
-        "$VENV/bin/pip" install --upgrade pip
+        # accelerate 0.20.3 imports pkg_resources, which recent setuptools no longer ship.
+        "$VENV/bin/pip" install --upgrade pip "setuptools<70"
         "$VENV/bin/pip" install torch==2.5.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
         "$VENV/bin/pip" install -r "$REQUIREMENTS/requirements-bert.txt" scipy==1.13.1
         # Downloads bert-base-uncased into the Hugging Face cache once.
